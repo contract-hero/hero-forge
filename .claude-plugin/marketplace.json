@@ -1,22 +1,23 @@
 {
-  "name": "mattpocock",
+  "name": "hero-pocock",
   "owner": {
-    "name": "Matt Pocock",
-    "url": "https://www.aihero.dev"
+    "name": "Contract Hero",
+    "url": "https://github.com/contract-hero"
   },
-  "description": "Matt Pocock's skills for real engineering, as an installable Claude Code plugin.",
+  "description": "Álvaro Lillo's version of Matt Pocock's skills, as an installable plugin.",
   "plugins": [
     {
-      "name": "mattpocock-skills",
+      "name": "hero-pocock",
       "source": "./",
-      "description": "Matt Pocock's agent skills for real engineering (grilling, spec/ticket flows, TDD, code review, domain modelling and more).",
+      "description": "Álvaro Lillo's version of Matt Pocock's skills (grilling, spec/ticket flows, TDD, code review, domain modelling and more), with every question asked as an AskUserQuestion dialog in Claude Code.",
       "category": "engineering",
       "keywords": [
         "engineering",
         "skills",
         "tdd",
         "code-review",
-        "grilling"
+        "grilling",
+        "mattpocock"
       ]
     }
   ]

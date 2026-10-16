@@ -1,30 +1,18 @@
-<p>
-  <a href="https://www.aihero.dev/s/skills-newsletter">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1777382277/skills-repo-dark_2x.png">
-      <source media="(prefers-color-scheme: light)" srcset="https://res.cloudinary.com/total-typescript/image/upload/v1777382277/skill-repo-light_2x.png">
-      <img alt="Skills" src="https://res.cloudinary.com/total-typescript/image/upload/v1777382277/skill-repo-light_2x.png" width="369">
-    </picture>
-  </a>
-</p>
+# Hero Pocock
 
-# Skills For Real Engineers
+**Álvaro Lillo's version of [Matt Pocock's skills](https://github.com/mattpocock/skills).** The same skills, tuned for the Contract Hero work-stream and published in the [Contract Hero plugin marketplace](https://github.com/contract-hero/plugin-marketplace).
 
-[![skills.sh](https://skills.sh/b/mattpocock/skills)](https://skills.sh/mattpocock/skills)
+This is a long-lived fork. It does not wait to merge upstream. It follows upstream instead: Matt's new skills and fixes arrive here by merge, and the changes below sit on top of them.
 
-My agent skills that I use every day to do real engineering - not vibe coding.
+## What is different from upstream
 
-Developing real applications is hard. Approaches like GSD, BMAD, and Spec-Kit try to help by owning the process. But while doing so, they take away your control and make bugs in the process hard to resolve.
+- **Questions arrive as dialogs (Claude Code).** Every question a skill puts to you, grilling rounds included, arrives as an `AskUserQuestion` dialog: a topic chip, 2 to 4 options, the recommended answer first, and "Other" for your own words. A round with more than 4 questions arrives as several dialogs. A hook adds this when Claude Code loads a skill, so the `SKILL.md` files stay as upstream wrote them and other agents see no change. [ADR 0003](./.agents/adr/0003-harness-specific-behaviour-ships-as-a-hook.md) records why.
 
-These skills are designed to be small, easy to adapt, and composable. They work with any model. They're based on decades of engineering experience. Hack around with them. Make them your own. Enjoy.
-
-If you want to keep up with changes to these skills, and any new ones I create, you can join ~60,000 other devs on my newsletter:
-
-[Sign Up To The Newsletter](https://www.aihero.dev/s/skills-newsletter)
+More changes are on the way. [ADR 0004](./.agents/adr/0004-hero-pocock-is-a-tailored-fork.md) records how the fork stays in step with upstream.
 
 ## Installation (30-second setup)
 
-A plugin updates itself. [skills.sh](https://skills.sh/mattpocock/skills) copies editable files into your project, and you update them by hand. Pick one per agent, because installing both gives you every skill twice.
+A plugin updates itself. [skills.sh](https://skills.sh/contract-hero/hero-pocock) copies editable files into your project, and you update them by hand. Pick one per agent, because installing both gives you every skill twice.
 
 ### 1. Get the skills
 
@@ -32,10 +20,11 @@ A plugin updates itself. [skills.sh](https://skills.sh/mattpocock/skills) copies
 <summary><strong>Claude Code</strong></summary>
 
 ```bash
-claude plugin install mattpocock-skills@claude-plugins-official
+claude plugin marketplace add contract-hero/plugin-marketplace
+claude plugin install hero-pocock@contract-hero
 ```
 
-Updates itself by default.
+Updates itself when the marketplace has auto-update on. If `mattpocock-skills` is also installed, uninstall it (`claude plugin uninstall mattpocock-skills`): both plugins ship the same skills.
 
 </details>
 
@@ -43,8 +32,8 @@ Updates itself by default.
 <summary><strong>Codex</strong></summary>
 
 ```bash
-codex plugin marketplace add mattpocock/skills
-codex plugin add mattpocock-skills@mattpocock
+codex plugin marketplace add contract-hero/hero-pocock
+codex plugin add hero-pocock@hero-pocock
 ```
 
 Updates itself at startup.
@@ -55,8 +44,8 @@ Updates itself at startup.
 <summary><strong>GitHub Copilot</strong> (CLI and VS Code)</summary>
 
 ```bash
-copilot plugin marketplace add mattpocock/skills
-copilot plugin install mattpocock-skills@mattpocock
+copilot plugin marketplace add contract-hero/hero-pocock
+copilot plugin install hero-pocock@hero-pocock
 ```
 
 Then, once, add to `~/.copilot/settings.json`:
@@ -64,12 +53,12 @@ Then, once, add to `~/.copilot/settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
-    "mattpocock": { "source": { "source": "github", "repo": "mattpocock/skills" }, "autoUpdate": true }
+    "hero-pocock": { "source": { "source": "github", "repo": "contract-hero/hero-pocock" }, "autoUpdate": true }
   }
 }
 ```
 
-In VS Code, run **Chat: Install Plugin From Source** and enter `https://github.com/mattpocock/skills`. It updates daily.
+In VS Code, run **Chat: Install Plugin From Source** and enter `https://github.com/contract-hero/hero-pocock`. It updates daily.
 
 </details>
 
@@ -77,8 +66,8 @@ In VS Code, run **Chat: Install Plugin From Source** and enter `https://github.c
 <summary><strong>Gemini CLI</strong> (manual updates)</summary>
 
 ```bash
-gemini skills install https://github.com/mattpocock/skills.git --path skills/engineering
-gemini skills install https://github.com/mattpocock/skills.git --path skills/productivity
+gemini skills install https://github.com/contract-hero/hero-pocock.git --path skills/engineering
+gemini skills install https://github.com/contract-hero/hero-pocock.git --path skills/productivity
 ```
 
 Re-run both commands to update.
@@ -89,7 +78,7 @@ Re-run both commands to update.
 <summary><strong>Any other agent, or editable files</strong> (manual updates)</summary>
 
 ```bash
-npx skills@latest add mattpocock/skills -a <agent>  # cursor, opencode, devin, windsurf, amp, pi; omit -a to choose
+npx skills@latest add contract-hero/hero-pocock -a <agent>  # cursor, opencode, devin, windsurf, amp, pi; omit -a to choose
 ```
 
 When the installer asks which skills to take, include `setup-matt-pocock-skills`. To update, run `npx skills@latest update`, and re-run `add` to pick up new skills.
@@ -105,6 +94,21 @@ In your agent, run it once per repo. It will:
 - Ask you where you want to save any docs we create
 
 ### 3. Bam - you're ready to go.
+
+
+## Matt's README
+
+Everything below is Matt's README, kept so the skill reference stays in one place. Where it says "I", it is Matt.
+
+My agent skills that I use every day to do real engineering - not vibe coding.
+
+Developing real applications is hard. Approaches like GSD, BMAD, and Spec-Kit try to help by owning the process. But while doing so, they take away your control and make bugs in the process hard to resolve.
+
+These skills are designed to be small, easy to adapt, and composable. They work with any model. They're based on decades of engineering experience. Hack around with them. Make them your own. Enjoy.
+
+If you want to keep up with changes to these skills, and any new ones I create, you can join ~60,000 other devs on my newsletter:
+
+[Sign Up To The Newsletter](https://www.aihero.dev/s/skills-newsletter)
 
 ## Why These Skills Exist
 
