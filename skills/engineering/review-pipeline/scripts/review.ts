@@ -4,6 +4,7 @@
 // the exit code (0 ok, 1 failed, 2 usage, 3 absent, 4 broken).
 import { main as codexExec } from './codex-exec.ts'
 import { main as config } from './config.ts'
+import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as merge } from './finish.ts'
 import { main as postReview } from './post-review.ts'
 import { main as reply } from './reply.ts'
 import { main as runState } from './run-state.ts'
@@ -14,6 +15,9 @@ const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   'post-review': postReview,
   reply,
   'codex-exec': codexExec,
+  'merge-gate': mergeGate,
+  merge,
+  explainer,
 }
 
 const USAGE = `usage: review.ts <subcommand> [options]
