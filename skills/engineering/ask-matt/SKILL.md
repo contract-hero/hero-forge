@@ -31,6 +31,8 @@ The route most work travels. You have an idea and want it built.
 
    When the work goes up as a pull request, **`/pr`** shapes the body: the smallest visual that shows the change, before/after evidence that it works, and a one-way or two-way door call. It's model-invoked, so the agent reaches for it whenever it writes a PR.
 
+   Once the pull request is open, **`/review-pipeline`** gives it an independent review on GitHub: an **Orchestrator** (never the agent that wrote the code) runs **Reviewer pairs** (Standards with a bug axis, plus Spec) at the PR head, verifies and consolidates their findings, and posts one review with inline suggestions. Where **`/code-review`** reports to chat inside the coding session, `/review-pipeline` posts on the PR. It runs on any open PR, including one you opened by hand, and needs **`/setup-review-pipeline`** first (see Precondition).
+
 4. **`/retro`** closes the loop. After a build, and especially one that went sideways, it looks back over the session and suggests changes to the agent's **environment**, not the code: navigation pointers, automated checks, the coding standards `/code-review` enforces, steering files, tooling. Mechanical mistakes become deterministic checks; judgement calls become coding standards. The next build then starts from a better environment.
 
 ### Context hygiene

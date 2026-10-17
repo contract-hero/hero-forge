@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "review-pipeline reviewer findings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["axis", "pair", "findings", "notes"],
+  "properties": {
+    "axis": { "type": "string", "enum": ["standards", "spec"] },
+    "pair": { "type": "integer" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "category", "title", "body", "file", "line_start", "line_end", "suggestion", "citation"],
+        "properties": {
+          "id": { "type": "string", "description": "Unique within this output, e.g. S1 or P1." },
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+          "category": {
+            "type": "string",
+            "enum": ["standard", "smell", "bug", "silent-failure", "test-gap", "spec-missing", "spec-creep", "spec-wrong"]
+          },
+          "title": { "type": "string", "description": "One line." },
+          "body": { "type": "string", "description": "What is wrong, why, and how it shows in the code." },
+          "file": { "type": "string", "description": "Repo-relative path at the fixed point." },
+          "line_start": { "type": "integer" },
+          "line_end": { "type": "integer" },
+          "suggestion": {
+            "type": "string",
+            "description": "Exact replacement text for lines line_start..line_end at the fixed point, or an empty string when there is no clean replacement."
+          },
+          "citation": {
+            "type": "string",
+            "description": "The standards file and rule, the smell name, the bug-axis item, or the quoted spec line."
+          }
+        }
+      }
+    },
+    "notes": { "type": "string", "description": "Anything the Orchestrator should know, e.g. no spec available. Empty string if none." }
+  }
+}
