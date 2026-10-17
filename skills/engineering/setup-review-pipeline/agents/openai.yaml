@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Review Pipeline"
+  short_description: "Configure how this repo reviews PRs"
+policy:
+  allow_implicit_invocation: false

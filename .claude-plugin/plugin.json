@@ -28,6 +28,7 @@
     "./skills/engineering/triage",
     "./skills/engineering/improve-codebase-architecture",
     "./skills/engineering/setup-matt-pocock-skills",
+    "./skills/engineering/setup-review-pipeline",
     "./skills/engineering/tdd",
     "./skills/engineering/to-spec",
     "./skills/engineering/to-tickets",

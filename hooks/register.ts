@@ -13,6 +13,7 @@ const SKILLS = new Set([
   'triage',
   'improve-codebase-architecture',
   'setup-matt-pocock-skills',
+  'setup-review-pipeline',
   'tdd',
   'to-spec',
   'to-tickets',

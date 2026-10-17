@@ -95,3 +95,5 @@ Off the main flow entirely.
 ## Precondition
 
 **`/setup-matt-pocock-skills`**: run before your first engineering flow to configure the issue tracker, triage labels, and doc layout the other skills assume. Custom issue trackers also work.
+
+**`/setup-review-pipeline`**: run once per repo before the first pull request goes through `review-pipeline`. It writes `docs/agents/review.md`: the runtime (Codex or Claude sub-agents), the number of reviewer pairs, the model and effort of each role, and the round limit.
