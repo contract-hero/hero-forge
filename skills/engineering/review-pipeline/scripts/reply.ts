@@ -13,6 +13,7 @@ import { parseArgs } from 'node:util'
 import { gh, json, listInlineComments, listLines, oneLine, postedFindings, refuse, userIdentity } from './github.ts'
 import { CLOSED, DECISIONS, loadLedger, loadRecheck, type LedgerEntry } from './ledger.ts'
 import { Failure, loadState } from './run-state.ts'
+import { refuseSecretsIn } from './secrets.ts'
 
 const PREFIX = 'review.ts reply: '
 const USAGE = `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
@@ -23,6 +24,13 @@ function usage(message: string): Failure {
 }
 
 const cell = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|')
+
+const replyMarker = (pr: number, round: number, id: string) => `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=reply id=${id} -->`
+const commentMarker = (pr: number, round: number) => `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=adjudication -->`
+// The exact objects posted: a finding's thread reply, and the PR comment.
+const replyPost = (pr: number, round: number, entry: LedgerEntry) => ({
+  body: `${entry.decision}: ${entry.reason}\n\n${replyMarker(pr, round, entry.id)}`,
+})
 
 function summary(round: number, targets: LedgerEntry[], marker: string): string {
   return [
@@ -77,6 +85,8 @@ async function reply(argv: string[]): Promise<string> {
     undecided.length === 0,
     `every finding needs a decision (ACCEPT or REFUTE) and a reason first: ${undecided.map((e) => e.id).join(', ')}`,
   )
+  const commentPost = { body: summary(round, targets, commentMarker(pr, round)) }
+  refuseSecretsIn([...targets.map((e) => replyPost(pr, round, e)), commentPost], `ledger ${ledgerPath}`)
 
   const state = await loadState(pr)
   const me = await userIdentity()
@@ -101,15 +111,14 @@ async function reply(argv: string[]): Promise<string> {
       walkthrough.push(entry.id)
       continue
     }
-    const marker = `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=reply id=${entry.id} -->`
+    const marker = replyMarker(pr, round, entry.id)
     let postedAny = false
     for (const thread of threads) {
       const done = comments.some((c) => c.in_reply_to_id === thread && c.login === me.login && (c.body ?? '').includes(marker))
       if (done) continue
-      const body = `${entry.decision}: ${entry.reason}\n\n${marker}`
       const result = await gh(
         ['api', '-X', 'POST', `repos/${repo}/pulls/${pr}/comments/${thread}/replies`, '--input', '-'],
-        JSON.stringify({ body }),
+        JSON.stringify(replyPost(pr, round, entry)),
       )
       refuse(result.code === 0, `GitHub rejected the reply to ${entry.id} (comment ${thread}): ${oneLine(result.stderr || result.stdout)}`)
       postedAny = true
@@ -119,7 +128,7 @@ async function reply(argv: string[]): Promise<string> {
 
   let comment: { id: number; posted: boolean } | null = null
   if (targets.length > 0) {
-    const marker = `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=adjudication -->`
+    const marker = commentMarker(pr, round)
     const existing = (
       await listLines<{ id: number; body: string | null; login: string | null }>(
         ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${repo}/issues/${pr}/comments`],
@@ -131,7 +140,7 @@ async function reply(argv: string[]): Promise<string> {
     } else {
       const result = await gh(
         ['api', '-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '--input', '-'],
-        JSON.stringify({ body: summary(round, targets, marker) }),
+        JSON.stringify(commentPost),
       )
       refuse(result.code === 0, `GitHub rejected the adjudication comment: ${oneLine(result.stderr || result.stdout)}`)
       comment = { id: json<{ id: number }>(result.stdout, 'post comment').id, posted: true }
