@@ -69,7 +69,9 @@ process.exitCode = hit.exit ?? 0
 
 // Put a fake `gh` first on PATH. Each call is logged as one JSON line and
 // answered from `responses`: the first entry whose `match` is a substring of
-// the joined argv wins; no match exits 0 with empty output.
+// the joined argv wins; no match exits 0 with empty output. The fake reads
+// stdin to EOF, so code that spawns `gh` must close the child's stdin (or
+// spawn it with stdin ignored), or the call never returns.
 export async function fakeGh(dir: string, responses: FakeGhResponse[] = []): Promise<FakeGh> {
   const bin = join(dir, 'bin')
   await mkdir(bin, { recursive: true })
