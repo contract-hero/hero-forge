@@ -224,6 +224,8 @@ for (const [kind, secret] of [
   ['a Slack token', 'xoxb-1234567890-abcdef'],
   ['a JWT', `eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiIxMjMifQ.${'s'.repeat(30)}`],
   ['an OAuth token in a credential file', `"refresh_token": "${'r'.repeat(12)}-${'Q7'.repeat(10)}"`],
+  ['an OAuth token in a credential file', `access_token=ya29.${'a0Bc'.repeat(8)}`],
+  ['an OAuth token in a credential file', `refresh_token: 1//${'0gXy'.repeat(8)}`],
 ] as [string, string][]) {
   test(`a payload that holds ${kind} is refused before any gh call`, async (t) => {
     const comment = { ...PAYLOAD.comments[0], body: `**F1** leaked: ${secret}` }
@@ -318,7 +320,11 @@ test('the review sent to GitHub holds only the allowed fields', async (t) => {
 
 test('a payload that only names a token prefix still posts', async (t) => {
   const s = await setup(t, {
-    payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes, and read access_token: process.env.REVIEWER_APP_TOKEN_NAME', comments: [] },
+    payload: {
+      ...PAYLOAD,
+      body: 'Scan for ghp_ and sk- prefixes, read access_token: process.env.REVIEWER_APP_TOKEN_NAME, and set refresh_token=${REFRESH_TOKEN_FROM_THE_VAULT}',
+      comments: [],
+    },
     responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 556 }) }],
   })
   const { code, stderr } = await s.post()

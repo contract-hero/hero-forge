@@ -21,10 +21,14 @@ const PATTERNS: [string, RegExp][] = [
   ['a Slack token', new RegExp(`${START}xox[abp]-[A-Za-z0-9-]{10,}`)],
   // A JWT: Codex and ChatGPT access and id tokens, App JWTs.
   ['a JWT', new RegExp(`${START}eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.`)],
-  // An OAuth token as a credential file holds it (Codex auth.json, for one):
-  // a quoted key and a quoted value, so prose such as
+  // An OAuth token after its key, quoted or not (Codex auth.json, an env
+  // file, a query string). The value must hold a digit and must not start
+  // as an env reference, so prose such as
   // `access_token: process.env.SOME_LONG_NAME` does not match.
-  ['an OAuth token in a credential file', /(?:refresh|access|id)_token["']\s*[:=]\s*["'][A-Za-z0-9._~+/-]{20,}/i],
+  [
+    'an OAuth token in a credential file',
+    /(?:refresh|access|id)_token["']?\s*[:=]\s*["']?(?!process\.env\.|env\.|\$\{?)(?=[A-Za-z0-9._~+/-]*\d)[A-Za-z0-9._~+/-]{20,}/i,
+  ],
 ]
 
 // The named entities that can spell a token, its prefix or its separators.
