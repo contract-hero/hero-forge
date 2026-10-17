@@ -20,5 +20,5 @@
 
 ## Known limits
 
-- The `docs/engineering/` and `docs/productivity/` pages and their aihero URLs are Matt's. They describe the upstream skills and do not mention the fork's changes.
+- The `docs/engineering/` and `docs/productivity/` pages of the upstream skills, and their aihero URLs, are Matt's. The fork edits them only where its own skills change a route (for example, pages that pointed to `implement` now point to `implement-pr`). The fork's own skills have their own pages, which link to the page file on GitHub, because aihero has no page for them.
 - `claude plugin validate . --strict` fails on Claude Code 2.1.300 with the warning "CLAUDE.md at the plugin root is not loaded as project context". Upstream `main` fails the same way. Run it without `--strict` and read the warnings.

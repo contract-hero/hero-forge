@@ -1,6 +1,6 @@
 ---
 name: review-pipeline
-description: "Take one open pull request through an independent review: an Orchestrator agent pins the PR head, runs Reviewer pairs (Standards with a bug axis, plus Spec), verifies and consolidates their findings, and posts one GitHub review with inline suggestions and a walkthrough; the coding agent then accepts or refutes each finding on the PR, and a fresh re-checker gates the result, for up to max_rounds rounds; on a pass it rewrites the PR body, flips the PR to ready, links a local explainer, and squash-merges when CI is green. Use when a pull request needs review and merge, the user runs /review-pipeline <PR>, or another skill hands over a PR."
+description: "Review, gate and merge one open pull request with an independent Orchestrator and Reviewer pairs. Use when a pull request needs review and merge, the user runs /review-pipeline <PR>, or another skill hands over a PR."
 ---
 
 # Review pipeline
@@ -38,6 +38,10 @@ The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.
 | `explainer --repo O/R --pr N --file <abs path>` | records the explainer in the run state and links it from the PR in one comment, posted at most once |
 | `merge-gate --repo O/R --pr N` | reads the PR once and prints whether it can merge now: `gate` is `go`, `wait`, `stop` or `merged` |
 | `merge --repo O/R --pr N` | runs the gate again and, on `go`, squash-merges the re-checked head (`mode: single` only) |
+
+`run-state advance` moves the run one step at a time, in the order of **Resume**'s table and **Finish**'s modes. It refuses a skipped step, and a step whose record is missing: `review-posted` needs the round's review, `rechecked` the round's re-check gate at `head_sha`, `body-rewritten` a passing gate there, `verdict-posted` the App's APPROVE there. Advancing to the phase the run is already at does nothing, so a resumed step can repeat it. `run-state set` changes only `round`, `head_sha` and `explainer`: `reviewer_login` is fixed at `create`.
+
+Everything the helper CLI posts (reviews, replies, comments) goes through a scan for secret shapes first, and a match posts nothing. Agent text that holds the pipeline's hidden marker (`hero-pocock:review-pipeline`) is refused too, because only the CLI writes it. The scan is defence in depth, not a guarantee: an agent can encode a secret so that no scanner sees it. The real boundary is the read-only sandbox with no network and no gh token that every agent runs in on `runtime: codex` (**Codex runtime**). What is left is the risk of a secret encoded into a posted review.
 | `stack order\|path\|restack\|merge-layer ...` | the stack steps of `implement-spec-stack`; its SKILL.md says how to use them |
 
 Every subcommand uses the same exit codes:
@@ -74,7 +78,7 @@ Run `review.ts run-state read --pr N`.
 | `review-posted` | **Adjudication** for the recorded `round`. In round 2 and later, that means only what `recheck-r<round-1>.json` left open |
 | `adjudicated` | **Re-check**. A `recheck-r<round>.json` that parses is reused: do not dispatch the re-checker again |
 | `rechecked` | run **Re-check** step 4's `post-review` again: it posts nothing new and prints the same `gate`. Then step 5 or 6 |
-| `body-rewritten`, `ready`, `explained`, `merged` | **Finish**, at the step after that phase, as the run's `mode` says |
+| `body-rewritten`, `ready`, `verdict-posted`, `explained`, `merged` | **Finish**, at the step after that phase, as the run's `mode` says |
 | `complete`, `aborted`, `stopped` | the last run ended (`stopped`: `max_rounds` rounds failed, or the re-checker failed twice). Tell the user; start a new run only if they ask (`create` over a terminal state starts fresh) |
 
 If the PR head moved since the state was created and the phase is `created`, pin the new head: `review.ts run-state set --pr N head_sha <sha>`.
@@ -186,52 +190,53 @@ review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind r
   --payload <run dir>/recheck-payload.json --ledger <run dir>/findings.json --recheck <run dir>/recheck-r<R>.json
 ```
 
-   The output's `gate` is `pass` or `fail`, and `problems` lists why it failed. The gate passes only when every ledger entry has a decision, every inline finding has exactly one ledger entry, the re-check covers exactly the ledger's ids, and every item is `fixed` or `refutation_accepted`. Without the reviewer App, this gate is the merge gate. Then `review.ts run-state advance --pr N rechecked`.
-5. **Pass:** with the App, post its APPROVE verdict first (**App identity**). Then go to **Finish**.
+   The output's `gate` is `pass` or `fail`, and `problems` lists why it failed. The gate passes only when every ledger entry has a decision, every inline finding has exactly one ledger entry, the re-check covers exactly the ledger's ids, and every item is `fixed` or `refutation_accepted`. `post-review` records the result in the run state at `head_sha`, and it posts only at the run's `head_sha` and `round`. On both paths, with and without the App, `merge-gate` needs a recorded pass at the head. Then `review.ts run-state advance --pr N rechecked`.
+5. **Pass:** go to **Finish**. With the App, its APPROVE comes in **Finish**, after the PR is ready for review.
 6. **Fail:** `review.ts run-state next-round --pr N --max-rounds <max_rounds>`. It prints the new `round` and `phase`:
    - `review-posted`: round R+1 starts. Go to **Adjudication** and answer the open items and the gate's `problems`.
    - `stopped`: `max_rounds` rounds failed. With the App, post its REQUEST_CHANGES verdict (**App identity**). The PR stays in draft. Stop and ask the user, with the open items and the gate's `problems`. Offer two ways on: fix the PR by hand and run `/review-pipeline N` again (a new run, with a fresh review of the new head), or leave the PR in draft for a human reviewer. Do not start another round yourself.
 
 ## App identity
 
-The config's `app` decides who posts. With `app: true`, the reviewer GitHub App posts every review, re-check and verdict, so the review is clearly not from the PR author, and the App approves or requests changes at the end of the loop. Without the App, everything posts from the user's own `gh` account as COMMENT reviews, and the re-check gate is the merge gate.
+The config's `app` decides who posts. With `app: true`, the reviewer GitHub App posts every review, re-check and verdict, so the review is clearly not from the PR author, and the App approves or requests changes at the end of the loop. Without the App, everything posts from the user's own `gh` account as COMMENT reviews. On both paths the recorded re-check gate is part of the merge gate; with the App, so is the App's approval.
 
-The App's credentials are in `~/.config/hero-pocock/` (an env file and a private key), never in the repo. `post-review` reads them and mints a short-lived token itself for each post, so no agent ever sees the token. Never run `review.ts app-token` without `--check` or `--login`: that form prints a token.
+The App's credentials are in `~/.config/hero-pocock/` (an env file and a private key), never in the repo. `post-review` reads them and mints a short-lived token itself for each post, so no agent ever sees the token. `review.ts app-token` has only `--check` and `--login`, and it never prints a token.
 
-1. **Check at the start.** With `app: true`, run `review.ts app-token --repo O/R --login` in **Config**, before **Resume**. Exit 0 prints the App's login, `<slug>[bot]`: keep it for `run-state create --reviewer-login` in **Fixed point**. Exit 4 means the App is enabled but broken (credentials missing, a bad key, the App not installed on the repo, or a GitHub error). Stop the run, show the message, and tell the user to fix the App or to re-run `/setup-review-pipeline`. Never continue as the user: that quietly turns the approval gate off.
-2. **Every post.** `post-review` posts as the App with no extra flag. If the App breaks in the middle of a run, `post-review` exits 4 and posts nothing: stop as in step 1. `reply` always posts as the user, because the PR author answers the review.
-3. **Verdict.** At the end of the loop the App approves or requests changes. Write `<run dir>/verdict-r<R>.json`: `{"event": "APPROVE", "body": "<summary>", "comments": []}` after a passing re-check (**Re-check** step 5), or `"event": "REQUEST_CHANGES"` when `next-round` prints `stopped` (step 6). The body: `## Verdict: round <R>`, the re-checked commit `<head_sha7>`, and for REQUEST_CHANGES the open items and the gate's `problems`. Then:
+1. **Check at the start.** With `app: true`, run `review.ts app-token --repo O/R --login` in **Config**, before **Resume**. Exit 0 prints the App's login, `<slug>[bot]`: keep it for `run-state create --reviewer-login` in **Fixed point**. The run keeps that login to the end (`run-state set` cannot change it), and `post-review` and `merge-gate` check it against the login the App's own credentials give. Exit 4 means the App is enabled but broken (credentials missing, a bad key, the App not installed on the repo, or a GitHub error). Stop the run, show the message, and tell the user to fix the App or to re-run `/setup-review-pipeline`. Never continue as the user: that quietly turns the approval gate off.
+2. **Every post.** `post-review` posts as the App with no extra flag. If the App breaks in the middle of a run, `post-review` exits 4 and posts nothing: stop as in step 1. `reply` always posts as the user, because the PR author answers the review. A run state whose `reviewer_login` does not match the config (`none` with `app: true`, or a bot login without it) is refused: create the run again with the right login.
+3. **Verdict.** The App approves only a PR that is ready for review: its APPROVE is **Finish** step 3, after the ready flip, in `single` and `layer` mode. A `stack-final` PR stays a draft and is never approved. When `next-round` prints `stopped` (**Re-check** step 6), the App requests changes instead. Write `<run dir>/verdict-r<R>.json`: `{"event": "APPROVE", "body": "<summary>", "comments": []}`, or `"event": "REQUEST_CHANGES"`. The body: `## Verdict: round <R>`, the re-checked commit `<head_sha7>`, and for REQUEST_CHANGES the open items and the gate's `problems`. Then:
 
 ```sh
 review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind verdict \
   --payload <run dir>/verdict-r<R>.json --ledger <run dir>/findings.json --recheck <run dir>/recheck-r<R>.json
 ```
 
-   It runs the gate again and refuses an APPROVE on a failing gate. It posts at most one verdict per round, so a resumed run can run it again safely. Exit 1 because GitHub refused the verdict: stop and tell the user, with the message. Do not flip the PR to ready to try again. The APPROVE goes on the re-checked head, before **Finish**: the body rewrite and the ready flip add no commits, so the approval stays valid. With the App, **Finish**'s `merge-gate` stops until the run state records this APPROVE at `head_sha`.
+   It runs the gate again and refuses an APPROVE on a failing gate. It refuses an APPROVE before the run is at `ready`, and a REQUEST_CHANGES before the run is `stopped`. It posts at most one verdict per round and commit, so a resumed run can run it again safely. Exit 1 because GitHub refused the verdict: stop and tell the user, with the message. The approval must be the last event that changes the head: nothing is pushed after it.
 
 Without the App, skip step 3: `--kind verdict` exits 1, because the PR author cannot approve their own PR.
 
 ## Finish
 
-Finish starts after a passing re-check gate. Each step ends with a `run-state advance`, so a resumed run starts at the step after the last one done and repeats nothing. The run's `mode` (`review.ts run-state read --pr N mode`) sets how far Finish goes:
+Finish starts after a passing re-check gate. Each step ends with a `run-state advance`, so a resumed run starts at the step after the last one done and repeats nothing, and `advance` refuses a step out of order. The run's `mode` (`review.ts run-state read --pr N mode`) sets how far Finish goes:
 
 | `mode` | Steps |
 | --- | --- |
-| `single` (the default) | 1 to 5 |
-| `layer` (one layer of a stack) | 1 and 2, then `review.ts run-state advance --pr N complete`. No explainer and no merge: the stack lands its layers |
-| `stack-final` (the PR of a whole stack) | 1 and 3, then `advance complete`. The PR stays a draft and never merges: the stack lands its layers and closes this PR |
+| `single` (the default) | 1 to 6 (step 3 with the App only) |
+| `layer` (one layer of a stack) | 1, 2 and (with the App) 3, then `review.ts run-state advance --pr N complete`. No explainer and no merge: the stack lands its layers |
+| `stack-final` (the PR of a whole stack) | 1 and 4, then `advance complete`. No ready flip and no App approval: the PR stays a draft and never merges, the stack lands its layers and closes this PR |
 
 The caller sets the mode when the run starts (`run-state create --mode`). `review.ts merge` refuses every mode except `single`.
 
-1. **Rewrite the PR body.** Call the Skill tool with "pr" and write the body for the final code: the diff `git diff <base>...<head_sha>`, with the review rounds as evidence. Keep every closing line (`Closes #N`, `Fixes #N`) of the old body (`gh pr view N --json body`) at the end of the new one: without them, the issues stay open after the merge. Save the body to `<run dir>/pr-body.md`, run `gh pr edit N --repo O/R --body-file <run dir>/pr-body.md`, then `review.ts run-state advance --pr N body-rewritten`.
-2. **Flip to ready**, only after a passing gate. If `gh pr view N --repo O/R --json isDraft` shows `true`, run `gh pr ready N --repo O/R`. Then `advance ready`.
-3. **Build the explainer** at `<run dir>/explainer.html`. It pitches the change to reviewers and stakeholders who will not read the diff. Make it one self-contained HTML file: inline CSS, and nothing loaded from the network. Content, in this order: a tl;dr in three sentences; one diagram of the change (inline SVG, or boxes and arrows in HTML); what to scrutinize, with `path:line`; what is mechanical; each finding with its decision and reason, from the ledger; the PR link. Never commit or publish it. Then run `review.ts explainer --repo O/R --pr N --file <run dir>/explainer.html`: it records the path and posts one PR comment, "Explainer (local, not published): `<path>`". A re-run posts no second comment. Then `advance explained`.
-4. **Wait for a green gate.** `review.ts merge-gate --repo O/R --pr N` reads the PR once and prints `gate`, `ci`, `checks`, and `problems`. It never waits, so you do:
-   - `go`: go to step 5. One exception: `ci: none` right after a push, in a repo with workflow files in `.github/workflows/`, can mean the checks are not registered yet. Wait 30 seconds and run `merge-gate` once more. Still `none`: the repo has no PR checks; go to step 5.
+1. **Rewrite the PR body.** Call the Skill tool with "pr" and write the body for the final code: the diff `git diff <base>...<head_sha>`, with the review rounds as evidence. Keep every closing line (`Closes #N`, `Fixes #N`) of the old body (`gh pr view N --json body`) at the end of the new one: without them, the issues stay open after the merge. Save the body to `<run dir>/pr-body.md`, run `gh pr edit N --repo O/R --body-file <run dir>/pr-body.md`, then `review.ts run-state advance --pr N body-rewritten`. It needs a passing re-check gate recorded at `head_sha`.
+2. **Flip to ready.** If `gh pr view N --repo O/R --json isDraft` shows `true`, run `gh pr ready N --repo O/R`. Then `advance ready`.
+3. **Approve, with the App only.** Post the App's APPROVE as **App identity** step 3 says, then `advance verdict-posted`. Without the App, skip this step.
+4. **Build the explainer** at `<run dir>/explainer.html`. It pitches the change to reviewers and stakeholders who will not read the diff. Make it one self-contained HTML file: inline CSS, and nothing loaded from the network. Content, in this order: a tl;dr in three sentences; one diagram of the change (inline SVG, or boxes and arrows in HTML); what to scrutinize, with `path:line`; what is mechanical; each finding with its decision and reason, from the ledger; the PR link. Never commit or publish it. Then run `review.ts explainer --repo O/R --pr N --file <run dir>/explainer.html`: it records the path and posts one PR comment, "Explainer (local, not published): `<path>`". A re-run posts no second comment. Then `advance explained`.
+5. **Wait for a green gate.** `review.ts merge-gate --repo O/R --pr N` reads the PR once and prints `gate`, `ci`, `checks`, and `problems`. It never waits, so you do. A PR with no CI checks at all is allowed: `ci: none` is `go`.
+   - `go`: go to step 6. One exception: `ci: none` right after a push, in a repo with workflow files in `.github/workflows/`, can mean the checks are not registered yet. Wait 30 seconds and run `merge-gate` once more. Still `none`: the repo has no PR checks; go to step 6.
    - `wait`: CI is running, or GitHub has not computed mergeability yet (`UNKNOWN`). For CI, run `gh pr checks N --repo O/R --watch` in the background (CI can outlast a shell time limit, and a timeout is not a failure). For `UNKNOWN`, wait 10 seconds. Then run `merge-gate` again. A third `UNKNOWN` in a row counts as `stop`.
-   - `stop`: red CI, a merge conflict, a head that moved after the re-check, or a merge state that needs a human (`BLOCKED`, `BEHIND`). Do not merge, re-run CI, or fix it yourself: stop and ask the user, with the `problems`. A moved head means new commits, and new commits need a new run (`/review-pipeline N`).
-   - `merged`: the PR is already merged. Go to step 5, which records it.
-5. **Merge.** `review.ts merge --repo O/R --pr N`. It runs the gate again and, on `go`, squash-merges with `--match-head-commit <head_sha>`, so only the commit the re-checker graded can merge. It never uses `--admin` or `--delete-branch`, and it checks that the PR is `MERGED` afterwards. On a PR that is already merged it changes nothing and prints `already: true`. Exit 1 (the gate changed, or GitHub refused): stop and ask the user, with the message. Then `advance merged`, then `advance complete`, and report the PR URL, the merge commit, the number of rounds, and the explainer path.
+   - `stop`: red CI, a merge conflict, a head that moved after the re-check, no passing re-check recorded at the head, a merge state that needs a human (`BLOCKED`, `BEHIND`), or, with the App, no valid App approval. The App approval is valid only when the App's latest verdict recorded at the head is APPROVE, and its latest review on GitHub that is not a COMMENT is APPROVED on the head, by the login the App's own credentials give. Do not merge, re-run CI, or fix it yourself: stop and ask the user, with the `problems`. A moved head means new commits, and new commits need a new run (`/review-pipeline N`).
+   - `merged`: the PR is already merged. Go to step 6, which records it.
+6. **Merge.** `review.ts merge --repo O/R --pr N`. It runs the gate again and, on `go`, squash-merges with `--match-head-commit <head_sha>`, so only the commit the re-checker graded can merge. It never uses `--admin` or `--delete-branch`, and it checks that the PR is `MERGED` afterwards. On a PR that is already merged it changes nothing and prints `already: true`. Exit 1 (the gate changed, or GitHub refused): stop and ask the user, with the message. Then `advance merged`, then `advance complete`, and report the PR URL, the merge commit, the number of rounds, and the explainer path.
 
 ## Codex runtime
 
@@ -256,4 +261,4 @@ A round can take 30 minutes or more, longer than most shell time limits, so run 
 3. Fills the codex template of [orchestrator-brief.md](./orchestrator-brief.md) into `<run dir>/orchestrator-brief.md` and runs the Orchestrator read-only on `orchestrator.model` and `orchestrator.effort`. Its final message is one JSON object, held to [review.schema.json](./review.schema.json): the payload, the ledger and a report.
 4. Checks that object against the schema. When it does not match, it exits 1 and posts nothing. Then it moves each inline anchor that is not on the right side of the diff into the walkthrough, writes `review-payload.json`, `findings.json` and `orchestrator-report.md`, and runs `post-review --kind review`. `post-review` refuses a payload that looks like it holds a token or a key.
 
-Exit 0: continue with **Posting** ("You, after the Orchestrator returns"). Exit 1: read the message, the logs in the run dir and `orchestrator-report.md`, then apply **Who does what**. A relaunch runs only the reviewers whose output is missing or does not match the schema; it keeps the others.
+It runs only at phase `review-dispatched`, and it refuses once this round's review is posted, so a re-run never runs the Orchestrator again or rewrites the ledger of a posted review: after exit 1 with "already posted", go on with `advance review-posted`. Exit 0: continue with **Posting** ("You, after the Orchestrator returns"). Exit 1: read the message, the logs in the run dir and `orchestrator-report.md`, then apply **Who does what**. A relaunch runs only the reviewers whose output is missing or does not match the schema; it keeps the others.
