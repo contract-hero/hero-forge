@@ -55,11 +55,33 @@ for (const [name, line] of SUBCOMMANDS) {
   })
 }
 
-test('the list above holds every subcommand the dispatcher knows', async () => {
-  const { code, stderr } = await runCli(['nope'])
+// The names in a `review.ts help` list, in order: the first word of each
+// indented line that has a summary after it.
+function listedNames(list: string): string[] {
+  return [...list.matchAll(/^ {2}(\S+) {2,}\S/gm)].map((match) => match[1] ?? '')
+}
+
+test('help lists every subcommand with its summary on stdout, and exits 0', async () => {
+  const { code, stdout, stderr } = await runCli(['help'])
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.match(stdout, /^usage: review\.ts <subcommand> \[options\]\n/)
+  assert.deepEqual(listedNames(stdout).sort(), SUBCOMMANDS.map(([name]) => name).sort())
+  assert.match(stdout, /^ {2}merge-gate {2,}Read the PR once and print whether it is safe to squash-merge now\.$/m)
+  assert.match(stdout, /review\.ts <subcommand> --help/)
+})
+
+test('an unknown subcommand exits 2 with one message line, then the list that help prints, on stderr', async () => {
+  const help = await runCli(['help'])
+  const { code, stdout, stderr } = await runCli(['nope'])
   assert.equal(code, 2)
-  const listed = /^subcommands: (.*)$/m.exec(stderr)?.[1]?.split(', ')
-  assert.deepEqual(listed?.sort(), SUBCOMMANDS.map(([name]) => name).sort())
+  assert.equal(stdout, '')
+  assert.equal(stderr, `review.ts: unknown subcommand 'nope'\n${help.stdout}`)
+})
+
+test('review.ts with no arguments does what help does', async () => {
+  const help = await runCli(['help'])
+  assert.deepEqual(await runCli([]), help)
 })
 
 test('--help after a -- terminator is not a help request', async () => {

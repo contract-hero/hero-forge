@@ -1,4 +1,5 @@
-// What every subcommand shares: the usage table, the Failure that carries an
+// What every subcommand shares: the usage table, the list and help text it
+// gives, the Failure that carries an
 // exit code, the guard that throws it, the argument parser, and the `main`
 // wrapper that turns `--help` into the subcommand's entry and a Failure into
 // one stderr line and an exit code.
@@ -83,6 +84,20 @@ export type CommandName = keyof typeof COMMANDS
 export function helpText(name: CommandName): string {
   const { summary, usage } = COMMANDS[name]
   return `review.ts ${name}: ${summary}\n\n${usage}\n`
+}
+
+// What `review.ts help` prints: every subcommand in the table with its
+// summary, and how to get one subcommand's usage.
+export function listText(): string {
+  const width = Math.max(...Object.keys(COMMANDS).map((name) => name.length))
+  const lines = Object.entries(COMMANDS).map(([name, { summary }]) => `  ${name.padEnd(width)}  ${summary}`)
+  return `usage: review.ts <subcommand> [options]
+
+subcommands:
+${lines.join('\n')}
+
+Run review.ts <subcommand> --help for one subcommand's usage.
+`
 }
 
 // A failure with its exit code (1 refused, 2 usage, 3 absent, 4 broken).

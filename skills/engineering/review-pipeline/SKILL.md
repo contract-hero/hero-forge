@@ -26,23 +26,11 @@ If the Orchestrator cannot do its job (it dies, or it cannot start sub-agents), 
 
 The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.ts` means `node "<the folder this SKILL.md is in>/scripts/review.ts"`, run from the repo root. It needs Node 22.18 or newer.
 
-| Subcommand | Does |
-| --- | --- |
-| `config` | prints the resolved review config as JSON |
-| `run-state path\|create\|read\|advance\|set\|next-round --pr N ...` | the per-PR checkpoint in `<git common dir>/hero-pocock/pr-<N>/` |
-| `app-token --repo O/R --check\|--login` | checks that the reviewer App can post on the repo; `--login` prints its `<slug>[bot]` login |
-| `post-review --repo O/R --pr N --commit <sha> --round R --kind review\|recheck\|verdict --payload <file> [--ledger <file> --recheck <file>]` | posts one review, at most once per PR, round and kind, as the App when the config enables it; `--kind recheck` and `verdict` also run the gate |
-| `reply --repo O/R --pr N --round R --ledger <file> [--recheck <file>]` | posts the Adjudication: a reply per inline finding and one PR comment, each at most once |
-| `codex-exec --role orchestrator\|reviewer --brief <file> --out <file> [--schema <file>]` | runs one read-only `codex exec` with the role's model and effort from the config, and checks its output against `--schema` (`runtime: codex` only) |
-| `codex-review --pr N [--issue <n>]...` | runs one review round on `runtime: codex`: the 2N reviewers, the Orchestrator, the checks, and `post-review` |
-| `explainer --repo O/R --pr N --file <abs path>` | records the explainer in the run state and links it from the PR in one comment, posted at most once |
-| `merge-gate --repo O/R --pr N` | reads the PR once and prints whether it can merge now: `gate` is `go`, `wait`, `stop` or `merged` |
-| `merge --repo O/R --pr N` | runs the gate again and, on `go`, squash-merges the re-checked head (`mode: single` only) |
+Run `review.ts help` to list every subcommand with its one-line summary, and `review.ts <subcommand> --help` to see what one subcommand takes. Both print to stdout and exit 0. Both read the one usage table in the CLI, so trust them over a usage line you remember. The run state lives in `<git common dir>/hero-pocock/pr-<N>/`. The `stack` subcommand serves `implement-spec-stack`, and its SKILL.md says how to use it.
 
 `run-state advance` moves the run one step at a time, in the order of **Resume**'s table and **Finish**'s modes. It refuses a skipped step, and a step whose record is missing: `review-posted` needs the round's review, `rechecked` the round's re-check gate at `head_sha`, `body-rewritten` a passing gate there, `verdict-posted` the App's APPROVE there. Advancing to the phase the run is already at does nothing, so a resumed step can repeat it. `run-state set` changes only `round`, `head_sha` and `explainer`: `reviewer_login` is fixed at `create`.
 
 Everything the helper CLI posts (reviews, replies, comments) goes through a scan for secret shapes first, and a match posts nothing. Agent text that holds the pipeline's hidden marker (`hero-pocock:review-pipeline`) is refused too, because only the CLI writes it. The scan is defence in depth, not a guarantee: an agent can encode a secret so that no scanner sees it. The real boundary is the read-only sandbox with no network and no gh token that every agent runs in on `runtime: codex` (**Codex runtime**). What is left is the risk of a secret encoded into a posted review.
-| `stack order\|path\|restack\|merge-layer ...` | the stack steps of `implement-spec-stack`; its SKILL.md says how to use them |
 
 Every subcommand uses the same exit codes:
 

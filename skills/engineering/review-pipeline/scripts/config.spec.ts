@@ -18,14 +18,6 @@ async function config(t: Parameters<typeof tempDir>[0], text: string) {
   return { ...result, path }
 }
 
-test('an unknown subcommand prints usage and exits 2', async () => {
-  const { code, stdout, stderr } = await runCli(['nope'])
-  assert.equal(code, 2)
-  assert.equal(stdout, '')
-  assert.match(stderr, /^usage: review\.ts <subcommand>/)
-  assert.match(stderr, /config/)
-})
-
 test('a missing config file exits 3 and points at setup', async (t) => {
   const dir = await tempDir(t)
   const path = join(dir, 'review.md')
