@@ -200,31 +200,43 @@ function defaultPath(): string {
   return resolve(root, 'docs/agents/review.md')
 }
 
+export type ResolvedConfig = ReturnType<typeof resolveConfig>
+
+// Read, check and resolve a review config. `path` undefined means the default
+// location. A failure carries the message and exit code `config` itself uses
+// (1 unreadable, 3 missing, 4 invalid).
+export async function loadConfig(
+  path: string | undefined,
+): Promise<{ ok: true; config: ResolvedConfig } | { ok: false; code: number; message: string }> {
+  const file = path === undefined ? defaultPath() : resolve(path)
+  let text: string
+  try {
+    text = await readFile(file, 'utf8')
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') {
+      return { ok: false, code: 3, message: `no review config at ${file}. Tell the user to run /setup-review-pipeline.` }
+    }
+    return { ok: false, code: 1, message: `cannot read ${file}: ${(error as Error).message}` }
+  }
+  try {
+    return { ok: true, config: resolveConfig(file, parse(text)) }
+  } catch (error) {
+    if (!(error instanceof Invalid)) throw error
+    const where = error.line === undefined ? file : `${file}:${error.line}`
+    return { ok: false, code: 4, message: `${where}: ${error.message}. Edit the file or re-run /setup-review-pipeline.` }
+  }
+}
+
 export async function main(argv: string[]): Promise<number> {
-  let path: string
+  let path: string | undefined
   try {
     const { values } = parseArgs({ args: argv, options: { config: { type: 'string' } }, strict: true })
-    path = values.config === undefined ? defaultPath() : resolve(values.config)
+    path = values.config
   } catch (error) {
     return fail(`${(error as Error).message}\nusage: review.ts config [--config <path>]`, 2)
   }
-
-  let text: string
-  try {
-    text = await readFile(path, 'utf8')
-  } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') {
-      return fail(`no review config at ${path}. Tell the user to run /setup-review-pipeline.`, 3)
-    }
-    return fail(`cannot read ${path}: ${(error as Error).message}`, 1)
-  }
-
-  try {
-    process.stdout.write(`${JSON.stringify(resolveConfig(path, parse(text)), null, 2)}\n`)
-    return 0
-  } catch (error) {
-    if (!(error instanceof Invalid)) throw error
-    const where = error.line === undefined ? path : `${path}:${error.line}`
-    return fail(`${where}: ${error.message}. Edit the file or re-run /setup-review-pipeline.`, 4)
-  }
+  const loaded = await loadConfig(path)
+  if (!loaded.ok) return fail(loaded.message, loaded.code)
+  process.stdout.write(`${JSON.stringify(loaded.config, null, 2)}\n`)
+  return 0
 }
