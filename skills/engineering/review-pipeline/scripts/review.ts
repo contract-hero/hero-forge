@@ -5,6 +5,7 @@
 import { main as codexExec } from './codex-exec.ts'
 import { main as codexReview } from './codex-review.ts'
 import { main as config } from './config.ts'
+import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as merge } from './finish.ts'
 import { main as postReview } from './post-review.ts'
 import { main as reply } from './reply.ts'
 import { main as runState } from './run-state.ts'
@@ -16,6 +17,9 @@ const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   reply,
   'codex-exec': codexExec,
   'codex-review': codexReview,
+  'merge-gate': mergeGate,
+  merge,
+  explainer,
 }
 
 const USAGE = `usage: review.ts <subcommand> [options]

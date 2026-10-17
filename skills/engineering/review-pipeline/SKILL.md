@@ -1,6 +1,6 @@
 ---
 name: review-pipeline
-description: "Take one open pull request through an independent review: an Orchestrator agent pins the PR head, runs Reviewer pairs (Standards with a bug axis, plus Spec), verifies and consolidates their findings, and posts one GitHub review with inline suggestions and a walkthrough; the coding agent then accepts or refutes each finding on the PR, and a fresh re-checker gates the result, for up to max_rounds rounds. Use when a pull request needs review and merge, the user runs /review-pipeline <PR>, or another skill hands over a PR."
+description: "Take one open pull request through an independent review: an Orchestrator agent pins the PR head, runs Reviewer pairs (Standards with a bug axis, plus Spec), verifies and consolidates their findings, and posts one GitHub review with inline suggestions and a walkthrough; the coding agent then accepts or refutes each finding on the PR, and a fresh re-checker gates the result, for up to max_rounds rounds; on a pass it rewrites the PR body, flips the PR to ready, links a local explainer, and squash-merges when CI is green. Use when a pull request needs review and merge, the user runs /review-pipeline <PR>, or another skill hands over a PR."
 ---
 
 # Review pipeline
@@ -34,6 +34,9 @@ The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.
 | `reply --repo O/R --pr N --round R --ledger <file> [--recheck <file>]` | posts the Adjudication: a reply per inline finding and one PR comment, each at most once |
 | `codex-exec --role orchestrator\|reviewer --brief <file> --out <file> [--schema <file>]` | runs one read-only `codex exec` with the role's model and effort from the config, and checks its output against `--schema` (`runtime: codex` only) |
 | `codex-review --pr N [--issue <n>]...` | runs one review round on `runtime: codex`: the 2N reviewers, the Orchestrator, the checks, and `post-review` |
+| `explainer --repo O/R --pr N --file <abs path>` | records the explainer in the run state and links it from the PR in one comment, posted at most once |
+| `merge-gate --repo O/R --pr N` | reads the PR once and prints whether it can merge now: `gate` is `go`, `wait`, `stop` or `merged` |
+| `merge --repo O/R --pr N` | runs the gate again and, on `go`, squash-merges the re-checked head (`mode: single` only) |
 
 Every subcommand uses the same exit codes:
 
@@ -69,6 +72,7 @@ Run `review.ts run-state read --pr N`.
 | `review-posted` | **Adjudication** for the recorded `round`. In round 2 and later, that means only what `recheck-r<round-1>.json` left open |
 | `adjudicated` | **Re-check**. A `recheck-r<round>.json` that parses is reused: do not dispatch the re-checker again |
 | `rechecked` | run **Re-check** step 4's `post-review` again: it posts nothing new and prints the same `gate`. Then step 5 or 6 |
+| `body-rewritten`, `ready`, `explained`, `merged` | **Finish**, at the step after that phase, as the run's `mode` says |
 | `complete`, `aborted`, `stopped` | the last run ended (`stopped`: `max_rounds` rounds failed, or the re-checker failed twice). Tell the user; start a new run only if they ask (`create` over a terminal state starts fresh) |
 
 If the PR head moved since the state was created and the phase is `created`, pin the new head: `review.ts run-state set --pr N head_sha <sha>`.
@@ -92,7 +96,7 @@ For a new run: `review.ts run-state create --pr N --repo O/R --base <baseRefName
 
 You write one brief and launch one agent: the Orchestrator. The Orchestrator does everything else in this section.
 
-**You:** fill the template [orchestrator-brief.md](./orchestrator-brief.md) and save it to `<run dir>/orchestrator-brief.md`. For the spec line, use the issues the PR closes (`gh pr view N --json closingIssuesReferences,body`, then `Closes #N` or `Fixes #N` in the body and commit messages). Then `review.ts run-state advance --pr N review-dispatched`, and launch the Orchestrator as one fresh sub-agent with model `<orchestrator.agent_model>` and effort `<orchestrator.effort>`, giving it the brief's contents. Wait for it in the foreground. With `runtime: codex`, launch it as **Codex runtime** says instead.
+**You:** fill the template [orchestrator-brief.md](./orchestrator-brief.md) and save it to `<run dir>/orchestrator-brief.md`. For the spec line, use the issues the PR closes (`gh pr view N --json closingIssuesReferences,body`, then `Closes #N` or `Fixes #N` in the body and commit messages). Then `review.ts run-state advance --pr N review-dispatched`, and launch the Orchestrator as one fresh sub-agent with model `<orchestrator.agent_model>` and effort `<orchestrator.effort>`, giving it the brief's contents. Wait for it in the foreground. With `runtime: codex`, fill no template and launch no sub-agent: after `advance review-dispatched`, run `codex-review` as **Codex runtime** says.
 
 **The Orchestrator:**
 
@@ -192,7 +196,25 @@ Not built yet: every review posts from the user's own `gh` account as a COMMENT 
 
 ## Finish
 
-Not built yet: the pipeline does not rewrite the PR body, flip the PR to ready, build an explainer, or merge. After a passing re-check, stop and report the PR URL, the number of rounds, and that the PR stays in draft.
+Finish starts after a passing re-check gate. Each step ends with a `run-state advance`, so a resumed run starts at the step after the last one done and repeats nothing. The run's `mode` (`review.ts run-state read --pr N mode`) sets how far Finish goes:
+
+| `mode` | Steps |
+| --- | --- |
+| `single` (the default) | 1 to 5 |
+| `layer` (one layer of a stack) | 1 and 2, then `review.ts run-state advance --pr N complete`. No explainer and no merge: the stack lands its layers |
+| `stack-final` (the PR of a whole stack) | 1 and 3, then `advance complete`. The PR stays a draft and never merges: the stack lands its layers and closes this PR |
+
+The caller sets the mode when the run starts (`run-state create --mode`). `review.ts merge` refuses every mode except `single`.
+
+1. **Rewrite the PR body.** Call the Skill tool with "pr" and write the body for the final code: the diff `git diff <base>...<head_sha>`, with the review rounds as evidence. Keep every closing line (`Closes #N`, `Fixes #N`) of the old body (`gh pr view N --json body`) at the end of the new one: without them, the issues stay open after the merge. Save the body to `<run dir>/pr-body.md`, run `gh pr edit N --repo O/R --body-file <run dir>/pr-body.md`, then `review.ts run-state advance --pr N body-rewritten`.
+2. **Flip to ready**, only after a passing gate. If `gh pr view N --repo O/R --json isDraft` shows `true`, run `gh pr ready N --repo O/R`. Then `advance ready`.
+3. **Build the explainer** at `<run dir>/explainer.html`. It pitches the change to reviewers and stakeholders who will not read the diff. Make it one self-contained HTML file: inline CSS, and nothing loaded from the network. Content, in this order: a tl;dr in three sentences; one diagram of the change (inline SVG, or boxes and arrows in HTML); what to scrutinize, with `path:line`; what is mechanical; each finding with its decision and reason, from the ledger; the PR link. Never commit or publish it. Then run `review.ts explainer --repo O/R --pr N --file <run dir>/explainer.html`: it records the path and posts one PR comment, "Explainer (local, not published): `<path>`". A re-run posts no second comment. Then `advance explained`.
+4. **Wait for a green gate.** `review.ts merge-gate --repo O/R --pr N` reads the PR once and prints `gate`, `ci`, `checks`, and `problems`. It never waits, so you do:
+   - `go`: go to step 5. One exception: `ci: none` right after a push, in a repo with workflow files in `.github/workflows/`, can mean the checks are not registered yet. Wait 30 seconds and run `merge-gate` once more. Still `none`: the repo has no PR checks; go to step 5.
+   - `wait`: CI is running, or GitHub has not computed mergeability yet (`UNKNOWN`). For CI, run `gh pr checks N --repo O/R --watch` in the background (CI can outlast a shell time limit, and a timeout is not a failure). For `UNKNOWN`, wait 10 seconds. Then run `merge-gate` again. A third `UNKNOWN` in a row counts as `stop`.
+   - `stop`: red CI, a merge conflict, a head that moved after the re-check, or a merge state that needs a human (`BLOCKED`, `BEHIND`). Do not merge, re-run CI, or fix it yourself: stop and ask the user, with the `problems`. A moved head means new commits, and new commits need a new run (`/review-pipeline N`).
+   - `merged`: the PR is already merged. Go to step 5, which records it.
+5. **Merge.** `review.ts merge --repo O/R --pr N`. It runs the gate again and, on `go`, squash-merges with `--match-head-commit <head_sha>`, so only the commit the re-checker graded can merge. It never uses `--admin` or `--delete-branch`, and it checks that the PR is `MERGED` afterwards. On a PR that is already merged it changes nothing and prints `already: true`. Exit 1 (the gate changed, or GitHub refused): stop and ask the user, with the message. Then `advance merged`, then `advance complete`, and report the PR URL, the merge commit, the number of rounds, and the explainer path.
 
 ## Codex runtime
 

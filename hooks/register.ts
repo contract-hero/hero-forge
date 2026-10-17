@@ -20,6 +20,7 @@ const SKILLS = new Set([
   'wayfinder',
   'implement',
   'implement-spec',
+  'implement-pr',
   'prototype',
   'research',
   'domain-modeling',
