@@ -73,7 +73,7 @@ It stays on your machine, in the run dir (`hero-pocock/pr-<N>/explainer.html` in
 
 **Can I review a PR without merging it?**
 
-A plain `/review-pipeline <PR>` merges at the end. A stack skill can start the run in a mode that stops earlier: a stack layer stops once the PR is ready, and the whole-stack PR stops after the explainer, because the stack lands its layers itself. A plain run has no "do not merge" switch yet: to keep the PR open, tell the agent so before it reaches the merge.
+A plain `/review-pipeline <PR>` merges at the end. [implement-spec-stack](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-spec-stack.md) starts the run with `--mode layer` or `--mode stack-final`, which stop earlier: a stack layer stops once the PR is ready, and the whole-stack PR stops after the explainer, because the stack lands its layers itself. Those modes are for the stack; a plain run has no "do not merge" switch yet. To keep the PR open, tell the agent so before it reaches the merge.
 
 **Can the coding agent mark its own fixes as done?**
 
