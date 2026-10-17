@@ -2,11 +2,9 @@
 // shape of the plugin layer that can go back upstream (ADR 0004), so the
 // scripts have their own config on top of it, with Node's types.
 //
-// The repo has no dependencies, so bring TypeScript and @types/node from
-// outside it (Node 22 types: the oldest Node the CLI supports):
-//   npm i --prefix /tmp/rp-tsc typescript@5 @types/node@22
-//   /tmp/rp-tsc/node_modules/.bin/tsc -p skills/engineering/review-pipeline/scripts \
-//     --noEmit --typeRoots /tmp/rp-tsc/node_modules/@types
+// Run it with scripts/typecheck.sh from the repo root. The repo has no
+// dependencies, so the script brings TypeScript and @types/node from a temp
+// prefix outside it.
 {
   "extends": "../../../../tsconfig.json",
   "compilerOptions": {
