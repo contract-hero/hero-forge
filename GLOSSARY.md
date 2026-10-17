@@ -37,6 +37,9 @@ The reviewer that judges the change against the **Issue** or spec it came from.
 **Adjudication**:
 The coding agent's answer to a posted review: it accepts or refutes each finding, and lands the accepted fixes.
 
+**Re-checker**:
+A fresh, read-only agent that checks an **Adjudication** against the code: each finding is fixed, validly refuted, or still open. It is never the coding agent or that round's **Orchestrator**.
+
 ## Relationships
 
 - An **Issue tracker** holds many **Issues**
@@ -45,6 +48,7 @@ The coding agent's answer to a posted review: it accepts or refutes each finding
 - An **Orchestrator** runs one or more **Reviewer pairs** per review round
 - Each **Reviewer pair** is one **Standards** reviewer plus one **Spec** reviewer
 - Every posted review is followed by **Adjudication**
+- Round 1 is the posted review, its **Adjudication**, and one check by a **Re-checker**; each later round is an **Adjudication** of the findings still open plus a new check, with no new review, up to the repo's round limit
 
 ## Flagged ambiguities
 
