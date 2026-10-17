@@ -36,7 +36,9 @@ export const RUNTIMES = ['codex', 'claude'] as const
 export type Runtime = (typeof RUNTIMES)[number]
 export const KINDS = ['review', 'recheck', 'verdict'] as const
 export type Kind = (typeof KINDS)[number]
-const SETTABLE = ['round', 'head_sha', 'reviewer_login', 'explainer']
+// reviewer_login is fixed at create: the gates trust it only next to the
+// login the App's own credentials give, but nobody should move it mid-run.
+const SETTABLE = ['round', 'head_sha', 'explainer']
 
 // `includes` for a const list, narrowing the value to the list's type.
 export function isOneOf<T extends string>(list: readonly T[], value: unknown): value is T {
@@ -118,9 +120,10 @@ export function latestGate(state: State, commit: string): GateRecord | undefined
   return state.gates.filter((g) => g.commit === commit).at(-1)
 }
 
-// The last verdict the reviewer App posted at `commit`, if any.
-export function latestVerdict(state: State, commit: string): ReviewRecord | undefined {
-  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === state.reviewer_login).at(-1)
+// The last verdict posted at `commit` by `login` (default: the run's
+// reviewer_login), if any.
+export function latestVerdict(state: State, commit: string, login = state.reviewer_login): ReviewRecord | undefined {
+  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === login).at(-1)
 }
 
 // The one step after `state.phase` (aborted and stopped aside, which any
@@ -347,9 +350,6 @@ function setValue(key: string, raw: string): unknown {
       return Number(raw)
     case 'head_sha':
       refuse(isSha(raw), `head_sha must be 40 hex characters, got "${raw}"`)
-      return raw
-    case 'reviewer_login':
-      refuse(isLogin(raw), `reviewer_login must be "none" or <slug>[bot], got "${raw}"`)
       return raw
     case 'explainer':
       refuse(raw !== '', 'explainer must be a path')

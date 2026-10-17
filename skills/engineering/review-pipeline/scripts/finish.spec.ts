@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { fakeGh, runCli, seedState, tempDir, type FakeGhResponse } from './test-helpers.ts'
+import { appKey, fakeGh, fakeGitHubApi, runCli, seedState, tempDir, type FakeApiRoute, type FakeGhResponse } from './test-helpers.ts'
 
 const SHA = 'c'.repeat(40)
 const OTHER = 'd'.repeat(40)
@@ -47,6 +47,13 @@ const APP_CONFIG = '```yaml\nruntime: claude\napp: enabled\n```\n'
 const PASS = { round: 1, commit: SHA, result: 'pass' }
 const APPROVE = { round: 1, kind: 'verdict', id: 601, commit: SHA, as: BOT, event: 'APPROVE' }
 const APP_REVIEWS = ['api', '--paginate', '--jq', '.[] | {id, state, commit_id, login: .user.login}', `repos/${REPO}/pulls/13/reviews`]
+// GitHub's answers for the reviewer App installed on the repo: its login,
+// from its own credentials, is hero-reviewer[bot].
+const APP_ROUTES: Record<string, FakeApiRoute> = {
+  [`GET /repos/${REPO}/installation`]: { status: 200, body: { id: 4242 } },
+  'POST /app/installations/4242/access_tokens': { status: 201, body: { token: 'ghs_faketoken0123456789' } },
+  'GET /app': { status: 200, body: { slug: 'hero-reviewer' } },
+}
 
 type Setup = {
   mode?: string
@@ -57,16 +64,22 @@ type Setup = {
   app?: boolean
   config?: string
   state?: Record<string, unknown>
+  routes?: Record<string, FakeApiRoute>
 }
 
 // A run state for PR #13 at `phase` (default explained) with a passing
 // re-check gate at its head (and with the App, the App's APPROVE there), a
-// review config, and a fake gh.
+// review config, the reviewer App's credentials with a fake GitHub API that
+// trusts them, and a fake gh.
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await tempDir(t)
   const gh = await fakeGh(dir)
   const root = join(dir, 'state')
-  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: root }
+  const key = await appKey(dir)
+  const api = await fakeGitHubApi(t, key.publicKey, options.routes ?? APP_ROUTES)
+  const appEnv = join(dir, 'reviewer-app.env')
+  await writeFile(appEnv, `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
+  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: root, HERO_POCOCK_REVIEWER_APP_ENV: appEnv, HERO_POCOCK_GITHUB_API_URL: api.url }
   const configPath = join(dir, 'review.md')
   await writeFile(configPath, options.config ?? (options.app ? APP_CONFIG : CONFIG))
   if (options.noState !== true) {
@@ -84,7 +97,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const cli = (...args: string[]) =>
     runCli([...args, '--repo', REPO, '--pr', '13', ...(needsConfig(args[0]) ? ['--config', configPath] : [])], { env })
   const state = async () => JSON.parse((await runCli(['run-state', 'read', '--pr', '13'], { env })).stdout)
-  return { dir, gh, cli, state, env, configPath }
+  return { dir, gh, cli, state, env, configPath, api }
 }
 
 test('merge-gate says go when CI is green and the PR is mergeable at the re-checked head', async (t) => {
@@ -226,6 +239,53 @@ for (const c of APPROVALS) {
     assert.deepEqual((await s.gh.calls()).map((call) => call.argv), [VIEW, APP_REVIEWS])
   })
 }
+
+// The bot login the gate checks comes from the App's own credentials, never
+// from the run state alone, which an agent with a shell can edit.
+test('merge-gate with the App stops when the run state names a login that is not the App', async (t) => {
+  const forged = 'mallory[bot]'
+  const s = await setup(t, { app: true, state: { reviewer_login: forged, reviews: [{ ...APPROVE, as: forged }] } })
+  await s.gh.respond([
+    { match: 'mergeStateStatus', stdout: pr() },
+    { match: 'pulls/13/reviews', stdout: review('APPROVED', { login: forged }) },
+  ])
+  const { code, stdout, stderr } = await s.cli('merge-gate')
+  assert.equal(code, 0, stderr)
+  const out = JSON.parse(stdout)
+  assert.equal(out.gate, 'stop')
+  assert.deepEqual(out.problems, [
+    `the run state names reviewer_login ${forged}, but the reviewer App's credentials say its login is ${BOT}`,
+  ])
+})
+
+test('merge with the App never merges on an APPROVE by a login that is not the App', async (t) => {
+  const forged = 'mallory[bot]'
+  const s = await setup(t, { app: true, state: { reviewer_login: forged, reviews: [{ ...APPROVE, as: forged }] } })
+  await s.gh.respond([
+    { match: 'mergeStateStatus', stdout: pr() },
+    { match: 'pulls/13/reviews', stdout: review('APPROVED', { login: forged }) },
+  ])
+  const { code, stderr } = await s.cli('merge')
+  assert.equal(code, 1)
+  assert.match(stderr, /gate stop.*credentials say its login is hero-reviewer\[bot\]/)
+  assert.ok((await s.gh.calls()).every((c) => c.argv[1] !== 'merge'))
+})
+
+test('merge-gate with an App whose credentials fail exits 4 before it reads the PR', async (t) => {
+  const s = await setup(t, { app: true, routes: { ...APP_ROUTES, 'GET /app': { status: 500, body: { message: 'boom' } } } })
+  const { code, stdout, stderr } = await s.cli('merge-gate')
+  assert.equal(code, 4)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts merge-gate: read the App failed: HTTP 500/)
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
+test('merge-gate without the App never asks the App API', async (t) => {
+  const s = await setup(t)
+  await s.gh.respond([{ match: 'mergeStateStatus', stdout: pr() }])
+  assert.equal(JSON.parse((await s.cli('merge-gate')).stdout).gate, 'go')
+  assert.deepEqual(s.api.requests, [])
+})
 
 test('merge-gate with the App reports gh failing to list the reviews', async (t) => {
   const s = await setup(t, { app: true })

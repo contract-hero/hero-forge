@@ -90,13 +90,11 @@ test('advance moves the phase and set changes one field', async (t) => {
   assert.equal((await s.cli('advance', '--pr', '13', 'review-dispatched')).code, 0)
   assert.equal((await s.cli('set', '--pr', '13', 'round', '2')).code, 0)
   assert.equal((await s.cli('set', '--pr', '13', 'head_sha', SHA2)).code, 0)
-  assert.equal((await s.cli('set', '--pr', '13', 'reviewer_login', 'hero-reviewer[bot]')).code, 0)
   assert.equal((await s.cli('set', '--pr', '13', 'explainer', '/tmp/explainer.html')).code, 0)
   const state = JSON.parse(await readFile(s.file, 'utf8'))
   assert.equal(state.phase, 'review-dispatched')
   assert.equal(state.round, 2)
   assert.equal(state.head_sha, SHA2)
-  assert.equal(state.reviewer_login, 'hero-reviewer[bot]')
   assert.equal(state.explainer, '/tmp/explainer.html')
 })
 
@@ -154,7 +152,7 @@ const REFUSED = [
   ['an unknown key', ['set', '--pr', '13', 'phase', 'merged'], /cannot set "phase"/],
   ['a round of 0', ['set', '--pr', '13', 'round', '0'], /round must be a positive whole number/],
   ['a short head_sha', ['set', '--pr', '13', 'head_sha', 'abc'], /head_sha must be 40 hex characters/],
-  ['a bad reviewer_login', ['set', '--pr', '13', 'reviewer_login', 'someone'], /reviewer_login must be "none" or <slug>\[bot\]/],
+  ['a changed reviewer_login (fixed at create)', ['set', '--pr', '13', 'reviewer_login', 'mallory[bot]'], /cannot set "reviewer_login" \(settable: round, head_sha, explainer\)/],
 ] as const
 
 for (const [name, args, message] of REFUSED) {
