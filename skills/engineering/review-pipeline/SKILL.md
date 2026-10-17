@@ -32,7 +32,8 @@ The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.
 | `run-state path\|create\|read\|advance\|set\|next-round --pr N ...` | the per-PR checkpoint in `<git common dir>/hero-pocock/pr-<N>/` |
 | `post-review --repo O/R --pr N --commit <sha> --round R --kind review\|recheck --payload <file> [--ledger <file> --recheck <file>]` | posts one review, at most once per PR, round and kind; `--kind recheck` also runs the gate |
 | `reply --repo O/R --pr N --round R --ledger <file> [--recheck <file>]` | posts the Adjudication: a reply per inline finding and one PR comment, each at most once |
-| `codex-exec --role orchestrator\|reviewer --brief <file> --out <file>` | runs one `codex exec` with the role's model and effort from the config (`runtime: codex` only) |
+| `codex-exec --role orchestrator\|reviewer --brief <file> --out <file> [--schema <file>]` | runs one read-only `codex exec` with the role's model and effort from the config, and checks its output against `--schema` (`runtime: codex` only) |
+| `codex-review --pr N [--issue <n>]...` | runs one review round on `runtime: codex`: the 2N reviewers, the Orchestrator, the checks, and `post-review` |
 
 Every subcommand uses the same exit codes:
 
@@ -170,7 +171,7 @@ done > <run dir>/posted-r<R>.jsonl
 2. **Brief.** Fill the template [rechecker-brief.md](./rechecker-brief.md) and save it to `<run dir>/rechecker-brief-r<R>.md`. The fix commits are the `apply review round <n>` commits of rounds 1 to R.
 3. **Dispatch** one fresh, read-only re-checker on the reviewer's model and effort.
    - `runtime: claude`: one fresh sub-agent with model `<reviewer.agent_model>` and effort `<reviewer.effort>`, given the brief's contents. Write its final message verbatim to `<run dir>/recheck-r<R>.json`.
-   - `runtime: codex`: `review.ts codex-exec --role reviewer --brief <run dir>/rechecker-brief-r<R>.md --out <run dir>/recheck-r<R>.json --schema <the folder this SKILL.md is in>/recheck.schema.json`. **Codex runtime** has the rules for `codex-exec`.
+   - `runtime: codex`: `review.ts codex-exec --role reviewer --brief <run dir>/rechecker-brief-r<R>.md --out <run dir>/recheck-r<R>.json --schema <the folder this SKILL.md is in>/recheck.schema.json`. The re-checker runs read-only, with no network and no gh token, and `codex-exec` exits 1 when its output does not match the schema. **Codex runtime** has the rules for `codex-exec`.
    - An output that is not the JSON of [recheck.schema.json](./recheck.schema.json) is a failed re-checker, never a verdict: dispatch once more. A second failure: `review.ts run-state advance --pr N stopped`, leave the PR in draft, and tell the user the re-checker failed twice.
 4. **Post and gate.** Write `<run dir>/recheck-payload.json`: `{"event": "COMMENT", "body": "<table>", "comments": []}`. The body: `## Re-check: round <R>`; one line naming the runtime, the re-checker's model and effort, and the commit `<head_sha7>`; a table `ID | Status | Reason` with every item. Then:
 
@@ -195,25 +196,25 @@ Not built yet: the pipeline does not rewrite the PR body, flip the PR to ready, 
 
 ## Codex runtime
 
-With `runtime: codex`, the Orchestrator and every reviewer are `codex exec` sessions. The steps, the files in the run dir, and the posted review are the same as with `runtime: claude`; only the launch changes. This path needs a shell and the files in this skill folder, and no sub-agent tool.
+With `runtime: codex`, the Orchestrator, every reviewer and the re-checker are `codex exec` sessions. The files in the run dir and the posted review are the same as with `runtime: claude`. This path needs a shell and the files in this skill folder, and no sub-agent tool.
 
-- **One way to call Codex.** Every Codex call goes through `review.ts codex-exec`. It reads the role's model and effort from the config and passes both on the call (`-m <model> -c model_reasoning_effort=<effort>`), so no call falls back to `~/.codex/config.toml`. Never run `codex exec` by hand, and never use a Codex plugin's review command: it drops the effort.
-- **Codex missing or broken.** `codex-exec` runs `codex --version` first. Exit 4 with "the Codex CLI is missing or broken": stop, show the message, and tell the user to install or repair Codex, or to re-run `/setup-review-pipeline` and pick `runtime: claude`. Never switch the runtime yourself.
+- **No agent can write, reach the network, or post.** Every Codex call runs with `-s read-only` and an allowlisted environment: no gh token, and an empty `HOME`. The agents read untrusted PR text, so a prompt injection must find nothing to use. The helper CLI, which is deterministic code, does each step that needs a write or `gh`: it fetches the spec, starts each reviewer, checks the Orchestrator's output, and posts. So on this runtime the Orchestrator does not write the reviewer briefs, dispatch the reviewers, or post: it verifies and consolidates the reviewer outputs it is given.
+- **One way to call Codex.** Every Codex call goes through `review.ts codex-review` or `review.ts codex-exec`. Both read the role's model and effort from the config and pass them on the call (`-m <model> -c model_reasoning_effort=<effort>`), so no call falls back to `~/.codex/config.toml`. Never run `codex exec` by hand, and never use a Codex plugin's review command: it drops the effort.
+- **Codex missing or broken.** Both subcommands run `codex --version` first. Exit 4 with "the Codex CLI is missing or broken": stop, show the message, and tell the user to install or repair Codex, or to re-run `/setup-review-pipeline` and pick `runtime: claude`. Never switch the runtime yourself.
 - **Effort rejected.** Exit 1 with "Codex rejected <role>.effort": that model does not support that effort. Stop and tell the user to fix the effort in `docs/agents/review.md` or re-run `/setup-review-pipeline`.
 - **Sub-agent models.** `agent_model` is `null` on this runtime. Where a brief names `<reviewer.agent_model>`, write `<reviewer.model>`.
 
-**You, in Review round:** after `advance review-dispatched`, launch the Orchestrator from the repo root:
+**You, in Review round:** do not fill [orchestrator-brief.md](./orchestrator-brief.md). After `advance review-dispatched`, run from the repo root, with one `--issue` for each spec issue the PR closes:
 
 ```sh
-review.ts codex-exec --role orchestrator --brief <run dir>/orchestrator-brief.md --out <run dir>/orchestrator-final.md
+review.ts codex-review --pr N --issue <n>
 ```
 
-It runs with full access, because it starts the reviewers and calls `gh`; the brief's hard limits keep it inside the run dir. A round can take 30 minutes or more, longer than most shell time limits, so run the command in the background and wait until it exits. Codex's output goes to `<run dir>/orchestrator-final.log`. Then continue with **Posting** ("You, after the Orchestrator returns"). Exit 1 or no review: read the log and `<run dir>/orchestrator-report.md`, then apply **Who does what**.
+A round can take 30 minutes or more, longer than most shell time limits, so run the command in the background and wait until it exits. It does this, in order:
 
-**The Orchestrator, in Dispatch:** start all 2N reviewers in parallel from the repo root, each with:
+1. Fetches the spec issues into `<run dir>/spec.md`. Without `--issue`, the Spec reviewers look for the spec themselves.
+2. Writes the 2N briefs `<run dir>/reviewer-p<k>-<axis>.md`, each with the focus order of **Review round** step 3, and runs all 2N reviewers in parallel, each as its own read-only `codex exec` on `reviewer.model` and `reviewer.effort`, held to [findings.schema.json](./findings.schema.json). Each one writes `<run dir>/reviewer-p<k>-<axis>.json`, and its log is the `.log` beside it. A failed reviewer is named in the report. When every reviewer fails, it stops and posts nothing.
+3. Fills the codex template of [orchestrator-brief.md](./orchestrator-brief.md) into `<run dir>/orchestrator-brief.md` and runs the Orchestrator read-only on `orchestrator.model` and `orchestrator.effort`. Its final message is one JSON object, held to [review.schema.json](./review.schema.json): the payload, the ledger and a report.
+4. Checks that object against the schema. When it does not match, it exits 1 and posts nothing. Then it moves each inline anchor that is not on the right side of the diff into the walkthrough, writes `review-payload.json`, `findings.json` and `orchestrator-report.md`, and runs `post-review --kind review`. `post-review` refuses a payload that looks like it holds a token or a key.
 
-```sh
-review.ts codex-exec --role reviewer --brief <run dir>/reviewer-p<k>-<axis>.md --out <run dir>/reviewer-p<k>-<axis>.json
-```
-
-Start them in one shell command (each one with `&`, then `wait`) and give that command a time limit long enough for all of them. Each reviewer runs read-only, and Codex holds its final message to [findings.schema.json](./findings.schema.json), so `codex-exec` writes the findings JSON to `--out` itself: do not copy it again. Exit 0: the output is JSON. Exit 1: a failed reviewer; its log is `<run dir>/reviewer-p<k>-<axis>.log`. On a relaunch, keep each `reviewer-p<k>-<axis>.json` that parses and dispatch only the others.
+Exit 0: continue with **Posting** ("You, after the Orchestrator returns"). Exit 1: read the message, the logs in the run dir and `orchestrator-report.md`, then apply **Who does what**. A relaunch runs only the reviewers whose output is missing or does not match the schema; it keeps the others.

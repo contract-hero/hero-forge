@@ -41,7 +41,7 @@ One runtime runs both the Orchestrator and the reviewers, set by `runtime` in th
 
 | Runtime | Orchestrator | Reviewers |
 | --- | --- | --- |
-| `codex` | one `codex exec` session with full access, so it can start the reviewers and post | 2N read-only `codex exec` sessions, each held to the findings JSON schema |
+| `codex` | one read-only `codex exec` session that verifies and consolidates; the helper CLI starts the reviewers and posts | 2N read-only `codex exec` sessions, each held to the findings JSON schema |
 | `claude` | one Claude subagent | 2N read-only Claude subagents |
 
 The steps, the run dir and the posted review are the same on both. Only the launch changes.
@@ -74,7 +74,7 @@ Not yet. This version posts from your own `gh` account as a COMMENT review. A CO
 
 **Can it run on Codex?**
 
-Yes. With `runtime: codex`, every Codex call goes through the helper CLI, which passes the model and the effort from your config on each call. It does not use a Codex plugin's review command, because that command drops the effort and Codex then falls back to `~/.codex/config.toml`. If a model rejects the configured effort (for example, `gpt-6.1-sol` rejects `minimal`), the pipeline stops and tells you to fix the effort in the config.
+Yes. With `runtime: codex`, every Codex call goes through the helper CLI, which passes the model and the effort from your config on each call. Every Codex session is read-only, with no network and no gh token, because it reads untrusted PR text. So the helper CLI, not an agent, starts each reviewer, checks the Orchestrator's payload against a schema, and posts it. It refuses to post a payload that looks like it holds a token or a key. It does not use a Codex plugin's review command, because that command drops the effort and Codex then falls back to `~/.codex/config.toml`. If a model rejects the configured effort (for example, `gpt-6.1-sol` rejects `minimal`), the pipeline stops and tells you to fix the effort in the config.
 
 **Does the Codex runtime need Claude Code?**
 

@@ -3,6 +3,7 @@
 // Each subcommand module exports `main(argv): Promise<number>`; the number is
 // the exit code (0 ok, 1 failed, 2 usage, 3 absent, 4 broken).
 import { main as codexExec } from './codex-exec.ts'
+import { main as codexReview } from './codex-review.ts'
 import { main as config } from './config.ts'
 import { main as postReview } from './post-review.ts'
 import { main as reply } from './reply.ts'
@@ -14,6 +15,7 @@ const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   'post-review': postReview,
   reply,
   'codex-exec': codexExec,
+  'codex-review': codexReview,
 }
 
 const USAGE = `usage: review.ts <subcommand> [options]
