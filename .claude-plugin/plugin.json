@@ -36,6 +36,7 @@
     "./skills/engineering/implement",
     "./skills/engineering/implement-spec",
     "./skills/engineering/implement-pr",
+    "./skills/engineering/implement-spec-stack",
     "./skills/engineering/prototype",
     "./skills/engineering/research",
     "./skills/engineering/domain-modeling",

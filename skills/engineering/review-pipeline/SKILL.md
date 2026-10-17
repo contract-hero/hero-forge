@@ -7,7 +7,7 @@ description: "Take one open pull request through an independent review: an Orche
 
 Take one pull request from draft to merge. Four roles share the work: the **coding agent** (you, the session that runs this skill), the **Orchestrator**, the **Reviewer pairs**, and the re-checker. The Orchestrator, never you, reviews the code and posts the review. You prepare its inputs, launch it, check the result, and later answer the review. Read `GLOSSARY.md` for these terms if the repo has one.
 
-The argument is the PR number (or URL). Bare `#42` is a PR here. If no PR is given, ask for one.
+The argument is the PR number (or URL), then an optional `--mode layer|stack-final` (default `single`). Bare `#42` is a PR here. If no PR is given, ask for one. The mode is for `implement-spec-stack`, which runs this skill on each layer of a stack (`layer`) and on the PR of the whole stack (`stack-final`); **Finish** says what each mode skips. A resumed run keeps the mode it was created with.
 
 ## Who does what
 
@@ -37,6 +37,7 @@ The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.
 | `explainer --repo O/R --pr N --file <abs path>` | records the explainer in the run state and links it from the PR in one comment, posted at most once |
 | `merge-gate --repo O/R --pr N` | reads the PR once and prints whether it can merge now: `gate` is `go`, `wait`, `stop` or `merged` |
 | `merge --repo O/R --pr N` | runs the gate again and, on `go`, squash-merges the re-checked head (`mode: single` only) |
+| `stack order\|path\|restack\|merge-layer ...` | the stack steps of `implement-spec-stack`; its SKILL.md says how to use them |
 
 Every subcommand uses the same exit codes:
 
@@ -90,13 +91,13 @@ gh pr view N --json number,url,isDraft,state,headRefOid,headRefName,baseRefName
 - Below, `<base>` means `origin/<baseRefName>`. Diff: `git diff <base>...<head_sha>` (three dots). Commits: `git log <base>..<head_sha> --oneline`.
 - An empty diff stops the run: there is nothing to review.
 
-For a new run: `review.ts run-state create --pr N --repo O/R --base <baseRefName> --head <headRefName> --head-sha <head_sha> --runtime <runtime> --reviewer-login <login>`, where `<login>` is the App's login from **App identity**, or `none` without the App. The run dir is `review.ts run-state path --pr N`.
+For a new run: `review.ts run-state create --pr N --repo O/R --base <baseRefName> --head <headRefName> --head-sha <head_sha> --runtime <runtime> --reviewer-login <login> --mode <mode>`, where `<login>` is the App's login from **App identity**, or `none` without the App, and `<mode>` is the mode from the argument (`single` when none was given). The run dir is `review.ts run-state path --pr N`.
 
 ## Review round
 
 You write one brief and launch one agent: the Orchestrator. The Orchestrator does everything else in this section.
 
-**You:** fill the template [orchestrator-brief.md](./orchestrator-brief.md) and save it to `<run dir>/orchestrator-brief.md`. For the spec line, use the issues the PR closes (`gh pr view N --json closingIssuesReferences,body`, then `Closes #N` or `Fixes #N` in the body and commit messages). Then `review.ts run-state advance --pr N review-dispatched`, and launch the Orchestrator as one fresh sub-agent with model `<orchestrator.agent_model>` and effort `<orchestrator.effort>`, giving it the brief's contents. Wait for it in the foreground. With `runtime: codex`, launch it as **Codex runtime** says instead.
+**You:** fill the template [orchestrator-brief.md](./orchestrator-brief.md) and save it to `<run dir>/orchestrator-brief.md`. For the spec line, use the issues the PR closes (`gh pr view N --json closingIssuesReferences,body`, then `Closes #N` or `Fixes #N` in the body and commit messages). In `stack-final` mode the PR closes nothing: use the spec issue that its body names on the `Spec: #<n>` line. Then `review.ts run-state advance --pr N review-dispatched`, and launch the Orchestrator as one fresh sub-agent with model `<orchestrator.agent_model>` and effort `<orchestrator.effort>`, giving it the brief's contents. Wait for it in the foreground. With `runtime: codex`, launch it as **Codex runtime** says instead.
 
 **The Orchestrator:**
 
@@ -153,7 +154,7 @@ You answer the review as the PR author: you accept or refute each finding, and y
 
 1. **Read the review from GitHub**, not from memory: `gh api --paginate repos/O/R/pulls/N/reviews` and `gh api --paginate repos/O/R/pulls/N/comments`. The ledger `<run dir>/findings.json` holds one entry per finding the Orchestrator posted.
 2. **Decide.** Round 1: every ledger entry. Round 2 and later: the entries that `<run dir>/recheck-r<R-1>.json` left `open`. Set `decision` to `ACCEPT` or `REFUTE`, and `reason` to one line: what you changed, or why the finding is wrong, with the code or spec line that shows it. Judge each finding on its merits: refute a wrong or low-value finding, and never accept one only to end the round. A `MISSING-<n>` item is a posted finding with no ledger entry: add the entry, with the `F<n>` id the review gave it, and decide it.
-3. **Fix.** Make every accepted change by editing the files, not with GitHub's suggestion button. Run the repo's checks and tests. Land all of this round's fixes in one commit, `apply review round <R>`, and push it. No accepted change in this round: no commit.
+3. **Fix.** Make every accepted change by editing the files, not with GitHub's suggestion button. Run the repo's checks and tests. Land all of this round's fixes in one commit, `apply review round <R>`, and push it. No accepted change in this round: no commit. In `stack-final` mode the PR's head branch never lands, so a fix there is lost: make each fix on the layer branch whose diff the finding is about, commit `apply review round <R>` on that layer and push it, then merge each changed layer into the head branch and push the head branch.
 4. **Pin the new head.** `review.ts run-state set --pr N head_sha <git rev-parse HEAD>`. The re-check and any verdict use this commit.
 5. **Answer on the PR.** `review.ts reply --repo O/R --pr N --round <R> --ledger <run dir>/findings.json`; in round 2 and later add `--recheck <run dir>/recheck-r<R-1>.json`. It replies `ACCEPT: <reason>` or `REFUTE: <reason>` in the thread of each inline finding, and posts one PR comment with every answer of the round, walkthrough items included. Exit 1 while an entry it must answer has no decision or reason, or while an inline finding has no ledger entry: fix the ledger and run it again. A re-run posts only what is missing.
 6. `review.ts run-state advance --pr N adjudicated`.

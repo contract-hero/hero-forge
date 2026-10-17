@@ -21,6 +21,7 @@ const SKILLS = new Set([
   'implement',
   'implement-spec',
   'implement-pr',
+  'implement-spec-stack',
   'prototype',
   'research',
   'domain-modeling',
