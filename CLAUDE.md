@@ -49,4 +49,4 @@ Single-context: `GLOSSARY.md` at the root, ADRs in `.agents/adr/`. See `docs/age
 
 ### Review
 
-2 reviewer pairs on Codex, max 2 rounds, COMMENT reviews as you. See `docs/agents/review.md`.
+2 reviewer pairs on Codex, max 2 rounds. Reviews post as the `contract-reviewer` App, which approves or requests changes. See `docs/agents/review.md`.
