@@ -5,12 +5,14 @@
 import { main as codexExec } from './codex-exec.ts'
 import { main as config } from './config.ts'
 import { main as postReview } from './post-review.ts'
+import { main as reply } from './reply.ts'
 import { main as runState } from './run-state.ts'
 
 const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   config,
   'run-state': runState,
   'post-review': postReview,
+  reply,
   'codex-exec': codexExec,
 }
 

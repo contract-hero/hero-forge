@@ -4,7 +4,9 @@
 
 The agent that wrote the code never reviews it. The coding [agent](https://www.aihero.dev/ai-coding-dictionary/agent) only prepares the inputs and launches the Orchestrator, a fresh [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) or Codex session that dispatches the reviewers, verifies what they found, and posts. A finding the Orchestrator cannot verify against the code is dropped, not posted.
 
-This version stops after the review is posted. Adjudication, the re-check, the reviewer App identity and the merge arrive in later steps of the [spec](https://github.com/contract-hero/hero-pocock/issues/2).
+Then the coding agent does **Adjudication**: it accepts or refutes every finding, answers each one on the PR (a reply in each inline thread, plus one comment per round with every answer), and lands all accepted fixes of the round in one commit. A fresh re-checker, which is neither the coding agent nor the Orchestrator, then checks every finding against the new code: fixed, validly refuted, or still open. A deterministic gate in the helper CLI reads that result, and the pipeline posts it as a re-check comment. Without the reviewer App, that gate is the merge gate.
+
+This version stops after a passing re-check, with the PR still in draft. The reviewer App identity and the merge arrive in later steps of the [spec](https://github.com/contract-hero/hero-pocock/issues/2).
 
 ## When to reach for it
 
@@ -48,7 +50,19 @@ The steps, the run dir and the posted review are the same on both. Only the laun
 
 **With two pairs, do I get two reviews on the PR?**
 
-No. The Orchestrator consolidates all 2N reviewer outputs into one payload and posts one review per round. The walkthrough table shows which pairs raised each finding.
+No. The Orchestrator consolidates all 2N reviewer outputs into one payload and posts one review. The walkthrough table shows which pairs raised each finding.
+
+**What is a round, and does a failed round review the PR again?**
+
+A round is one Adjudication plus one re-check. When the re-check leaves findings open, the next round answers only those open findings and runs a new re-check. It does not start a new full review, so the goalposts do not move between rounds.
+
+**What happens when the rounds run out?**
+
+`max_rounds` in `docs/agents/review.md` sets how many failed rounds the pipeline accepts (2 by default). When the last one fails, the pipeline stops, the PR stays in draft, and the agent asks you what to do, with the open findings listed. It never starts an extra round by itself.
+
+**Can the coding agent mark its own fixes as done?**
+
+No. The coding agent writes the fixes and the refutations, so a fresh re-checker grades them, and the gate is a fixed check, not a judgment: every finding has a decision, every posted finding is in the ledger, the re-check covers exactly the ledger, and nothing is open.
 
 **What if the session dies halfway through?**
 
@@ -68,9 +82,12 @@ No. The coding agent needs a shell, `git`, `node`, `gh` and `codex`, and nothing
 
 ## It's working if
 
-- The PR gets exactly one review per run, from your account, with inline suggestions you can apply in the GitHub UI.
+- The PR gets exactly one review per run, from your account, with inline suggestions you can apply in the GitHub UI. Each round adds only a re-check comment.
 - The walkthrough names the runtime, the models, the number of pairs and the commit it reviewed, and lists the findings it dropped with a reason.
 - Running it again on the same PR and commit posts nothing new.
+- Every inline finding gets an `ACCEPT:` or `REFUTE:` reply in its thread, and each round gets one adjudication comment that also covers the walkthrough items.
+- Each round with accepted fixes adds exactly one `apply review round <R>` commit.
+- Each round ends with a re-check comment that lists every finding as fixed, refutation accepted, or open.
 - A repo with no `docs/agents/review.md` gets a pointer to `/setup-review-pipeline`, not a guessed review.
 - On `runtime: codex`, each Codex log in the run dir shows the model and the reasoning effort from your config, not your `~/.codex/config.toml` defaults.
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fakeGh, runCli, tempDir, type FakeGhResponse } from './test-helpers.ts'
 
@@ -71,7 +71,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
       { env },
     )
   const reviews = async () => JSON.parse(await readFile(stateFile, 'utf8')).reviews
-  return { gh, post, reviews, stateFile }
+  return { gh, post, reviews, stateFile, env, configPath, dir }
 }
 
 test('a COMMENT review with inline suggestions posts once, as the user, and is recorded', async (t) => {
@@ -173,11 +173,12 @@ test('not knowing who the gh user is exits 1 and posts nothing', async (t) => {
   assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER])
 })
 
+const GATED = ['--ledger', 'findings.json', '--recheck', 'recheck-r1.json']
+
 const REFUSED = [
-  ['a verdict from the user', ['--kind', 'verdict'], { ...PAYLOAD, event: 'APPROVE' }, /APPROVE\/REQUEST_CHANGES need the reviewer App/],
   ['a review that approves', [], { ...PAYLOAD, event: 'APPROVE' }, /--kind review posts COMMENT only/],
-  ['a recheck that requests changes', ['--kind', 'recheck'], { ...PAYLOAD, event: 'REQUEST_CHANGES' }, /--kind recheck posts COMMENT only/],
-  ['a verdict that only comments', ['--kind', 'verdict'], PAYLOAD, /--kind verdict posts APPROVE or REQUEST_CHANGES only/],
+  ['a recheck that requests changes', ['--kind', 'recheck', ...GATED], { ...PAYLOAD, event: 'REQUEST_CHANGES' }, /--kind recheck posts COMMENT only/],
+  ['a verdict that only comments', ['--kind', 'verdict', ...GATED], PAYLOAD, /--kind verdict posts APPROVE or REQUEST_CHANGES only/],
   ['an unknown event', [], { ...PAYLOAD, event: 'LGTM' }, /payload\.event must be COMMENT, APPROVE or REQUEST_CHANGES/],
   ['a body that is not text', [], { ...PAYLOAD, body: 3 }, /payload\.body must be a string/],
   ['comments that are not a list', [], { ...PAYLOAD, comments: {} }, /payload\.comments must be an array/],
@@ -228,10 +229,199 @@ test('a corrupt run state exits 4 and posts nothing', async (t) => {
 
 test('bad arguments are a usage error (exit 2)', async (t) => {
   const s = await setup(t)
-  for (const extra of [['--kind', 'praise'], ['--round', '0'], ['--commit', 'abc'], ['--bogus']]) {
+  const usageErrors = [
+    ['--kind', 'praise'], ['--round', '0'], ['--commit', 'abc'], ['--bogus'],
+    ['--kind', 'recheck'], ['--kind', 'recheck', '--ledger', 'findings.json'], ['--kind', 'verdict', '--recheck', 'r.json'],
+    GATED,
+  ]
+  for (const extra of usageErrors) {
     const { code } = await s.post(...extra)
     assert.equal(code, 2, extra.join(' '))
   }
   assert.equal((await runCli(['post-review'])).code, 2)
   assert.deepEqual(await s.gh.calls(), [])
+})
+
+// The gate: `--kind recheck` and `--kind verdict` check the re-check against
+// the ledger and against the inline findings this pipeline posted.
+
+const FIXED = 'e'.repeat(40)
+const COMMENTS = [
+  'api', '--paginate', '--jq', '.[] | {id, in_reply_to_id, pull_request_review_id, login: .user.login, body}',
+  'repos/contract-hero/hero-pocock/pulls/13/comments',
+]
+const RECHECK_MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=recheck -->'
+
+type Inline = { id: number; body: string; review?: number; reply_to?: number; login?: string }
+
+// Lines of the inline comment list, as `gh api --paginate --jq` prints them.
+function inline(...comments: Inline[]): string {
+  return comments
+    .map((c) => `${JSON.stringify({
+      id: c.id,
+      in_reply_to_id: c.reply_to ?? null,
+      pull_request_review_id: c.review ?? 555,
+      login: c.login ?? 'alilloig',
+      body: c.body,
+    })}\n`)
+    .join('')
+}
+
+// F1 and F2 are inline in review 555; F3 is a walkthrough item. A reply, and
+// a human's comment in another review, are not findings.
+const POSTED = inline(
+  { id: 101, body: '**F1** (Standards, bug, high, 2/2 pairs) ...' },
+  { id: 102, body: '**F2** (Spec, spec-missing, medium, 1/2 pairs) ...' },
+  { id: 103, body: 'ACCEPT: fixed', reply_to: 101 },
+  { id: 104, body: '**F9** looks off', review: 999, login: 'someone' },
+)
+const LEDGER = [
+  { id: 'F1', where: 'src/a.ts:42', finding: 'unsanitised input', decision: 'ACCEPT', reason: 'sanitised' },
+  { id: 'F2', where: 'src/b.ts:12', finding: 'missing case', decision: 'REFUTE', reason: 'out of scope per #6' },
+  { id: 'F3', where: 'src/c.ts:3', finding: 'stale doc', decision: 'ACCEPT', reason: 'doc updated' },
+]
+const RECHECK = {
+  items: [
+    { id: 'F1', status: 'fixed', reason: 'sanitize() now wraps the input' },
+    { id: 'F2', status: 'refutation_accepted', reason: '#6 leaves it out' },
+    { id: 'F3', status: 'fixed', reason: 'doc matches' },
+  ],
+}
+const TABLE = { event: 'COMMENT', body: '## Re-check: round 1', comments: [] }
+
+type GateSetup = { ledger?: unknown; recheck?: unknown; posted?: string; noState?: boolean }
+
+// A PR whose round 1 review (id 555) is posted and recorded, the ledger, and
+// the re-check. `gated(kind)` posts that kind at the fix commit.
+async function gateSetup(t: Parameters<typeof tempDir>[0], options: GateSetup = {}) {
+  const s = await setup(t, {
+    state: options.noState === true ? null : undefined,
+    responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 555 }) }],
+  })
+  if (options.noState !== true) assert.equal((await s.post()).code, 0)
+  const write = async (name: string, value: unknown) => {
+    const path = join(s.dir, name)
+    await writeFile(path, typeof value === 'string' ? value : JSON.stringify(value))
+    return path
+  }
+  const ledger = await write('findings.json', options.ledger ?? LEDGER)
+  const recheck = await write('recheck-r1.json', options.recheck ?? RECHECK)
+  const table = await write('recheck-payload.json', TABLE)
+  const verdict = await write('verdict-payload.json', { ...TABLE, event: 'APPROVE' })
+  await s.gh.respond([
+    { match: 'pulls/13/comments', stdout: options.posted ?? POSTED },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
+    ME,
+  ])
+  const before = (await s.gh.calls()).length
+  const gated = (kind: string) =>
+    runCli(
+      ['post-review', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--commit', FIXED, '--round', '1',
+        '--kind', kind, '--payload', kind === 'verdict' ? verdict : table, '--config', s.configPath,
+        '--ledger', ledger, '--recheck', recheck],
+      { env: s.env },
+    )
+  const calls = async () => (await s.gh.calls()).slice(before)
+  return { ...s, gated, calls }
+}
+
+test('a passing re-check posts its COMMENT review at the fix commit and reports gate pass', async (t) => {
+  const s = await gateSetup(t)
+  const { code, stdout, stderr } = await s.gated('recheck')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), {
+    posted: true, id: 666, as: 'user', event: 'COMMENT', round: 1, kind: 'recheck', gate: 'pass', problems: [],
+  })
+  const calls = await s.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [COMMENTS, USER, LIST, POST])
+  assert.deepEqual(JSON.parse(calls[3]!.stdin), { ...TABLE, body: `${TABLE.body}\n\n${RECHECK_MARKER}`, commit_id: FIXED })
+  assert.deepEqual((await s.reviews()).map((r: { kind: string; id: number }) => [r.kind, r.id]), [['review', 555], ['recheck', 666]])
+})
+
+const FAILS = [
+  ['an open item', {
+    recheck: { items: [RECHECK.items[0], { id: 'F2', status: 'open', reason: 'the case still crashes' }, RECHECK.items[2]] },
+  }, ['F2 is open: the case still crashes']],
+  ['a posted finding the ledger lacks', {
+    ledger: [LEDGER[0], LEDGER[2]],
+    recheck: { items: [RECHECK.items[0], RECHECK.items[2], { id: 'MISSING-1', status: 'open', reason: 'F2 has no entry' }] },
+  }, ['F2 is posted inline but is not in the ledger', 'MISSING-1 is in the re-check but not in the ledger', 'MISSING-1 is open: F2 has no entry']],
+  ['a ledger entry the re-check skipped', {
+    recheck: { items: [RECHECK.items[0], RECHECK.items[1]] },
+  }, ['F3 is in the ledger but not in the re-check']],
+  ['a finding with no decision', {
+    ledger: [LEDGER[0], { ...LEDGER[1], decision: '' }, LEDGER[2]],
+  }, ['F2 has no decision (ACCEPT or REFUTE)']],
+  ['one ledger entry for two inline comments', {
+    posted: inline({ id: 101, body: '**F1** a' }, { id: 105, body: '**F1** b' }, { id: 102, body: '**F2** c' }),
+  }, ['F1 is posted inline 2 times']],
+  ['an inline comment with no finding id', {
+    posted: inline({ id: 101, body: '**F1** a' }, { id: 102, body: '**F2** c' }, { id: 106, body: 'a stray note' }),
+  }, ['inline comment 106 starts with no **F<n>** finding id']],
+] as const
+
+for (const [name, options, problems] of FAILS) {
+  test(`${name} fails the gate, and the re-check COMMENT still posts`, async (t) => {
+    const s = await gateSetup(t, options)
+    const { code, stdout, stderr } = await s.gated('recheck')
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    const out = JSON.parse(stdout)
+    assert.equal(out.posted, true)
+    assert.equal(out.gate, 'fail')
+    assert.deepEqual(out.problems, problems)
+  })
+}
+
+test('a re-run of a posted re-check posts nothing and reports the same gate', async (t) => {
+  const s = await gateSetup(t)
+  assert.equal((await s.gated('recheck')).code, 0)
+  const again = await s.gated('recheck')
+  assert.equal(again.code, 0)
+  assert.deepEqual(JSON.parse(again.stdout), { posted: false, duplicate: true, id: 666, gate: 'pass', problems: [] })
+  assert.equal((await s.calls()).filter((c) => c.argv.includes('POST')).length, 1)
+})
+
+test('an APPROVE verdict on a failing gate exits 1 and posts nothing', async (t) => {
+  const s = await gateSetup(t, { recheck: { items: [RECHECK.items[0], RECHECK.items[1]] } })
+  const { code, stdout, stderr } = await s.gated('verdict')
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts post-review: the gate fails, so the PR cannot be approved: F3 is in the ledger but not in the re-check$/m)
+  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
+})
+
+test('an APPROVE verdict on a passing gate still needs the reviewer App', async (t) => {
+  const s = await gateSetup(t)
+  const { code, stderr } = await s.gated('verdict')
+  assert.equal(code, 1)
+  assert.match(stderr, /APPROVE\/REQUEST_CHANGES need the reviewer App/)
+  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
+})
+
+const BAD_FILES = [
+  ['a re-check that is not JSON', { recheck: '{nope' }, /re-check file .* is not valid JSON/],
+  ['a re-check item with an unknown status', { recheck: { items: [{ id: 'F1', status: 'done', reason: '' }] } }, /re-check file .*: items\[0\]\.status must be fixed, refutation_accepted or open/],
+  ['a ledger that is not a list', { ledger: { F1: 'ACCEPT' } }, /ledger .* must be a JSON array/],
+  ['a ledger with a duplicate id', { ledger: [LEDGER[0], LEDGER[0]] }, /ledger .*: duplicate id "F1"/],
+  ['a ledger with an unknown decision', { ledger: [{ ...LEDGER[0], decision: 'REJECT' }] }, /ledger .*: \[0\]\.decision must be ACCEPT, REFUTE or empty/],
+] as const
+
+for (const [name, options, message] of BAD_FILES) {
+  test(`${name} exits 1 before any gh call`, async (t) => {
+    const s = await gateSetup(t, options)
+    const { code, stderr } = await s.gated('recheck')
+    assert.equal(code, 1)
+    assert.match(stderr, message)
+    assert.deepEqual(await s.calls(), [])
+  })
+}
+
+test('the gate needs the run state: without one it exits 3 and posts nothing', async (t) => {
+  const s = await gateSetup(t, { noState: true })
+  const { code, stderr } = await s.gated('recheck')
+  assert.equal(code, 3)
+  assert.match(stderr, /no run state for PR #13/)
+  assert.deepEqual(await s.calls(), [])
 })

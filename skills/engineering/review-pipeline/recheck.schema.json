@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "review-pipeline re-check",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "description": "One item per ledger id, plus one MISSING-<n> item per posted finding the ledger lacks.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "reason"],
+        "properties": {
+          "id": { "type": "string", "description": "A ledger id (F1, F2, ...) or MISSING-<n>." },
+          "status": { "type": "string", "enum": ["fixed", "refutation_accepted", "open"] },
+          "reason": { "type": "string", "description": "One line. For open: what the author must still do." }
+        }
+      }
+    }
+  }
+}

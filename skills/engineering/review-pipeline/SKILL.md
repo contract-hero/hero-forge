@@ -1,6 +1,6 @@
 ---
 name: review-pipeline
-description: "Take one open pull request through an independent review: an Orchestrator agent pins the PR head, runs Reviewer pairs (Standards with a bug axis, plus Spec), verifies and consolidates their findings, and posts one GitHub review with inline suggestions and a walkthrough. Use when a pull request needs review and merge, the user runs /review-pipeline <PR>, or another skill hands over a PR."
+description: "Take one open pull request through an independent review: an Orchestrator agent pins the PR head, runs Reviewer pairs (Standards with a bug axis, plus Spec), verifies and consolidates their findings, and posts one GitHub review with inline suggestions and a walkthrough; the coding agent then accepts or refutes each finding on the PR, and a fresh re-checker gates the result, for up to max_rounds rounds. Use when a pull request needs review and merge, the user runs /review-pipeline <PR>, or another skill hands over a PR."
 ---
 
 # Review pipeline
@@ -29,8 +29,9 @@ The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.
 | Subcommand | Does |
 | --- | --- |
 | `config` | prints the resolved review config as JSON |
-| `run-state path\|create\|read\|advance\|set --pr N ...` | the per-PR checkpoint in `<git common dir>/hero-pocock/pr-<N>/` |
-| `post-review --repo O/R --pr N --commit <sha> --round R --kind review --payload <file>` | posts one review, at most once per PR, round and kind |
+| `run-state path\|create\|read\|advance\|set\|next-round --pr N ...` | the per-PR checkpoint in `<git common dir>/hero-pocock/pr-<N>/` |
+| `post-review --repo O/R --pr N --commit <sha> --round R --kind review\|recheck --payload <file> [--ledger <file> --recheck <file>]` | posts one review, at most once per PR, round and kind; `--kind recheck` also runs the gate |
+| `reply --repo O/R --pr N --round R --ledger <file> [--recheck <file>]` | posts the Adjudication: a reply per inline finding and one PR comment, each at most once |
 | `codex-exec --role orchestrator\|reviewer --brief <file> --out <file>` | runs one `codex exec` with the role's model and effort from the config (`runtime: codex` only) |
 
 Every subcommand uses the same exit codes:
@@ -64,8 +65,10 @@ Run `review.ts run-state read --pr N`.
 | --- | --- |
 | `created` | **Review round** |
 | `review-dispatched` | the Orchestrator was launched and may have posted. Run **Posting**'s check first; if the review is there, `advance review-posted`; if not, relaunch the Orchestrator (reviewer outputs in the run dir that parse are reused) |
-| `review-posted` | **Adjudication** |
-| `complete`, `aborted`, `stopped` | the last run ended. Tell the user; start a new run only if they ask (`create` over a terminal state starts fresh) |
+| `review-posted` | **Adjudication** for the recorded `round`. In round 2 and later, that means only what `recheck-r<round-1>.json` left open |
+| `adjudicated` | **Re-check**. A `recheck-r<round>.json` that parses is reused: do not dispatch the re-checker again |
+| `rechecked` | run **Re-check** step 4's `post-review` again: it posts nothing new and prints the same `gate`. Then step 5 or 6 |
+| `complete`, `aborted`, `stopped` | the last run ended (`stopped`: `max_rounds` rounds failed, or the re-checker failed twice). Tell the user; start a new run only if they ask (`create` over a terminal state starts fresh) |
 
 If the PR head moved since the state was created and the phase is `created`, pin the new head: `review.ts run-state set --pr N head_sha <sha>`.
 
@@ -141,11 +144,46 @@ The Orchestrator posts once per round, with one payload for all pairs. Payload `
 
 ## Adjudication
 
-Not built yet: the pipeline stops after **Posting**. Report the review URL, the number of findings, and the run dir to the user.
+You answer the review as the PR author: you accept or refute each finding, and you land the accepted fixes. A round is one Adjudication plus one re-check. Round 1 answers the review the Orchestrator posted; a later round answers only what the last re-check left open, with no new review. `<R>` below is `review.ts run-state read --pr N round`.
+
+1. **Read the review from GitHub**, not from memory: `gh api --paginate repos/O/R/pulls/N/reviews` and `gh api --paginate repos/O/R/pulls/N/comments`. The ledger `<run dir>/findings.json` holds one entry per finding the Orchestrator posted.
+2. **Decide.** Round 1: every ledger entry. Round 2 and later: the entries that `<run dir>/recheck-r<R-1>.json` left `open`. Set `decision` to `ACCEPT` or `REFUTE`, and `reason` to one line: what you changed, or why the finding is wrong, with the code or spec line that shows it. Judge each finding on its merits: refute a wrong or low-value finding, and never accept one only to end the round. A `MISSING-<n>` item is a posted finding with no ledger entry: add the entry, with the `F<n>` id the review gave it, and decide it.
+3. **Fix.** Make every accepted change by editing the files, not with GitHub's suggestion button. Run the repo's checks and tests. Land all of this round's fixes in one commit, `apply review round <R>`, and push it. No accepted change in this round: no commit.
+4. **Pin the new head.** `review.ts run-state set --pr N head_sha <git rev-parse HEAD>`. The re-check and any verdict use this commit.
+5. **Answer on the PR.** `review.ts reply --repo O/R --pr N --round <R> --ledger <run dir>/findings.json`; in round 2 and later add `--recheck <run dir>/recheck-r<R-1>.json`. It replies `ACCEPT: <reason>` or `REFUTE: <reason>` in the thread of each inline finding, and posts one PR comment with every answer of the round, walkthrough items included. Exit 1 while an entry it must answer has no decision or reason, or while an inline finding has no ledger entry: fix the ledger and run it again. A re-run posts only what is missing.
+6. `review.ts run-state advance --pr N adjudicated`.
+
+On a resume in this section, keep the decisions already in the ledger and a pushed `apply review round <R>` commit (`git log --oneline <base>..HEAD`); do only the steps not done yet.
 
 ## Re-check
 
-Not built yet: the pipeline stops after **Posting**.
+A fresh re-checker confirms each finding is fixed or validly refuted. It is never you and never this round's Orchestrator: you wrote the fixes and the refutations, so you never grade them.
+
+1. **Snapshot** what the PR shows, one JSON object per line:
+
+```sh
+for path in pulls/N/reviews pulls/N/comments issues/N/comments; do
+  gh api --paginate --jq '.[]' "repos/O/R/$path"
+done > <run dir>/posted-r<R>.jsonl
+```
+
+2. **Brief.** Fill the template [rechecker-brief.md](./rechecker-brief.md) and save it to `<run dir>/rechecker-brief-r<R>.md`. The fix commits are the `apply review round <n>` commits of rounds 1 to R.
+3. **Dispatch** one fresh, read-only re-checker on the reviewer's model and effort.
+   - `runtime: claude`: one fresh sub-agent with model `<reviewer.agent_model>` and effort `<reviewer.effort>`, given the brief's contents. Write its final message verbatim to `<run dir>/recheck-r<R>.json`.
+   - `runtime: codex`: `review.ts codex-exec --role reviewer --brief <run dir>/rechecker-brief-r<R>.md --out <run dir>/recheck-r<R>.json --schema <the folder this SKILL.md is in>/recheck.schema.json`. **Codex runtime** has the rules for `codex-exec`.
+   - An output that is not the JSON of [recheck.schema.json](./recheck.schema.json) is a failed re-checker, never a verdict: dispatch once more. A second failure: `review.ts run-state advance --pr N stopped`, leave the PR in draft, and tell the user the re-checker failed twice.
+4. **Post and gate.** Write `<run dir>/recheck-payload.json`: `{"event": "COMMENT", "body": "<table>", "comments": []}`. The body: `## Re-check: round <R>`; one line naming the runtime, the re-checker's model and effort, and the commit `<head_sha7>`; a table `ID | Status | Reason` with every item. Then:
+
+```sh
+review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind recheck \
+  --payload <run dir>/recheck-payload.json --ledger <run dir>/findings.json --recheck <run dir>/recheck-r<R>.json
+```
+
+   The output's `gate` is `pass` or `fail`, and `problems` lists why it failed. The gate passes only when every ledger entry has a decision, every inline finding has exactly one ledger entry, the re-check covers exactly the ledger's ids, and every item is `fixed` or `refutation_accepted`. Without the reviewer App, this gate is the merge gate. Then `review.ts run-state advance --pr N rechecked`.
+5. **Pass:** go to **Finish**.
+6. **Fail:** `review.ts run-state next-round --pr N --max-rounds <max_rounds>`. It prints the new `round` and `phase`:
+   - `review-posted`: round R+1 starts. Go to **Adjudication** and answer the open items and the gate's `problems`.
+   - `stopped`: `max_rounds` rounds failed. The PR stays in draft. Stop and ask the user, with the open items and the gate's `problems`. Offer two ways on: fix the PR by hand and run `/review-pipeline N` again (a new run, with a fresh review of the new head), or leave the PR in draft for a human reviewer. Do not start another round yourself.
 
 ## App identity
 
@@ -153,7 +191,7 @@ Not built yet: every review posts from the user's own `gh` account as a COMMENT 
 
 ## Finish
 
-Not built yet: the pipeline does not rewrite the PR body, flip the PR to ready, build an explainer, or merge.
+Not built yet: the pipeline does not rewrite the PR body, flip the PR to ready, build an explainer, or merge. After a passing re-check, stop and report the PR URL, the number of rounds, and that the PR stays in draft.
 
 ## Codex runtime
 
