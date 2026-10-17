@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fakeGh, run, tempDir } from './test-helpers.ts'
 
+// More than a pipe buffer holds, so a child that never reads it fails the write.
+const BIG = 'x'.repeat(4 * 1024 * 1024)
+
 test('the fake gh logs each call and answers from the first matching response', async (t) => {
   const dir = await tempDir(t)
   const gh = await fakeGh(dir, [
@@ -27,4 +30,9 @@ test('the fake gh logs each call and answers from the first matching response', 
     { argv: ['api', '-X', 'POST', 'repos/o/r/pulls/7', '--input', '-'], gh_token: 'ghs_fake', stdin: '{"event":"COMMENT"}' },
     { argv: ['pr', 'view', '8'], gh_token: null, stdin: '' },
   ])
+})
+
+test('run returns the result of a child that exits without reading a large stdin (no EPIPE crash)', async () => {
+  const result = await run(process.execPath, ['-e', 'process.exitCode = 3'], { stdin: BIG })
+  assert.deepEqual(result, { code: 3, stdout: '', stderr: '' })
 })

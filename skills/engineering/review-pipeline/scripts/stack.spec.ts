@@ -1,9 +1,9 @@
 // The stack subcommands of implement-spec-stack: order, restack, merge-layer, path.
 import assert from 'node:assert/strict'
-import { writeFile } from 'node:fs/promises'
+import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { baseEnv, fakeGh, run, runCli, tempDir, type FakeGhResponse } from './test-helpers.ts'
+import { baseEnv, fakeGh, run, runCli, seedState, tempDir, type FakeGhResponse } from './test-helpers.ts'
 
 const REPO = 'contract-hero/hero-pocock'
 const REPO_URL = `https://api.github.com/repos/${REPO}`
@@ -237,8 +237,19 @@ async function layers(t: Parameters<typeof tempDir>[0]) {
     await git('checkout', '-q', 'child')
     return git('rev-parse', 'parent')
   }
-  const restack = (from = parentTip) => runCli(['stack', 'restack', '--from', from, '--onto', 'main'], { cwd: dir, env })
-  return { dir, git, write, lines, parentTip, childTip, land, fixParent, restack }
+  const restack = (from = parentTip, over: Record<string, string> = {}) =>
+    runCli(['stack', 'restack', '--from', from, '--onto', 'main'], { cwd: dir, env: { ...env, ...over } })
+  // A git first on PATH that fails `git range-diff` and runs every other git
+  // command as usual.
+  const brokenRangeDiff = async () => {
+    const real = (await run('sh', ['-c', 'command -v git'])).stdout.trim()
+    const bin = join(dir, '..', `${dir.split('/').pop()}-bin`)
+    await mkdir(bin, { recursive: true })
+    await writeFile(join(bin, 'git'), `#!/bin/sh\nif [ "$1" = range-diff ]; then echo "range-diff broke" >&2; exit 1; fi\nexec "${real}" "$@"\n`)
+    await chmod(join(bin, 'git'), 0o755)
+    return { PATH: `${bin}:${process.env.PATH ?? ''}` }
+  }
+  return { dir, git, write, lines, parentTip, childTip, land, fixParent, restack, brokenRangeDiff }
 }
 
 test('restack keeps only the child commits when the parent got a fix after the child branched', async (t) => {
@@ -299,6 +310,27 @@ test('restack restores the layer and stops when the range-diff shows a content c
   assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
 })
 
+test('restack puts the layer back when git range-diff fails after the rebase', async (t) => {
+  const s = await layers(t)
+  await s.land()
+  const { code, stdout, stderr } = await s.restack(s.parentTip, await s.brokenRangeDiff())
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.equal(stderr, `review.ts stack: git range-diff failed: range-diff broke. child is back at ${s.childTip}\n`)
+  assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
+  assert.equal(await s.git('status', '--porcelain'), '')
+})
+
+test('restack refuses a layer with no commits of its own after --from, and moves nothing', async (t) => {
+  const s = await layers(t)
+  await s.land()
+  const { code, stdout, stderr } = await s.restack(s.childTip)
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.equal(stderr, `review.ts stack: child has no commits of its own after --from ${s.childTip}: there is nothing to restack. Check --from\n`)
+  assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
+})
+
 test('restack refuses a worktree with uncommitted changes', async (t) => {
   const s = await layers(t)
   await s.land()
@@ -340,26 +372,48 @@ function prView(over: Record<string, unknown> = {}): string {
   })
 }
 
-// A run state for layer PR #13 at `phase`, and a fake gh that answers a PR
-// based on `base` with a green gate.
-async function layerRun(t: Parameters<typeof tempDir>[0], options: { mode?: string; phase?: string; base?: string; view?: string } = {}) {
+type LayerRun = {
+  mode?: string
+  phase?: string
+  base?: string
+  view?: string
+  // The stack-final run of the whole stack (PR #20): its phase and mode.
+  stack?: { phase?: string; mode?: string } | null
+}
+
+// A run state for layer PR #13 at `phase` with a passing re-check at its
+// head, the stack-final run (PR #20, complete by default), a config, and a
+// fake gh that answers a PR based on `base` with a green gate.
+async function layerRun(t: Parameters<typeof tempDir>[0], options: LayerRun = {}) {
   const dir = await tempDir(t)
   const gh = await fakeGh(dir)
-  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: join(dir, 'state') }
-  const created = await runCli(
-    ['run-state', 'create', '--pr', '13', '--repo', REPO, '--base', 'ticket/4-parent', '--head', 'ticket/5-child', '--head-sha', SHA,
-      '--runtime', 'claude', '--reviewer-login', 'none', '--mode', options.mode ?? 'layer'],
-    { env },
-  )
-  assert.equal(created.code, 0, created.stderr)
-  const advanced = await runCli(['run-state', 'advance', '--pr', '13', options.phase ?? 'complete'], { env })
-  assert.equal(advanced.code, 0, advanced.stderr)
+  const root = join(dir, 'state')
+  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: root }
+  const config = join(dir, 'review.md')
+  await writeFile(config, '```yaml\nruntime: claude\n```\n')
+  await seedState(root, {
+    base_ref: 'ticket/4-parent',
+    head_ref: 'ticket/5-child',
+    head_sha: SHA,
+    mode: options.mode ?? 'layer',
+    phase: options.phase ?? 'complete',
+    gates: [{ round: 1, commit: SHA, result: 'pass' }],
+  })
+  if (options.stack !== null) {
+    await seedState(root, {
+      pr: 20,
+      head_ref: 'stack/spec-2',
+      mode: options.stack?.mode ?? 'stack-final',
+      phase: options.stack?.phase ?? 'complete',
+    })
+  }
   await gh.respond([
     { match: 'baseRefName', stdout: JSON.stringify({ baseRefName: options.base ?? 'main' }) },
     { match: 'mergeStateStatus', stdout: options.view ?? prView() },
     { match: 'state,mergeCommit', stdout: JSON.stringify({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } }) },
   ])
-  const mergeLayer = () => runCli(['stack', 'merge-layer', '--repo', REPO, '--pr', '13', '--base', 'main'], { env })
+  const mergeLayer = (...extra: string[]) =>
+    runCli(['stack', 'merge-layer', '--repo', REPO, '--pr', '13', '--base', 'main', '--stack-pr', '20', '--config', config, ...extra], { env })
   return { gh, env, mergeLayer }
 }
 
@@ -397,6 +451,93 @@ test('merge-layer refuses a layer whose review has not passed', async (t) => {
   assert.equal(code, 1)
   assert.equal(stderr, 'review.ts stack: merge-layer needs phase complete (the layer review passed), but PR #13 is at review-posted\n')
   assert.deepEqual(await s.gh.calls(), [])
+})
+
+for (const phase of ['review-posted', 'rechecked', 'explained']) {
+  test(`merge-layer waits for the stack-final review: a stack run at ${phase} lands nothing`, async (t) => {
+    const s = await layerRun(t, { stack: { phase } })
+    const { code, stderr } = await s.mergeLayer()
+    assert.equal(code, 1)
+    assert.equal(
+      stderr,
+      `review.ts stack: merge-layer waits for the review of the whole stack: the stack-final run of PR #20 is at ${phase}, not complete\n`,
+    )
+    assert.deepEqual(await s.gh.calls(), [])
+  })
+}
+
+test('merge-layer refuses a --stack-pr whose run is not the stack-final review', async (t) => {
+  const s = await layerRun(t, { stack: { mode: 'single' } })
+  const { code, stderr } = await s.mergeLayer()
+  assert.equal(code, 1)
+  assert.equal(stderr, 'review.ts stack: PR #20 is not the review of a whole stack: its run is in single mode, not stack-final\n')
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
+test('merge-layer with no run state for the stack PR exits 3', async (t) => {
+  const s = await layerRun(t, { stack: null })
+  const { code, stderr } = await s.mergeLayer()
+  assert.equal(code, 3)
+  assert.match(stderr, /no run state for PR #20/)
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
+test('merge-layer needs --stack-pr (usage error)', async (t) => {
+  const s = await layerRun(t)
+  const { code, stderr } = await runCli(['stack', 'merge-layer', '--repo', REPO, '--pr', '13', '--base', 'main'], { env: s.env })
+  assert.equal(code, 2)
+  assert.match(stderr, /^review\.ts stack: --stack-pr must be a positive whole number/)
+})
+
+test('merge-layer does not merge a layer with no passing re-check at its head', async (t) => {
+  const s = await layerRun(t)
+  await seedState(s.env.HERO_POCOCK_STATE_DIR!, {
+    base_ref: 'ticket/4-parent', head_ref: 'ticket/5-child', head_sha: SHA, mode: 'layer', phase: 'complete', gates: [],
+  })
+  const { code, stderr } = await s.mergeLayer()
+  assert.equal(code, 1)
+  assert.match(stderr, /gate stop.*no re-check is recorded at the head/)
+  assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [BASE_VIEW, GATE_VIEW])
+})
+
+// Landing without the App: a restack moved the head, so the gate is run again
+// at the new head with `post-review --kind recheck`, which records it there.
+test('merge-layer lands a restacked layer without the App once the re-check is posted again at the new head', async (t) => {
+  const s = await layerRun(t)
+  const root = s.env.HERO_POCOCK_STATE_DIR!
+  const old = 'd'.repeat(40)
+  await seedState(root, {
+    base_ref: 'ticket/4-parent', head_ref: 'ticket/5-child', head_sha: SHA, mode: 'layer', phase: 'complete',
+    gates: [{ round: 1, commit: old, result: 'pass' }],
+  })
+  const stopped = await s.mergeLayer()
+  assert.equal(stopped.code, 1)
+  assert.match(stopped.stderr, /gate stop.*no re-check is recorded at the head/)
+
+  const dir = join(root, '..')
+  const config = join(dir, 'review.md')
+  const files = { ledger: join(dir, 'findings.json'), recheck: join(dir, 'recheck-r1.json'), payload: join(dir, 'landing.json') }
+  await writeFile(files.ledger, '[]')
+  await writeFile(files.recheck, JSON.stringify({ items: [] }))
+  await writeFile(files.payload, JSON.stringify({ event: 'COMMENT', body: '## Re-check: landing', comments: [] }))
+  await s.gh.respond([
+    { match: 'api user', stdout: 'alilloig\n' },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 880 }) },
+    { match: 'baseRefName', stdout: JSON.stringify({ baseRefName: 'main' }) },
+    { match: 'mergeStateStatus', stdout: prView() },
+    { match: 'state,mergeCommit', stdout: JSON.stringify({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } }) },
+  ])
+  const rechecked = await runCli(
+    ['post-review', '--repo', REPO, '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'recheck', '--payload', files.payload,
+      '--config', config, '--ledger', files.ledger, '--recheck', files.recheck],
+    { env: s.env },
+  )
+  assert.equal(rechecked.code, 0, rechecked.stderr)
+  assert.equal(JSON.parse(rechecked.stdout).gate, 'pass')
+  const landed = await s.mergeLayer()
+  assert.equal(landed.stderr, '')
+  assert.equal(landed.code, 0)
+  assert.deepEqual(JSON.parse(landed.stdout), { merged: true, already: false, merge_commit: MERGE_COMMIT })
 })
 
 test('merge-layer does not merge when the gate stops (the head moved after the re-check)', async (t) => {

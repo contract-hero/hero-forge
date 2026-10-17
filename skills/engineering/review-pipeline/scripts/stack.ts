@@ -9,25 +9,23 @@
 //                      layer onto the default branch from the parent's
 //                      pre-landing tip, and checks with git range-diff that no
 //                      patch changed.
-//   stack merge-layer  squash-merges one reviewed layer at its re-checked head.
+//   stack merge-layer  squash-merges one reviewed layer at its re-checked head,
+//                      only after the stack-final review of the whole stack
+//                      is complete.
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
-import { parseArgs } from 'node:util'
-import { squashMerge } from './finish.ts'
-import { gh, json, listLines, oneLine, refuse } from './github.ts'
-import { Failure, loadState, stateRoot } from './run-state.ts'
-
-const PREFIX = 'review.ts stack: '
+import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
+import { configApp, squashMerge } from './finish.ts'
+import { gh, json, listLines, oneLine } from './github.ts'
+import { loadState, stateRoot } from './run-state.ts'
 
 const USAGE = `usage:
   review.ts stack order       --repo O/R --spec N
   review.ts stack path        --spec N
   review.ts stack restack     --from <parent pre-landing tip> --onto <ref>   (in the layer's worktree)
-  review.ts stack merge-layer --repo O/R --pr N --base <default branch>`
+  review.ts stack merge-layer --repo O/R --pr N --base <default branch> --stack-pr S [--config <path>]`
 
-function usage(message: string): Failure {
-  return new Failure(`${message}\n${USAGE}`, 2)
-}
+const usage = usageFor(USAGE)
 
 type Issue = { number: number; title: string; state: string }
 type Blocker = { number: number; state: string; repository_url: string }
@@ -80,13 +78,8 @@ function cycle(pending: Set<number>, blockers: Map<number, number[]>): Failure {
 }
 
 async function order(values: Record<string, string | boolean | undefined>): Promise<string> {
-  const repo = values.repo
-  const specText = values.spec
-  if (typeof repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
-  if (typeof specText !== 'string' || !/^[0-9]+$/.test(specText) || Number(specText) < 1) {
-    throw usage('--spec must be a positive whole number')
-  }
-  const spec = Number(specText)
+  const repo = repoOption(values.repo, usage)
+  const spec = positive('spec', values.spec, usage)
 
   const children = await listLines<Issue>(
     ['api', '--paginate', '--jq', '.[] | {number, title, state}', `repos/${repo}/issues/${spec}/sub_issues`],
@@ -216,6 +209,12 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
   const oldTip = mustGit(['rev-parse', 'HEAD'], 'cannot read HEAD')
   mustGit(['rev-parse', '--verify', '--quiet', `${from}^{commit}`], `--from ${from} is not a commit`)
   mustGit(['rev-parse', '--verify', '--quiet', `${onto}^{commit}`], `--onto ${onto} is not a commit`)
+  // With no commit of its own the range-diff would be empty, and an empty
+  // range-diff proves nothing.
+  refuse(
+    mustGit(['rev-list', '--count', `${from}..HEAD`], `cannot count the commits after --from ${from}`) !== '0',
+    `${branch.out} has no commits of its own after --from ${from}: there is nothing to restack. Check --from`,
+  )
   // The parent's tip can be past the point this layer branched from (a fix
   // from the stack review), so it need not be an ancestor: git takes
   // `<from>..HEAD` as this layer's own commits either way. But a `--from`
@@ -232,8 +231,17 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
     git(['rebase', '--abort'])
     throw new Failure(`the rebase of ${branch.out} onto ${onto} conflicts: aborted, ${branch.out} is back at ${oldTip}`, 1)
   }
-  const newTip = mustGit(['rev-parse', 'HEAD'], 'cannot read HEAD')
-  const diff = mustGit(['range-diff', '--no-color', `${from}..${oldTip}`, `${onto}..${newTip}`], 'git range-diff failed')
+  // From here on the branch is rebased: every way out that does not pass puts
+  // it back at its old tip first.
+  const putBack = (why: string): Failure => {
+    mustGit(['reset', '--quiet', '--hard', oldTip], `${why}, and cannot put ${branch.out} back at ${oldTip}`)
+    return new Failure(`${why}. ${branch.out} is back at ${oldTip}`, 1)
+  }
+  const newTip = git(['rev-parse', 'HEAD'])
+  if (!newTip.ok) throw putBack(`cannot read HEAD after the rebase: ${oneLine(newTip.err)}`)
+  const ranged = git(['range-diff', '--no-color', `${from}..${oldTip}`, `${onto}..${newTip.out}`])
+  if (!ranged.ok) throw putBack(`git range-diff failed: ${oneLine(ranged.err)}`)
+  const diff = ranged.out
   const markers = diff
     .split('\n')
     .map((line) => PAIR.exec(line)?.[1])
@@ -242,29 +250,40 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
   if (markers.length === 0 || differ > 0) {
     mustGit(['reset', '--quiet', '--hard', oldTip], `cannot put ${branch.out} back at ${oldTip}`)
     throw new Failure(
-      `the range-diff of ${branch.out} shows a content change (${differ} of ${markers.length} commits differ): ${branch.out} is back at ${oldTip}, the rebased result was ${newTip}\n${diff}`,
+      `the range-diff of ${branch.out} shows a content change (${differ} of ${markers.length} commits differ): ${branch.out} is back at ${oldTip}, the rebased result was ${newTip.out}\n${diff}`,
       1,
     )
   }
-  return `${JSON.stringify({ branch: branch.out, from, onto, old_tip: oldTip, new_tip: newTip, commits: markers.length, same: true })}\n`
+  return `${JSON.stringify({ branch: branch.out, from, onto, old_tip: oldTip, new_tip: newTip.out, commits: markers.length, same: true })}\n`
 }
 
-// Land one layer: its review passed (`mode: layer`, phase complete), its PR
-// now targets the default branch, and the gate of review.ts merge says go.
+// Land one layer: its review passed (`mode: layer`, phase complete), the
+// review of the whole stack passed (the stack-final run of `--stack-pr` is
+// complete), its PR now targets the default branch, and the gate of
+// review.ts merge says go.
 async function mergeLayer(values: Record<string, string | boolean | undefined>): Promise<string> {
-  const { repo, pr: prText, base } = values
-  if (typeof repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
-  if (typeof prText !== 'string' || !/^[0-9]+$/.test(prText) || Number(prText) < 1) {
-    throw usage('--pr must be a positive whole number')
-  }
+  const repo = repoOption(values.repo, usage)
+  const pr = positive('pr', values.pr, usage)
+  const { base } = values
   if (typeof base !== 'string' || base === '') throw usage('merge-layer needs --base <the default branch>')
-  const pr = Number(prText)
+  const stackPr = positive('stack-pr', values['stack-pr'], usage)
+  const app = await configApp(typeof values.config === 'string' ? values.config : undefined)
   const state = await loadState(pr)
   refuse(state.repo === repo, `the run state for PR #${pr} is for ${state.repo}, not ${repo}`)
   refuse(state.mode === 'layer', `the run for PR #${pr} is in ${state.mode} mode, not layer: use review.ts merge`)
   refuse(
     state.phase === 'complete',
     `merge-layer needs phase complete (the layer review passed), but PR #${pr} is at ${state.phase}`,
+  )
+  const stack = await loadState(stackPr)
+  refuse(stack.repo === repo, `the run state for PR #${stackPr} is for ${stack.repo}, not ${repo}`)
+  refuse(
+    stack.mode === 'stack-final',
+    `PR #${stackPr} is not the review of a whole stack: its run is in ${stack.mode} mode, not stack-final`,
+  )
+  refuse(
+    stack.phase === 'complete',
+    `merge-layer waits for the review of the whole stack: the stack-final run of PR #${stackPr} is at ${stack.phase}, not complete`,
   )
   const viewed = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'baseRefName'])
   refuse(viewed.code === 0, `cannot read PR #${pr}: ${oneLine(viewed.stderr)}`)
@@ -273,7 +292,7 @@ async function mergeLayer(values: Record<string, string | boolean | undefined>):
     target === base,
     `PR #${pr} targets ${target}, not ${base}: restack it onto ${base} and run gh pr edit ${pr} --base ${base} first`,
   )
-  return squashMerge(repo, pr, state)
+  return squashMerge(repo, pr, state, app)
 }
 
 const OPTIONS = {
@@ -283,16 +302,13 @@ const OPTIONS = {
   onto: { type: 'string' },
   pr: { type: 'string' },
   base: { type: 'string' },
+  'stack-pr': { type: 'string' },
+  config: { type: 'string' },
 } as const
 
 async function dispatch(argv: string[]): Promise<string> {
   const [command, ...rest] = argv
-  let values
-  try {
-    values = parseArgs({ args: rest, options: OPTIONS, strict: true }).values
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
+  const { values } = parse(rest, OPTIONS, usage)
   switch (command) {
     case 'order':
       return order(values)
@@ -300,25 +316,11 @@ async function dispatch(argv: string[]): Promise<string> {
       return restack(values)
     case 'merge-layer':
       return mergeLayer(values)
-    case 'path': {
-      const spec = values.spec
-      if (typeof spec !== 'string' || !/^[0-9]+$/.test(spec) || Number(spec) < 1) {
-        throw usage('--spec must be a positive whole number')
-      }
-      return `${join(stateRoot(), `stack-${spec}`)}\n`
-    }
+    case 'path':
+      return `${join(stateRoot(), `stack-${positive('spec', values.spec, usage)}`)}\n`
     default:
       throw usage(`unknown command "${command ?? ''}"`)
   }
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    process.stdout.write(await dispatch(argv))
-    return 0
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('stack', dispatch)

@@ -2,13 +2,13 @@
 
 `review-pipeline` gives one open pull request an independent review on GitHub. An **Orchestrator** pins the PR head commit, runs N **Reviewer pairs** on it, checks every finding against the code, merges the duplicates, and posts one review with inline ```` ```suggestion ```` blocks and a walkthrough.
 
-The agent that wrote the code never reviews it. The coding [agent](https://www.aihero.dev/ai-coding-dictionary/agent) only prepares the inputs and launches the Orchestrator, a fresh [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) or Codex session that dispatches the reviewers, verifies what they found, and posts. A finding the Orchestrator cannot verify against the code is dropped, not posted.
+The agent that wrote the code never reviews it. The coding [agent](https://www.aihero.dev/ai-coding-dictionary/agent) only pins the PR head, prepares the inputs and launches the Orchestrator. On Claude, the Orchestrator is a fresh [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) that dispatches the reviewers, verifies what they found, and posts. On Codex, it is a read-only session that verifies and consolidates, and the helper CLI starts the reviewers and posts the result. A finding the Orchestrator cannot verify against the code is dropped, not posted.
 
-Then the coding agent does **Adjudication**: it accepts or refutes every finding, answers each one on the PR (a reply in each inline thread, plus one comment per round with every answer), and lands all accepted fixes of the round in one commit. A fresh re-checker, which is neither the coding agent nor the Orchestrator, then checks every finding against the new code: fixed, validly refuted, or still open. A deterministic gate in the helper CLI reads that result, and the pipeline posts it as a re-check comment. Without the reviewer App, that gate is the merge gate.
+Then the coding agent does **Adjudication**: it accepts or refutes every finding, answers each one on the PR (a reply in each inline thread, plus one comment per round with every answer), and lands all accepted fixes of the round in one commit. A fresh re-checker, which is neither the coding agent nor the Orchestrator, then checks every finding against the new code: fixed, validly refuted, or still open. A deterministic gate in the helper CLI reads that result, records it at the re-checked commit, and the pipeline posts it as a re-check comment. With or without the reviewer App, the merge needs a passing gate recorded at the PR's head.
 
-When the re-check passes, the pipeline finishes the PR. It rewrites the PR body with [pr](https://aihero.dev/skills-pr) so the body matches the final code, flips the PR from draft to ready, and builds an explainer page that pitches the change to reviewers and stakeholders. Then it squash-merges the PR, but only when CI is green and GitHub reports the PR mergeable. Red CI or a merge conflict stops the pipeline and asks you: it never merges around them.
+When the re-check passes, the pipeline finishes the PR. It rewrites the PR body with [pr](https://aihero.dev/skills-pr) so the body matches the final code, flips the PR from draft to ready, gets the reviewer App's approval when you use one, and builds an explainer page that pitches the change to reviewers and stakeholders. Then it squash-merges the PR, but only when CI is green (or the repo has no PR checks at all) and GitHub reports the PR mergeable. Red CI or a merge conflict stops the pipeline and asks you: it never merges around them.
 
-With a reviewer GitHub App configured, the App's bot posts the review, the re-checks and the verdict, so the review is clearly not from you. A passing re-check gets the App's approval on the re-checked commit before the PR goes ready, and the merge waits for that approval. When the rounds run out, the App requests changes. Without the App, everything posts from your own account as COMMENT reviews.
+With a reviewer GitHub App configured, the App's bot posts the review, the re-checks and the verdict, so the review is clearly not from you. A passing re-check gets the App's approval on the re-checked commit right after the PR goes ready, and the merge waits for that approval, confirmed on GitHub. When the rounds run out, the App requests changes. Without the App, everything posts from your own account as COMMENT reviews.
 
 ## When to reach for it
 
@@ -63,6 +63,10 @@ A round is one Adjudication plus one re-check. When the re-check leaves findings
 
 `max_rounds` in `docs/agents/review.md` sets how many failed rounds the pipeline accepts (2 by default). When the last one fails, the pipeline stops, the PR stays in draft, and the agent asks you what to do, with the open findings listed. It never starts an extra round by itself.
 
+**Will it merge a PR in a repo with no CI?**
+
+Yes. A PR with no checks at all counts as green (`ci: none`). Right after a push, in a repo with workflow files, the pipeline waits 30 seconds once, because GitHub may not have registered the checks yet.
+
 **Will it merge when CI is red, or when the PR has a conflict?**
 
 No. Before the merge, the helper CLI reads the PR's checks and its mergeability. A failed check, a conflict, a branch that is behind or blocked by branch protection, or a new commit after the re-check stops the pipeline, and the agent asks you what to do. While CI runs, it waits. The merge is always a squash merge of the exact commit the re-checker graded, and it never uses `--admin`.
@@ -85,7 +89,7 @@ Run it again on the same PR. The run state records the last completed step and t
 
 **Does it post as a bot?**
 
-Only with a reviewer GitHub App. Run `/setup-review-pipeline` and choose the App: the config then has `app: enabled`, and every review, re-check and verdict shows the App's `<slug>[bot]` name. The helper CLI mints the App's token itself for each post, so no agent sees it. Without the App, the reviews post from your own `gh` account as COMMENT reviews, which never approve or block the PR, and the re-check gate decides the merge.
+Only with a reviewer GitHub App. Run `/setup-review-pipeline` and choose the App: the config then has `app: enabled`, and every review, re-check and verdict shows the App's `<slug>[bot]` name. The helper CLI mints the App's token itself for each post, so no agent sees it. Without the App, the reviews post from your own `gh` account as COMMENT reviews, which never approve or block the PR, and the recorded re-check gate decides the merge.
 
 **What if the App is set up but broken?**
 
@@ -93,7 +97,7 @@ The pipeline stops and tells you why: the credentials are missing, the key is wr
 
 **Can it run on Codex?**
 
-Yes. With `runtime: codex`, every Codex call goes through the helper CLI, which passes the model and the effort from your config on each call. Every Codex session is read-only, with no network and no gh token, because it reads untrusted PR text. So the helper CLI, not an agent, starts each reviewer, checks the Orchestrator's payload against a schema, and posts it. It refuses to post a payload that looks like it holds a token or a key. It does not use a Codex plugin's review command, because that command drops the effort and Codex then falls back to `~/.codex/config.toml`. If a model rejects the configured effort (for example, `gpt-6.1-sol` rejects `minimal`), the pipeline stops and tells you to fix the effort in the config.
+Yes. With `runtime: codex`, every Codex call goes through the helper CLI, which passes the model and the effort from your config on each call. Every Codex session is read-only, with no network and no gh token, because it reads untrusted PR text. So the helper CLI, not an agent, starts each reviewer, checks the Orchestrator's payload against a schema, and posts it. It refuses to post a payload that looks like it holds a token or a key. That scan is a second line of defence, not a guarantee: an agent could encode a secret so that no scanner sees it, which is why no Codex session gets a token in the first place. It does not use a Codex plugin's review command, because that command drops the effort and Codex then falls back to `~/.codex/config.toml`. If a model rejects the configured effort (for example, `gpt-6.1-sol` rejects `minimal`), the pipeline stops and tells you to fix the effort in the config.
 
 **Does the Codex runtime need Claude Code?**
 
@@ -107,7 +111,7 @@ No. The coding agent needs a shell, `git`, `node`, `gh` and `codex`, and nothing
 - Every inline finding gets an `ACCEPT:` or `REFUTE:` reply in its thread, and each round gets one adjudication comment that also covers the walkthrough items.
 - Each round with accepted fixes adds exactly one `apply review round <R>` commit.
 - Each round ends with a re-check comment that lists every finding as fixed, refutation accepted, or open.
-- With the App, a passing re-check is followed by one App approval on the re-checked commit, and a run that runs out of rounds ends with one App request for changes.
+- With the App, the PR goes ready first and then gets one App approval on the re-checked commit, and a run that runs out of rounds ends with one App request for changes.
 - After a passing re-check, the PR body shows the `pr` template for the final code and still closes its issues, the PR is ready for review, and it carries one "Explainer (local, not published)" comment.
 - The PR lands as one squash commit only after its checks pass. A red check or a conflict gets a question from the agent, not a merge.
 - A repo with no `docs/agents/review.md` gets a pointer to `/setup-review-pipeline`, not a guessed review.

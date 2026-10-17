@@ -9,27 +9,25 @@
 // Each post carries a hidden marker, so a re-run skips what is already on the
 // PR (counting only posts by the same gh user). Replies always post as the
 // user: the PR author answers the review.
-import { parseArgs } from 'node:util'
-import { gh, json, listInlineComments, listLines, oneLine, postedFindings, refuse, userIdentity } from './github.ts'
+import { parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
+import { gh, json, listInlineComments, listLines, oneLine, postedFindings, userIdentity } from './github.ts'
 import { CLOSED, DECISIONS, loadLedger, loadRecheck, type LedgerEntry } from './ledger.ts'
-import { Failure, loadState } from './run-state.ts'
+import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
+import { loadState } from './run-state.ts'
 import { refuseSecretsIn } from './secrets.ts'
 
-const PREFIX = 'review.ts reply: '
 const USAGE = `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
                        [--recheck <recheck-r(R-1).json>]   (round 2 and later)`
 
-function usage(message: string): Failure {
-  return new Failure(`${message}\n${USAGE}`, 2)
-}
+const usage = usageFor(USAGE)
 
 const cell = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|')
 
-const replyMarker = (pr: number, round: number, id: string) => `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=reply id=${id} -->`
-const commentMarker = (pr: number, round: number) => `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=adjudication -->`
+const replyMarker = (pr: number, round: number, id: string) => marker({ pr, round, kind: 'reply', id })
+const commentMarker = (pr: number, round: number) => marker({ pr, round, kind: 'adjudication' })
 // The exact objects posted: a finding's thread reply, and the PR comment.
 const replyPost = (pr: number, round: number, entry: LedgerEntry) => ({
-  body: `${entry.decision}: ${entry.reason}\n\n${replyMarker(pr, round, entry.id)}`,
+  body: withMarker(`${entry.decision}: ${entry.reason}`, replyMarker(pr, round, entry.id)),
 })
 
 function summary(round: number, targets: LedgerEntry[], marker: string): string {
@@ -47,31 +45,28 @@ function summary(round: number, targets: LedgerEntry[], marker: string): string 
 }
 
 async function reply(argv: string[]): Promise<string> {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: {
-        repo: { type: 'string' },
-        pr: { type: 'string' },
-        round: { type: 'string' },
-        ledger: { type: 'string' },
-        recheck: { type: 'string' },
-      },
-    }).values
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
-  const { repo, pr: prText, round: roundText, ledger: ledgerPath } = values
-  if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
-  if (prText === undefined || !/^[0-9]+$/.test(prText) || Number(prText) < 1) throw usage('--pr must be a positive whole number')
-  if (roundText === undefined || !/^[0-9]+$/.test(roundText) || Number(roundText) < 1) {
-    throw usage('--round must be a positive whole number')
-  }
+  const { values } = parse(
+    argv,
+    {
+      repo: { type: 'string' },
+      pr: { type: 'string' },
+      round: { type: 'string' },
+      ledger: { type: 'string' },
+      recheck: { type: 'string' },
+    },
+    usage,
+  )
+  const repo = repoOption(values.repo, usage)
+  const pr = positive('pr', values.pr, usage)
+  const round = positive('round', values.round, usage)
+  const ledgerPath = values.ledger
   if (ledgerPath === undefined) throw usage('--ledger is required')
-  const pr = Number(prText)
-  const round = Number(roundText)
+  // Without the last re-check a later round would answer the whole ledger
+  // again, as duplicates of round 1's answers.
+  if (round > 1 && values.recheck === undefined) {
+    throw usage(`--round ${round} needs --recheck <recheck-r${round - 1}.json>: a later round answers only what the last re-check left open`)
+  }
+  if (round === 1 && values.recheck !== undefined) throw usage('--recheck goes with round 2 and later (round 1 answers the whole ledger)')
 
   const ledger = await loadLedger(ledgerPath)
   const closed = new Set(
@@ -84,6 +79,10 @@ async function reply(argv: string[]): Promise<string> {
   refuse(
     undecided.length === 0,
     `every finding needs a decision (ACCEPT or REFUTE) and a reason first: ${undecided.map((e) => e.id).join(', ')}`,
+  )
+  refuseMarkerIn(
+    targets.flatMap((e) => [e.id, e.reason, typeof e.where === 'string' ? e.where : '']),
+    `ledger ${ledgerPath}`,
   )
   const commentPost = { body: summary(round, targets, commentMarker(pr, round)) }
   refuseSecretsIn([...targets.map((e) => replyPost(pr, round, e)), commentPost], `ledger ${ledgerPath}`)
@@ -111,10 +110,10 @@ async function reply(argv: string[]): Promise<string> {
       walkthrough.push(entry.id)
       continue
     }
-    const marker = replyMarker(pr, round, entry.id)
+    const mark = replyMarker(pr, round, entry.id)
     let postedAny = false
     for (const thread of threads) {
-      const done = comments.some((c) => c.in_reply_to_id === thread && c.login === me.login && (c.body ?? '').includes(marker))
+      const done = comments.some((c) => c.in_reply_to_id === thread && c.login === me.login && hasOwnMarker(c.body, mark))
       if (done) continue
       const result = await gh(
         ['api', '-X', 'POST', `repos/${repo}/pulls/${pr}/comments/${thread}/replies`, '--input', '-'],
@@ -128,13 +127,13 @@ async function reply(argv: string[]): Promise<string> {
 
   let comment: { id: number; posted: boolean } | null = null
   if (targets.length > 0) {
-    const marker = commentMarker(pr, round)
+    const mark = commentMarker(pr, round)
     const existing = (
       await listLines<{ id: number; body: string | null; login: string | null }>(
         ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${repo}/issues/${pr}/comments`],
         `the comments of PR #${pr}`,
       )
-    ).find((c) => c.login === me.login && (c.body ?? '').includes(marker))
+    ).find((c) => c.login === me.login && hasOwnMarker(c.body, mark))
     if (existing !== undefined) {
       comment = { id: existing.id, posted: false }
     } else {
@@ -149,13 +148,4 @@ async function reply(argv: string[]): Promise<string> {
   return `${JSON.stringify({ round, replied, skipped, walkthrough, comment })}\n`
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    process.stdout.write(await reply(argv))
-    return 0
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('reply', reply)

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { baseEnv, run, runCli, tempDir } from './test-helpers.ts'
+import { baseEnv, run, runCli, seedState, tempDir } from './test-helpers.ts'
 
 const SHA = 'a'.repeat(40)
 const SHA2 = 'b'.repeat(40)
@@ -15,6 +15,7 @@ async function stateRoot(t: Parameters<typeof tempDir>[0]) {
     root,
     file: join(root, 'pr-13', 'state.json'),
     cli: (...args: string[]) => runCli(['run-state', ...args], { env }),
+    seed: (over: Record<string, unknown>) => seedState(root, { head_sha: SHA, ...over }),
   }
 }
 
@@ -53,7 +54,7 @@ test('create writes a fresh state file in a private run dir', async (t) => {
   assert.match(created_at, /^\d{4}-\d{2}-\d{2}T/)
   assert.equal(updated_at, created_at)
   assert.deepEqual(rest, {
-    schema: 1,
+    schema: 2,
     repo: 'contract-hero/hero-pocock',
     pr: 13,
     mode: 'single',
@@ -65,6 +66,7 @@ test('create writes a fresh state file in a private run dir', async (t) => {
     round: 1,
     phase: 'created',
     reviews: [],
+    gates: [],
     explainer: null,
   })
   assert.equal((await stat(join(s.root, 'pr-13'))).mode & 0o777, 0o700)
@@ -88,22 +90,18 @@ test('advance moves the phase and set changes one field', async (t) => {
   assert.equal((await s.cli('advance', '--pr', '13', 'review-dispatched')).code, 0)
   assert.equal((await s.cli('set', '--pr', '13', 'round', '2')).code, 0)
   assert.equal((await s.cli('set', '--pr', '13', 'head_sha', SHA2)).code, 0)
-  assert.equal((await s.cli('set', '--pr', '13', 'reviewer_login', 'hero-reviewer[bot]')).code, 0)
   assert.equal((await s.cli('set', '--pr', '13', 'explainer', '/tmp/explainer.html')).code, 0)
   const state = JSON.parse(await readFile(s.file, 'utf8'))
   assert.equal(state.phase, 'review-dispatched')
   assert.equal(state.round, 2)
   assert.equal(state.head_sha, SHA2)
-  assert.equal(state.reviewer_login, 'hero-reviewer[bot]')
   assert.equal(state.explainer, '/tmp/explainer.html')
 })
 
 // A run at the end of round `round` (re-check posted), and its next-round call.
 async function rechecked(t: Parameters<typeof tempDir>[0], round: number) {
   const s = await stateRoot(t)
-  await s.cli(...CREATE)
-  await s.cli('set', '--pr', '13', 'round', String(round))
-  await s.cli('advance', '--pr', '13', 'rechecked')
+  await s.seed({ round, phase: 'rechecked' })
   return { ...s, next: (max: string) => s.cli('next-round', '--pr', '13', '--max-rounds', max) }
 }
 
@@ -133,8 +131,7 @@ for (const [round, max] of [[2, '2'], [1, '1'], [3, '2']] as const) {
 
 test('next-round before the re-check is posted is refused and changes nothing', async (t) => {
   const s = await stateRoot(t)
-  await s.cli(...CREATE)
-  await s.cli('advance', '--pr', '13', 'adjudicated')
+  await s.seed({ phase: 'adjudicated' })
   const before = await readFile(s.file, 'utf8')
   const { code, stderr } = await s.cli('next-round', '--pr', '13', '--max-rounds', '2')
   assert.equal(code, 1)
@@ -155,7 +152,7 @@ const REFUSED = [
   ['an unknown key', ['set', '--pr', '13', 'phase', 'merged'], /cannot set "phase"/],
   ['a round of 0', ['set', '--pr', '13', 'round', '0'], /round must be a positive whole number/],
   ['a short head_sha', ['set', '--pr', '13', 'head_sha', 'abc'], /head_sha must be 40 hex characters/],
-  ['a bad reviewer_login', ['set', '--pr', '13', 'reviewer_login', 'someone'], /reviewer_login must be "none" or <slug>\[bot\]/],
+  ['a changed reviewer_login (fixed at create)', ['set', '--pr', '13', 'reviewer_login', 'mallory[bot]'], /cannot set "reviewer_login" \(settable: round, head_sha, explainer\)/],
 ] as const
 
 for (const [name, args, message] of REFUSED) {
@@ -174,8 +171,7 @@ for (const [name, args, message] of REFUSED) {
 
 test('create over a run in flight is refused, so a resumed run keeps its state', async (t) => {
   const s = await stateRoot(t)
-  await s.cli(...CREATE)
-  await s.cli('advance', '--pr', '13', 'review-posted')
+  await s.seed({ phase: 'review-posted' })
   const before = await readFile(s.file, 'utf8')
   const { code, stderr } = await s.cli(...CREATE)
   assert.equal(code, 1)
@@ -192,8 +188,7 @@ test('create over a run in flight is refused, so a resumed run keeps its state',
 
 test('create over a terminal run starts a new one', async (t) => {
   const s = await stateRoot(t)
-  await s.cli(...CREATE)
-  await s.cli('advance', '--pr', '13', 'complete')
+  await s.seed({ phase: 'complete' })
   const { code } = await s.cli(...CREATE)
   assert.equal(code, 0)
   assert.equal(JSON.parse(await readFile(s.file, 'utf8')).phase, 'created')
@@ -220,8 +215,9 @@ test('no state file exits 3 on read, advance and set', async (t) => {
 
 const CORRUPT = [
   ['unparseable JSON', '{"phase": "created"'],
-  ['no phase', JSON.stringify({ schema: 1 })],
-  ['a bad field', JSON.stringify({ schema: 1, phase: 'created', pr: 'thirteen' })],
+  ['no phase', JSON.stringify({ schema: 2 })],
+  ['a bad field', JSON.stringify({ schema: 2, phase: 'created', pr: 'thirteen' })],
+  ['an older schema', JSON.stringify({ schema: 1, phase: 'created' })],
 ] as const
 
 for (const [name, contents] of CORRUPT) {
@@ -260,3 +256,104 @@ test('bad arguments are a usage error (exit 2)', async (t) => {
     assert.equal(stdout, '')
   }
 })
+
+// The order `advance` enforces: each phase may move only to the next step of
+// the run's mode, and some steps need a record the CLI wrote first.
+const BOT = 'hero-reviewer[bot]'
+const review = (over: Record<string, unknown> = {}) => ({ round: 1, kind: 'review', id: 500, commit: SHA, as: 'user', event: 'COMMENT', ...over })
+const gate = (result: string, over: Record<string, unknown> = {}) => ({ round: 1, commit: SHA, result, ...over })
+
+test('advance refuses a jump that skips a step, and names the next step', async (t) => {
+  const s = await stateRoot(t)
+  await s.cli(...CREATE)
+  const before = await readFile(s.file, 'utf8')
+  const { code, stderr } = await s.cli('advance', '--pr', '13', 'explained')
+  assert.equal(code, 1)
+  assert.equal(stderr, 'review.ts run-state: cannot advance PR #13 from created to explained: the next step is review-dispatched\n')
+  assert.equal(await readFile(s.file, 'utf8'), before)
+})
+
+test('advance to the phase the run is already at changes nothing, so a resumed step can repeat it', async (t) => {
+  const s = await stateRoot(t)
+  await s.seed({ phase: 'adjudicated' })
+  assert.deepEqual(await s.cli('advance', '--pr', '13', 'adjudicated'), { code: 0, stdout: '', stderr: '' })
+})
+
+const NEEDS = [
+  ['review-posted needs the round review on record', { phase: 'review-dispatched' }, 'review-posted',
+    'cannot advance PR #13 to review-posted: no review of round 1 is recorded. Post it first'],
+  ['rechecked needs the round re-check gate at head_sha', { phase: 'adjudicated', gates: [gate('pass', { commit: SHA2 })] }, 'rechecked',
+    `cannot advance PR #13 to rechecked: no re-check gate of round 1 at ${SHA} is recorded. Post the re-check first`],
+  ['body-rewritten needs a passing gate at head_sha', { phase: 'rechecked', gates: [gate('fail')] }, 'body-rewritten',
+    `cannot advance PR #13 to body-rewritten: the re-check gate at ${SHA} did not pass. Run next-round`],
+  ['body-rewritten counts the latest gate at head_sha', { phase: 'rechecked', gates: [gate('pass'), gate('fail')] }, 'body-rewritten',
+    `cannot advance PR #13 to body-rewritten: the re-check gate at ${SHA} did not pass. Run next-round`],
+  ['verdict-posted needs the App APPROVE at head_sha', {
+    phase: 'ready', reviewer_login: BOT, gates: [gate('pass')],
+    reviews: [review({ kind: 'verdict', as: BOT, event: 'APPROVE', commit: SHA2 })],
+  }, 'verdict-posted', `cannot advance PR #13 to verdict-posted: the reviewer App ${BOT} has no APPROVE recorded at ${SHA}. Post it first`],
+  ['with the App, ready goes to verdict-posted, never straight to explained', { phase: 'ready', reviewer_login: BOT }, 'explained',
+    'cannot advance PR #13 from ready to explained: the next step is verdict-posted'],
+  ['without the App, ready never goes to verdict-posted', { phase: 'ready' }, 'verdict-posted',
+    'cannot advance PR #13 from ready to verdict-posted: the next step is explained'],
+  ['a stack-final run skips the ready flip', { phase: 'body-rewritten', mode: 'stack-final' }, 'ready',
+    'cannot advance PR #13 from body-rewritten to ready: the next step is explained'],
+  ['a layer run never merges', { phase: 'ready', mode: 'layer' }, 'explained',
+    'cannot advance PR #13 from ready to explained: the next step is complete'],
+] as const
+
+for (const [name, over, to, message] of NEEDS) {
+  test(`advance: ${name}`, async (t) => {
+    const s = await stateRoot(t)
+    await s.seed(over)
+    const before = await readFile(s.file, 'utf8')
+    const { code, stderr } = await s.cli('advance', '--pr', '13', to)
+    assert.equal(code, 1)
+    assert.equal(stderr, `review.ts run-state: ${message}\n`)
+    assert.equal(await readFile(s.file, 'utf8'), before)
+  })
+}
+
+const PATHS = [
+  ['single, no App', { mode: 'single' }, ['body-rewritten', 'ready', 'explained', 'merged', 'complete']],
+  ['single, App', { mode: 'single', reviewer_login: BOT }, ['body-rewritten', 'ready', 'verdict-posted', 'explained', 'merged', 'complete']],
+  ['layer, no App', { mode: 'layer' }, ['body-rewritten', 'ready', 'complete']],
+  ['layer, App', { mode: 'layer', reviewer_login: BOT }, ['body-rewritten', 'ready', 'verdict-posted', 'complete']],
+  ['stack-final', { mode: 'stack-final', reviewer_login: BOT }, ['body-rewritten', 'explained', 'complete']],
+] as const
+
+for (const [name, over, steps] of PATHS) {
+  test(`advance walks Finish for ${name}`, async (t) => {
+    const s = await stateRoot(t)
+    const as = 'reviewer_login' in over ? over.reviewer_login : 'user'
+    await s.seed({
+      ...over,
+      phase: 'rechecked',
+      gates: [gate('pass')],
+      reviews: [review({ as }), review({ kind: 'verdict', id: 501, as, event: 'APPROVE' })],
+    })
+    for (const step of steps) {
+      const { code, stderr } = await s.cli('advance', '--pr', '13', step)
+      assert.equal(code, 0, `${step}: ${stderr}`)
+    }
+  })
+}
+
+test('the round loop runs in order: dispatched, posted, adjudicated, re-checked', async (t) => {
+  const s = await stateRoot(t)
+  await s.seed({ reviews: [review()], gates: [gate('fail')] })
+  for (const step of ['review-dispatched', 'review-posted', 'adjudicated', 'rechecked']) {
+    const { code, stderr } = await s.cli('advance', '--pr', '13', step)
+    assert.equal(code, 0, `${step}: ${stderr}`)
+  }
+})
+
+for (const phase of ['created', 'review-posted', 'ready', 'explained']) {
+  test(`aborted and stopped are reachable from ${phase}`, async (t) => {
+    for (const to of ['aborted', 'stopped']) {
+      const s = await stateRoot(t)
+      await s.seed({ phase })
+      assert.equal((await s.cli('advance', '--pr', '13', to)).code, 0, to)
+    }
+  })
+}

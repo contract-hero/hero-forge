@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   appKey,
@@ -89,7 +89,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
     } else {
       const created = await runCli(
         ['run-state', 'create', '--pr', '13', '--repo', 'contract-hero/hero-pocock', '--base', 'main', '--head', 'feature/x',
-          '--head-sha', SHA, '--runtime', 'claude', '--reviewer-login', 'none'],
+          '--head-sha', SHA, '--runtime', 'claude', '--reviewer-login', options.app === undefined ? 'none' : BOT],
         { env },
       )
       assert.equal(created.code, 0, created.stderr)
@@ -102,7 +102,13 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
       { env },
     )
   const reviews = async () => JSON.parse(await readFile(stateFile, 'utf8')).reviews
-  return { gh, post, reviews, stateFile, env, configPath, dir, api }
+  const gates = async () => JSON.parse(await readFile(stateFile, 'utf8')).gates
+  // Change fields of the state file in place (a run further on than `create`).
+  const patch = async (over: Record<string, unknown>) => {
+    const state = JSON.parse(await readFile(stateFile, 'utf8'))
+    await writeFile(stateFile, JSON.stringify({ ...state, ...over }))
+  }
+  return { gh, post, reviews, gates, patch, stateFile, env, configPath, dir, api }
 }
 
 test('a COMMENT review with inline suggestions posts once, as the user, and is recorded', async (t) => {
@@ -125,7 +131,8 @@ test('a COMMENT review with inline suggestions posts once, as the user, and is r
     body: `${PAYLOAD.body}\n\n${MARKER}`,
     commit_id: SHA,
   })
-  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 555, commit: SHA, as: 'user' }])
+  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 555, commit: SHA, as: 'user', event: 'COMMENT' }])
+  assert.deepEqual(await s.gates(), [])
 })
 
 test('a review the run state already records is not posted again, and gh is not called', async (t) => {
@@ -146,13 +153,14 @@ test('when the run state lost the record, our own marked review on the same comm
   assert.equal(code, 0)
   assert.deepEqual(JSON.parse(stdout), { posted: false, duplicate: true, id: 777 })
   assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER, LIST])
-  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 777, commit: SHA, as: 'user' }])
+  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 777, commit: SHA, as: 'user', event: 'COMMENT' }])
 })
 
 const NOT_OURS = [
   ['a marker in a review by someone else', { login: 'mallory' }],
   ['a marker in our own review on another commit', { commit_id: 'd'.repeat(40) }],
   ['a marker for another round', { body: MARKER.replace('round=1', 'round=11') }],
+  ['a marker that is not the last line', { body: `${MARKER}\n\nmore text below the copied marker` }],
 ] as const
 
 for (const [name, change] of NOT_OURS) {
@@ -188,6 +196,18 @@ test('GitHub rejecting the review exits 1 with its message and records nothing',
   assert.deepEqual(await s.reviews(), [])
 })
 
+test('a gh that refuses a large review without reading it is a clean exit 1, not an EPIPE crash', async (t) => {
+  const big = { ...PAYLOAD, body: `## Review pipeline: round 1\n\n${'A long walkthrough line.\n'.repeat(200000)}` }
+  const s = await setup(t, {
+    payload: big,
+    responses: [{ match: '-X POST', stderr: 'HTTP 422: body too long', exit: 1, ignore_stdin: true }],
+  })
+  const { code, stdout, stderr } = await s.post()
+  assert.equal(stdout, '')
+  assert.equal(code, 1)
+  assert.match(stderr, /^review\.ts post-review: GitHub rejected the review: HTTP 422: body too long\n$/)
+})
+
 test('listing the existing reviews failing exits 1 and posts nothing', async (t) => {
   const s = await setup(t, { responses: [{ match: '--paginate', stderr: 'HTTP 404\n', exit: 1 }] })
   const { code, stderr } = await s.post()
@@ -202,7 +222,9 @@ for (const [kind, secret] of [
   ['a private key', '-----BEGIN OPENSSH PRIVATE KEY-----'],
   ['an API key (sk-)', `sk-proj-${'q'.repeat(24)}`],
   ['a Slack token', 'xoxb-1234567890-abcdef'],
-]) {
+  ['a JWT', `eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiIxMjMifQ.${'s'.repeat(30)}`],
+  ['an OAuth token in a credential file', `"refresh_token": "${'r'.repeat(12)}-${'Q7'.repeat(10)}"`],
+] as [string, string][]) {
   test(`a payload that holds ${kind} is refused before any gh call`, async (t) => {
     const comment = { ...PAYLOAD.comments[0], body: `**F1** leaked: ${secret}` }
     const s = await setup(t, { payload: { ...PAYLOAD, comments: [comment, PAYLOAD.comments[1]] } })
@@ -222,6 +244,14 @@ for (const [name, text] of [
   ['split by an HTML comment', `ghp<!-- hidden -->_${'A1b2'.repeat(9)}`],
   ['with a zero-width character in its prefix', `gh\u200Bp_${'A1b2'.repeat(9)}`],
   ['in a suggestion block', '**F1** fix\n\n```suggestion\nconst t = "' + LEAK + '"\n```'],
+  ['split by a soft hyphen', `gh\u00ADp_${'A1b2'.repeat(9)}`],
+  ['split by a word joiner and a bidi mark', `g\u2060h\u200Fp_${'A1b2'.repeat(9)}`],
+  ['in fullwidth letters', `\uFF47\uFF48\uFF50_${'A1b2'.repeat(9)}`],
+  ['written with HTML entities', `&#103;&#x68;p&lowbar;${'A1b2'.repeat(9)}`],
+  ['written with double-encoded entities', `&amp;#103;hp_${'A1b2'.repeat(9)}`],
+  ['with a markdown backslash escape', `ghp\\_${'A1b2'.repeat(9)}`],
+  ['split by an HTML tag', `gh<b></b>p_${'A1b2'.repeat(4)}<span>${'A1b2'.repeat(5)}</span>`],
+  ['split by a tag with attributes', `ghp_<i class="x">${'A1b2'.repeat(9)}</i>`],
 ]) {
   test(`a GitHub token ${name} is refused before any gh call`, async (t) => {
     const comment = { ...PAYLOAD.comments[0], body: text }
@@ -233,6 +263,29 @@ for (const [name, text] of [
     assert.deepEqual(await s.gh.calls(), [])
   })
 }
+
+// Only the helper CLI writes the pipeline marker. A marker in agent-written
+// text could pass for an earlier post, so it is refused wherever it appears.
+for (const [name, change] of [
+  ['the walkthrough body', (m: string) => ({ ...PAYLOAD, body: `## Review\n\n${m}` })],
+  ['an inline comment body', (m: string) => ({ ...PAYLOAD, comments: [{ ...PAYLOAD.comments[0], body: `**F1** x ${m}` }] })],
+] as const) {
+  test(`a pipeline marker in ${name} is refused before any gh call`, async (t) => {
+    const s = await setup(t, { payload: change(MARKER.replace('round=1', 'round=2')) })
+    const { code, stdout, stderr } = await s.post()
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.match(stderr, /contains the marker "hero-pocock:review-pipeline", which only the helper CLI writes\. Nothing was posted/)
+    assert.deepEqual(await s.gh.calls(), [])
+  })
+}
+
+test('a marker tag written in another case is refused too', async (t) => {
+  const s = await setup(t, { payload: { ...PAYLOAD, body: 'x <!-- HERO-POCOCK:Review-Pipeline pr=13 -->' } })
+  const { code, stderr } = await s.post()
+  assert.equal(code, 1)
+  assert.match(stderr, /contains the marker/)
+})
 
 test('a payload with an unknown top-level key is refused before any gh call', async (t) => {
   const s = await setup(t, { payload: { ...PAYLOAD, commit_id: 'd'.repeat(40) } })
@@ -265,7 +318,7 @@ test('the review sent to GitHub holds only the allowed fields', async (t) => {
 
 test('a payload that only names a token prefix still posts', async (t) => {
   const s = await setup(t, {
-    payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes', comments: [] },
+    payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes, and read access_token: process.env.REVIEWER_APP_TOKEN_NAME', comments: [] },
     responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 556 }) }],
   })
   const { code, stderr } = await s.post()
@@ -403,6 +456,10 @@ type GateSetup = {
   noState?: boolean
   app?: boolean
   verdict?: 'APPROVE' | 'REQUEST_CHANGES'
+  // The run state after the review posted: the fix commit is pinned, and
+  // the phase is this (default adjudicated).
+  phase?: string
+  mode?: string
 }
 
 // A PR whose round 1 review (id 555) is posted and recorded, the ledger, and
@@ -413,7 +470,10 @@ async function gateSetup(t: Parameters<typeof tempDir>[0], options: GateSetup = 
     responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 555 }) }],
     app: options.app ? {} : undefined,
   })
-  if (options.noState !== true) assert.equal((await s.post()).code, 0)
+  if (options.noState !== true) {
+    assert.equal((await s.post()).code, 0)
+    await s.patch({ head_sha: FIXED, phase: options.phase ?? 'adjudicated', mode: options.mode ?? 'single' })
+  }
   const write = async (name: string, value: unknown) => {
     const path = join(s.dir, name)
     await writeFile(path, typeof value === 'string' ? value : JSON.stringify(value))
@@ -452,6 +512,7 @@ test('a passing re-check posts its COMMENT review at the fix commit and reports 
   assert.deepEqual(calls.map((c) => c.argv), [COMMENTS, USER, LIST, POST])
   assert.deepEqual(JSON.parse(calls[3]!.stdin), { ...TABLE, body: `${TABLE.body}\n\n${RECHECK_MARKER}`, commit_id: FIXED })
   assert.deepEqual((await s.reviews()).map((r: { kind: string; id: number }) => [r.kind, r.id]), [['review', 555], ['recheck', 666]])
+  assert.deepEqual(await s.gates(), [{ round: 1, commit: FIXED, result: 'pass' }])
 })
 
 const FAILS = [
@@ -486,6 +547,7 @@ for (const [name, options, problems] of FAILS) {
     assert.equal(out.posted, true)
     assert.equal(out.gate, 'fail')
     assert.deepEqual(out.problems, problems)
+    assert.deepEqual(await s.gates(), [{ round: 1, commit: FIXED, result: 'fail' }])
   })
 }
 
@@ -496,24 +558,47 @@ test('a re-run of a posted re-check posts nothing and reports the same gate', as
   assert.equal(again.code, 0)
   assert.deepEqual(JSON.parse(again.stdout), { posted: false, duplicate: true, id: 666, gate: 'pass', problems: [] })
   assert.equal((await s.calls()).filter((c) => c.argv.includes('POST')).length, 1)
+  assert.deepEqual(await s.gates(), [{ round: 1, commit: FIXED, result: 'pass' }])
 })
 
-test('an APPROVE verdict on a failing gate exits 1 and posts nothing', async (t) => {
-  const s = await gateSetup(t, { recheck: { items: [RECHECK.items[0], RECHECK.items[1]] } })
-  const { code, stdout, stderr } = await s.gated('verdict')
-  assert.equal(code, 1)
-  assert.equal(stdout, '')
-  assert.match(stderr, /^review\.ts post-review: the gate fails, so the PR cannot be approved: F3 is in the ledger but not in the re-check$/m)
-  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
-})
-
-test('without the reviewer App, a verdict is refused: the PR author cannot approve their own PR', async (t) => {
+test('a gate that changes on a re-run is recorded again, so the latest result counts', async (t) => {
   const s = await gateSetup(t)
+  assert.equal((await s.gated('recheck')).code, 0)
+  await writeFile(join(s.dir, 'recheck-r1.json'), JSON.stringify({ items: [RECHECK.items[0], RECHECK.items[1]] }))
+  const again = await s.gated('recheck')
+  assert.equal(JSON.parse(again.stdout).gate, 'fail')
+  assert.deepEqual(await s.gates(), [{ round: 1, commit: FIXED, result: 'pass' }, { round: 1, commit: FIXED, result: 'fail' }])
+})
+
+test('without the reviewer App, a verdict is refused before any gh call: the PR author cannot approve their own PR', async (t) => {
+  const s = await gateSetup(t, { phase: 'ready' })
   const { code, stderr } = await s.gated('verdict')
   assert.equal(code, 1)
   assert.match(stderr, /APPROVE\/REQUEST_CHANGES need the reviewer App: the PR author cannot approve their own PR/)
-  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
+  assert.deepEqual(await s.calls(), [])
 })
+
+// The run state pins what a post may be: its head, its round, its App.
+const PINNED = [
+  ['a commit that is not the pinned head', { head_sha: 'd'.repeat(40) },
+    `--commit ${FIXED} is not the head the run pinned (${'d'.repeat(40)}): pin it with run-state set head_sha first`],
+  ['a round that is not the run round', { round: 2 }, "--round 1 is not the run's round (2)"],
+  ['a run state that names the App when the config has none', { reviewer_login: BOT },
+    'the config does not enable the reviewer App, but the run state for PR #13 has reviewer_login hero-reviewer[bot]: re-create the run with the reviewer login the config implies'],
+  ['a run state for another repo', { repo: 'someone/else' }, 'the run state for PR #13 is for someone/else, not contract-hero/hero-pocock'],
+] as const
+
+for (const [name, over, message] of PINNED) {
+  test(`${name} is refused before any gh call`, async (t) => {
+    const s = await gateSetup(t)
+    await s.patch(over)
+    const { code, stdout, stderr } = await s.gated('recheck')
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.equal(stderr, `review.ts post-review: ${message}\n`)
+    assert.deepEqual(await s.calls(), [])
+  })
+}
 
 const BAD_FILES = [
   ['a re-check that is not JSON', { recheck: '{nope' }, /re-check file .* is not valid JSON/],
@@ -558,7 +643,7 @@ test('with the App, the review posts with the minted token as GH_TOKEN and recor
   assert.deepEqual(calls.map((c) => c.argv), [LIST, POST])
   assert.deepEqual(calls.map((c) => c.gh_token), [TOKEN, TOKEN])
   assert.deepEqual(JSON.parse(calls[1]!.stdin), { ...PAYLOAD, body: `${PAYLOAD.body}\n\n${MARKER}`, commit_id: SHA })
-  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 555, commit: SHA, as: BOT }])
+  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 555, commit: SHA, as: BOT, event: 'COMMENT' }])
   assert.doesNotMatch(stdout, new RegExp(TOKEN))
 })
 
@@ -593,8 +678,64 @@ test('a broken App exits 4, posts nothing, and never falls back to the user', as
   assert.deepEqual(await s.reviews(), [])
 })
 
-test('with the App, a passing gate posts the APPROVE verdict as the bot at the fix commit', async (t) => {
+test('with the App, a config that the run state does not match is refused before any token is minted', async (t) => {
   const s = await gateSetup(t, { app: true })
+  await s.patch({ reviewer_login: 'none' })
+  const minted = s.api!.requests.length
+  const { code, stderr } = await s.gated('recheck')
+  assert.equal(code, 1)
+  assert.match(stderr, /the config enables the reviewer App, but the run state for PR #13 has reviewer_login none/)
+  assert.deepEqual(await s.calls(), [])
+  assert.equal(s.api!.requests.length, minted)
+})
+
+test('with the App, a bot login that is not the run state reviewer_login posts nothing', async (t) => {
+  const s = await gateSetup(t, { app: true })
+  await s.patch({ reviewer_login: 'other-reviewer[bot]' })
+  const { code, stderr } = await s.gated('recheck')
+  assert.equal(code, 1)
+  assert.match(stderr, /the reviewer App posts as hero-reviewer\[bot\], but the run state for PR #13 expects other-reviewer\[bot\]/)
+  assert.ok((await s.calls()).every((c) => !c.argv.includes('POST')))
+})
+
+for (const phase of ['adjudicated', 'rechecked', 'body-rewritten']) {
+  test(`with the App, an APPROVE at phase ${phase} (before the ready flip) is refused before any gh call`, async (t) => {
+    const s = await gateSetup(t, { app: true, phase })
+    const { code, stderr } = await s.gated('verdict')
+    assert.equal(code, 1)
+    assert.equal(
+      stderr,
+      `review.ts post-review: an APPROVE goes on a PR that is ready for review, but PR #13 is at ${phase} (single mode): flip it to ready first, then approve\n`,
+    )
+    assert.deepEqual(await s.calls(), [])
+  })
+}
+
+test('with the App, a stack-final run can never be approved: its PR stays a draft', async (t) => {
+  const s = await gateSetup(t, { app: true, phase: 'body-rewritten', mode: 'stack-final' })
+  const { code, stderr } = await s.gated('verdict')
+  assert.equal(code, 1)
+  assert.match(stderr, /an APPROVE goes on a PR that is ready for review, but PR #13 is at body-rewritten \(stack-final mode\)/)
+})
+
+test('with the App, a landed stack layer (layer mode, complete) can be approved again at its new head', async (t) => {
+  const s = await gateSetup(t, { app: true, phase: 'complete', mode: 'layer' })
+  const { code, stdout, stderr } = await s.gated('verdict')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.equal(JSON.parse(stdout).event, 'APPROVE')
+})
+
+test('with the App, a REQUEST_CHANGES before the run stopped is refused', async (t) => {
+  const s = await gateSetup(t, { app: true, verdict: 'REQUEST_CHANGES', phase: 'rechecked' })
+  const { code, stderr } = await s.gated('verdict')
+  assert.equal(code, 1)
+  assert.match(stderr, /a REQUEST_CHANGES goes on a run that ran out of rounds, but PR #13 is at rechecked: run next-round first/)
+  assert.deepEqual(await s.calls(), [])
+})
+
+test('with the App, a passing gate posts the APPROVE verdict as the bot at the fix commit', async (t) => {
+  const s = await gateSetup(t, { app: true, phase: 'ready' })
   const { code, stdout, stderr } = await s.gated('verdict')
   assert.equal(stderr, '')
   assert.equal(code, 0)
@@ -614,12 +755,15 @@ test('with the App, a passing gate posts the APPROVE verdict as the bot at the f
     (await s.reviews()).map((r: { kind: string; id: number; as: string; commit: string }) => [r.kind, r.id, r.as, r.commit]),
     [['review', 555, BOT, SHA], ['verdict', 666, BOT, FIXED]],
   )
+  assert.equal((await s.reviews())[1].event, 'APPROVE')
+  assert.deepEqual(await s.gates(), [{ round: 1, commit: FIXED, result: 'pass' }])
 })
 
 test('with the App, a failing gate after the last round posts REQUEST_CHANGES as the bot', async (t) => {
   const s = await gateSetup(t, {
     app: true,
     verdict: 'REQUEST_CHANGES',
+    phase: 'stopped',
     recheck: { items: [RECHECK.items[0], { id: 'F2', status: 'open', reason: 'still crashes' }, RECHECK.items[2]] },
   })
   const { code, stdout, stderr } = await s.gated('verdict')
@@ -631,7 +775,7 @@ test('with the App, a failing gate after the last round posts REQUEST_CHANGES as
 })
 
 test('with the App, an APPROVE on a failing gate is still refused before any token is minted', async (t) => {
-  const s = await gateSetup(t, { app: true, recheck: { items: [RECHECK.items[0], RECHECK.items[1]] } })
+  const s = await gateSetup(t, { app: true, phase: 'ready', recheck: { items: [RECHECK.items[0], RECHECK.items[1]] } })
   const minted = s.api!.requests.length
   const { code, stderr } = await s.gated('verdict')
   assert.equal(code, 1)

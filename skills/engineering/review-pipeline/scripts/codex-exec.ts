@@ -13,11 +13,10 @@ import { readFile, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseArgs } from 'node:util'
+import { Failure, parse, runMain, usageFor } from './cli.ts'
 import { loadConfig, type ResolvedConfig } from './config.ts'
 import { schemaProblem } from './schema.ts'
 
-const PREFIX = 'review.ts codex-exec: '
 const USAGE =
   'usage: review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file> [--schema <file>] [--log <file>] [--config <path>]'
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -63,21 +62,34 @@ async function withCodexEnv<T>(fn: (env: NodeJS.ProcessEnv) => T | Promise<T>): 
   }
 }
 
-// `input` is the open brief; it becomes Codex's stdin and is closed after.
-function runCodex(args: string[], input: number, log: string): Promise<number | null> {
-  const output = openSync(log, 'w')
-  return withCodexEnv(
-    (env) =>
-      new Promise((done, reject) => {
-        const child = spawn('codex', args, { stdio: [input, output, output], env })
-        child.on('error', reject)
-        child.on('close', (code) => {
-          closeSync(input)
-          closeSync(output)
-          done(code)
-        })
-      }),
-  )
+// Run Codex with the brief on stdin and its output in the log. Both files
+// are closed whatever happens. A brief or log that cannot be opened is a
+// failed call (a Failure, exit 1), never a crash.
+async function runCodex(args: string[], brief: string, log: string): Promise<number | null> {
+  const fds: number[] = []
+  const open = (path: string, flags: string, what: string, verb: string): number => {
+    try {
+      const fd = openSync(path, flags)
+      fds.push(fd)
+      return fd
+    } catch (error) {
+      throw new Failure(`cannot ${verb} the ${what} ${path}: ${(error as Error).message}`, 1)
+    }
+  }
+  try {
+    const input = open(brief, 'r', 'brief', 'read')
+    const output = open(log, 'w', 'log', 'write')
+    return await withCodexEnv(
+      (env) =>
+        new Promise<number | null>((done, reject) => {
+          const child = spawn('codex', args, { stdio: [input, output, output], env })
+          child.on('error', reject)
+          child.on('close', done)
+        }),
+    )
+  } finally {
+    for (const fd of fds) closeSync(fd)
+  }
 }
 
 // Exit 4 when the runtime is not codex or the Codex CLI is missing or broken.
@@ -99,7 +111,7 @@ export async function checkCodex(config: ResolvedConfig): Promise<{ message: str
 // One read-only `codex exec`. The output must parse and match the schema.
 export async function execRole(config: ResolvedConfig, call: CodexCall): Promise<CodexResult> {
   const { role } = call
-  const { model, effort } = config[role]
+  const { model, effort } = role === 'orchestrator' ? config.orchestrator : config.reviewer
   const outPath = resolve(call.out)
   const log = resolve(call.log ?? defaultLog(call.out))
   const schemaPath = resolve(call.schema ?? SCHEMAS[role])
@@ -111,18 +123,18 @@ export async function execRole(config: ResolvedConfig, call: CodexCall): Promise
   }
   const args = ['exec', '-C', repoRoot(), '-m', model, '-c', `model_reasoning_effort=${effort}`, '-s', SANDBOX,
     '--output-schema', schemaPath, '-o', outPath, '-']
-  let input: number
-  try {
-    input = openSync(resolve(call.brief), 'r')
-  } catch (error) {
-    return { ok: false, message: `cannot read the brief ${resolve(call.brief)}: ${(error as Error).message}`, code: 1 }
-  }
   // A stale output from an earlier run must never count as this run's answer.
   await rm(outPath, { force: true })
-  const status = await runCodex(args, input, log)
+  let status: number | null
+  try {
+    status = await runCodex(args, resolve(call.brief), log)
+  } catch (error) {
+    if (!(error instanceof Failure)) throw error
+    return { ok: false, message: error.message, code: error.code }
+  }
   if (status !== 0) {
     let message = `codex exec failed (exit ${status}). See ${log}.`
-    const text = await readFile(log, 'utf8')
+    const text = await readFile(log, 'utf8').catch(() => '')
     if (text.includes('unsupported_value') && text.includes('reasoning.effort')) {
       message += ` Codex rejected ${role}.effort "${effort}" for model ${model}. Fix the effort in docs/agents/review.md or re-run /setup-review-pipeline.`
     }
@@ -145,41 +157,33 @@ export async function execRole(config: ResolvedConfig, call: CodexCall): Promise
   return { ok: true, role, model, effort, sandbox: SANDBOX, out: outPath, log, output }
 }
 
-function fail(message: string, code: number): number {
-  process.stderr.write(`${PREFIX}${message}\n`)
-  return code
-}
-
-export async function main(argv: string[]): Promise<number> {
-  let values: { role?: string; brief?: string; out?: string; schema?: string; log?: string; config?: string }
-  try {
-    values = parseArgs({
-      args: argv,
-      options: {
-        role: { type: 'string' },
-        brief: { type: 'string' },
-        out: { type: 'string' },
-        schema: { type: 'string' },
-        log: { type: 'string' },
-        config: { type: 'string' },
-      },
-      strict: true,
-    }).values
-  } catch (error) {
-    return fail(`${(error as Error).message}\n${USAGE}`, 2)
-  }
+async function codexExec(argv: string[]): Promise<string> {
+  const usage = usageFor(USAGE)
+  const { values } = parse(
+    argv,
+    {
+      role: { type: 'string' },
+      brief: { type: 'string' },
+      out: { type: 'string' },
+      schema: { type: 'string' },
+      log: { type: 'string' },
+      config: { type: 'string' },
+    },
+    usage,
+  )
   const { role, brief, out } = values
-  if (role !== 'orchestrator' && role !== 'reviewer') return fail(`--role must be orchestrator or reviewer\n${USAGE}`, 2)
-  if (brief === undefined || out === undefined) return fail(`--brief and --out are required\n${USAGE}`, 2)
+  if (role !== 'orchestrator' && role !== 'reviewer') throw usage('--role must be orchestrator or reviewer')
+  if (brief === undefined || out === undefined) throw usage('--brief and --out are required')
 
   const loaded = await loadConfig(values.config)
-  if (!loaded.ok) return fail(loaded.message, loaded.code)
+  if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
   const broken = await checkCodex(loaded.config)
-  if (broken !== undefined) return fail(broken.message, broken.code)
+  if (broken !== undefined) throw new Failure(broken.message, broken.code)
 
   const result = await execRole(loaded.config, { role, brief, out, schema: values.schema, log: values.log })
-  if (!result.ok) return fail(result.message, result.code)
+  if (!result.ok) throw new Failure(result.message, result.code)
   const { model, effort, sandbox, out: outPath, log } = result
-  process.stdout.write(`${JSON.stringify({ role, model, effort, sandbox, out: outPath, log }, null, 2)}\n`)
-  return 0
+  return `${JSON.stringify({ role, model, effort, sandbox, out: outPath, log }, null, 2)}\n`
 }
+
+export const main = runMain('codex-exec', codexExec)

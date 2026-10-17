@@ -1,8 +1,13 @@
-// `review.ts app-token --repo O/R [--config <path>] [--login | --check]`
+// `review.ts app-token --repo O/R [--config <path>] --check | --login`
 // `review.ts app-token --copy-from <lfg env file> [--force]`
-// Mint an installation token for the reviewer GitHub App, from the
-// credentials in ~/.config/hero-pocock/ (never in the repo). Or copy the
-// credentials of the personal `/lfg` skill there.
+// Check that the reviewer GitHub App can mint an installation token for the
+// repo, from the credentials in ~/.config/hero-pocock/ (never in the repo),
+// or print its bot login. Or copy the credentials of the personal `/lfg`
+// skill there.
+//
+// It never prints the token: any agent with a shell could take it and
+// approve its own PR. post-review mints its own token in-process
+// (mintAppToken) for each post.
 //
 // Exit 3: the config has no `app: enabled`, so the caller posts as the user.
 // Exit 4: the App is enabled but something is wrong (credentials, key, an
@@ -10,18 +15,16 @@
 // broken App never falls back to the user: that would quietly turn the
 // approval gate off.
 //
-// Output: the token (default), the bot login `<slug>[bot]` (`--login`), or
-// nothing (`--check`). Errors never carry the token or the key.
+// Output: the bot login `<slug>[bot]` (`--login`), or nothing (`--check`).
+// Errors never carry the token or the key.
 import { createPrivateKey, createSign, type KeyObject } from 'node:crypto'
 import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { parseArgs } from 'node:util'
 import { loadConfig } from './config.ts'
-import { Failure } from './run-state.ts'
+import { Failure, parse, runMain, usageFor } from './cli.ts'
 
-const PREFIX = 'review.ts app-token: '
-const USAGE = `usage: review.ts app-token --repo O/R [--config <path>] [--login | --check]
+const USAGE = `usage: review.ts app-token --repo O/R [--config <path>] --check | --login
        review.ts app-token --copy-from <lfg env file> [--force]`
 const FIX = 'Fix the App credentials, or re-run /setup-review-pipeline'
 
@@ -58,10 +61,11 @@ export function parseEnvFile(text: string): Map<string, string> {
     if (line === '' || line.startsWith('#')) continue
     const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line)
     if (match === null) continue
-    let value = match[2].trim()
+    const [, name = '', rawValue = ''] = match
+    let value = rawValue.trim()
     const quoted = /^(["'])(.*)\1$/.exec(value)
-    if (quoted !== null) value = quoted[2]
-    values.set(match[1], expandHome(value))
+    if (quoted !== null) value = quoted[2] ?? ''
+    values.set(name, expandHome(value))
   }
   return values
 }
@@ -213,35 +217,33 @@ async function copyFrom(source: string, force: boolean): Promise<string> {
   return `${JSON.stringify({ copied: true, env, key })}\n`
 }
 
+const usage = usageFor(USAGE)
+
 async function appToken(argv: string[]): Promise<string> {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: {
-        repo: { type: 'string' },
-        config: { type: 'string' },
-        login: { type: 'boolean' },
-        check: { type: 'boolean' },
-        'copy-from': { type: 'string' },
-        force: { type: 'boolean' },
-      },
-    }).values
-  } catch (error) {
-    throw new Failure(`${(error as Error).message}\n${USAGE}`, 2)
-  }
+  const { values } = parse(
+    argv,
+    {
+      repo: { type: 'string' },
+      config: { type: 'string' },
+      login: { type: 'boolean' },
+      check: { type: 'boolean' },
+      'copy-from': { type: 'string' },
+      force: { type: 'boolean' },
+    },
+    usage,
+  )
   const source = values['copy-from']
   if (source !== undefined) {
     if (values.repo !== undefined || values.config !== undefined || values.login || values.check) {
-      throw new Failure(`--copy-from goes with --force only\n${USAGE}`, 2)
+      throw usage('--copy-from goes with --force only')
     }
     return copyFrom(source, values.force === true)
   }
-  if (values.force) throw new Failure(`--force goes with --copy-from only\n${USAGE}`, 2)
+  if (values.force) throw usage('--force goes with --copy-from only')
   const { repo } = values
-  if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Failure(`--repo must be OWNER/REPO\n${USAGE}`, 2)
-  if (values.login && values.check) throw new Failure(`--login and --check do not go together\n${USAGE}`, 2)
+  if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
+  if (values.login && values.check) throw usage('--login and --check do not go together')
+  if (!values.login && !values.check) throw usage('app-token needs --check or --login: it never prints a token (post-review mints its own)')
 
   // The pipeline never gets here without a valid config, so any problem is broken (4).
   const loaded = await loadConfig(values.config)
@@ -251,17 +253,7 @@ async function appToken(argv: string[]): Promise<string> {
   }
 
   const minted = await mintAppToken(repo)
-  if (values.check) return ''
-  return `${values.login ? minted.login : minted.token}\n`
+  return values.login ? `${minted.login}\n` : ''
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    process.stdout.write(await appToken(argv))
-    return 0
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('app-token', appToken)

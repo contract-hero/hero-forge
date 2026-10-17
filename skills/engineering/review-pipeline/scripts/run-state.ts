@@ -4,14 +4,14 @@
 //
 // The run dir is `${HERO_POCOCK_STATE_DIR:-<git common dir>/hero-pocock}/pr-<N>/`.
 // It holds `state.json` plus the pipeline's own files (briefs, reviewer
-// output, the review payload). `phase` is the last completed checkpoint.
+// output, the review payload). `phase` is the last completed checkpoint, and
+// `advance` moves it one step at a time, in the order of the run's mode.
+// `reviews` and `gates` are what post-review recorded; some steps need them.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { parseArgs } from 'node:util'
-
-const PREFIX = 'review.ts run-state: '
+import { Failure, parse, positive, refuse, runMain, usageFor } from './cli.ts'
 
 export const PHASES = [
   'created',
@@ -19,48 +19,58 @@ export const PHASES = [
   'review-posted',
   'adjudicated',
   'rechecked',
-  'verdict-posted',
   'body-rewritten',
   'ready',
+  'verdict-posted',
   'explained',
   'merged',
   'complete',
   'aborted',
   'stopped',
-]
-const TERMINAL = ['complete', 'aborted', 'stopped']
-const MODES = ['single', 'layer', 'stack-final']
-const RUNTIMES = ['codex', 'claude']
-const KINDS = ['review', 'recheck', 'verdict']
-const SETTABLE = ['round', 'head_sha', 'reviewer_login', 'explainer']
+] as const
+export type Phase = (typeof PHASES)[number]
+const TERMINAL: readonly Phase[] = ['complete', 'aborted', 'stopped']
+export const MODES = ['single', 'layer', 'stack-final'] as const
+export type Mode = (typeof MODES)[number]
+export const RUNTIMES = ['codex', 'claude'] as const
+export type Runtime = (typeof RUNTIMES)[number]
+export const KINDS = ['review', 'recheck', 'verdict'] as const
+export type Kind = (typeof KINDS)[number]
+// reviewer_login is fixed at create: the gates trust it only next to the
+// login the App's own credentials give, but nobody should move it mid-run.
+const SETTABLE = ['round', 'head_sha', 'explainer']
 
-export type ReviewRecord = { round: number; kind: string; id: number; commit: string; as: string }
+// `includes` for a const list, narrowing the value to the list's type.
+export function isOneOf<T extends string>(list: readonly T[], value: unknown): value is T {
+  return (list as readonly unknown[]).includes(value)
+}
+
+export const EVENTS = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'] as const
+export type Event = (typeof EVENTS)[number]
+export const RESULTS = ['pass', 'fail'] as const
+
+// One posted review, and one gate result (a re-check or verdict post ran the
+// gate at `commit`).
+export type ReviewRecord = { round: number; kind: Kind; id: number; commit: string; as: string; event: Event }
+export type GateRecord = { round: number; commit: string; result: (typeof RESULTS)[number] }
 
 export type State = {
-  schema: 1
+  schema: 2
   repo: string
   pr: number
-  mode: string
+  mode: Mode
   base_ref: string
   head_ref: string
   head_sha: string
-  runtime: string
+  runtime: Runtime
   reviewer_login: string
   round: number
-  phase: string
+  phase: Phase
   reviews: ReviewRecord[]
+  gates: GateRecord[]
   explainer: string | null
   created_at: string
   updated_at: string
-}
-
-// A failure with its exit code (1 refused, 2 usage, 3 absent, 4 corrupt).
-export class Failure extends Error {
-  code: number
-  constructor(message: string, code: number) {
-    super(message)
-    this.code = code
-  }
 }
 
 const isPositiveInt = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v > 0
@@ -70,18 +80,19 @@ const isText = (v: unknown) => typeof v === 'string' && v !== ''
 
 // Each field of the schema and the check its value must pass.
 const FIELDS: Record<string, (v: unknown) => boolean> = {
-  schema: (v) => v === 1,
+  schema: (v) => v === 2,
   repo: (v) => typeof v === 'string' && /^[\w.-]+\/[\w.-]+$/.test(v),
   pr: isPositiveInt,
-  mode: (v) => MODES.includes(v as string),
+  mode: (v) => isOneOf(MODES, v),
   base_ref: isText,
   head_ref: isText,
   head_sha: isSha,
-  runtime: (v) => RUNTIMES.includes(v as string),
+  runtime: (v) => isOneOf(RUNTIMES, v),
   reviewer_login: isLogin,
   round: isPositiveInt,
-  phase: (v) => PHASES.includes(v as string),
+  phase: (v) => isOneOf(PHASES, v),
   reviews: (v) => Array.isArray(v) && v.every(isReviewRecord),
+  gates: (v) => Array.isArray(v) && v.every(isGateRecord),
   explainer: (v) => v === null || isText(v),
   created_at: isText,
   updated_at: isText,
@@ -91,8 +102,99 @@ function isReviewRecord(v: unknown): boolean {
   if (typeof v !== 'object' || v === null) return false
   const r = v as Record<string, unknown>
   return (
-    isPositiveInt(r.round) && KINDS.includes(r.kind as string) && isPositiveInt(r.id) && isSha(r.commit) && isText(r.as)
+    isPositiveInt(r.round) && isOneOf(KINDS, r.kind) && isPositiveInt(r.id) && isSha(r.commit) && isText(r.as) &&
+    isOneOf(EVENTS, r.event)
   )
+}
+
+function isGateRecord(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false
+  const g = v as Record<string, unknown>
+  return isPositiveInt(g.round) && isSha(g.commit) && isOneOf(RESULTS, g.result)
+}
+
+export const usesApp = (state: State) => state.reviewer_login !== 'none'
+
+// The last gate result recorded at `commit`, if any.
+export function latestGate(state: State, commit: string): GateRecord | undefined {
+  return state.gates.filter((g) => g.commit === commit).at(-1)
+}
+
+// The last verdict posted at `commit` by `login` (default: the run's
+// reviewer_login), if any.
+export function latestVerdict(state: State, commit: string, login = state.reviewer_login): ReviewRecord | undefined {
+  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === login).at(-1)
+}
+
+// The one step after `state.phase` (aborted and stopped aside, which any
+// non-terminal phase may take). Finish depends on the mode and the App:
+//   single       body-rewritten, ready, [verdict-posted], explained, merged, complete
+//   layer        body-rewritten, ready, [verdict-posted], complete
+//   stack-final  body-rewritten, explained, complete (a draft PR that never merges)
+// where [verdict-posted] is the App's APPROVE, only with the App.
+function nextPhase(state: State): Phase | undefined {
+  switch (state.phase) {
+    case 'created':
+      return 'review-dispatched'
+    case 'review-dispatched':
+      return 'review-posted'
+    case 'review-posted':
+      return 'adjudicated'
+    case 'adjudicated':
+      return 'rechecked'
+    case 'rechecked':
+      return 'body-rewritten'
+    case 'body-rewritten':
+      return state.mode === 'stack-final' ? 'explained' : 'ready'
+    case 'ready':
+      if (usesApp(state)) return 'verdict-posted'
+      return state.mode === 'layer' ? 'complete' : 'explained'
+    case 'verdict-posted':
+      return state.mode === 'layer' ? 'complete' : 'explained'
+    case 'explained':
+      return state.mode === 'stack-final' ? 'complete' : 'merged'
+    case 'merged':
+      return 'complete'
+    default:
+      return undefined
+  }
+}
+
+// What a step needs on record before the run may reach it, or undefined.
+function missing(state: State, to: Phase): string | undefined {
+  const { round, head_sha: head } = state
+  switch (to) {
+    case 'review-posted':
+      return state.reviews.some((r) => r.kind === 'review' && r.round === round)
+        ? undefined
+        : `no review of round ${round} is recorded. Post it first`
+    case 'rechecked':
+      return state.gates.some((g) => g.round === round && g.commit === head)
+        ? undefined
+        : `no re-check gate of round ${round} at ${head} is recorded. Post the re-check first`
+    case 'body-rewritten':
+      return latestGate(state, head)?.result === 'pass' ? undefined : `the re-check gate at ${head} did not pass. Run next-round`
+    case 'verdict-posted':
+      return latestVerdict(state, head)?.event === 'APPROVE'
+        ? undefined
+        : `the reviewer App ${state.reviewer_login} has no APPROVE recorded at ${head}. Post it first`
+    default:
+      return undefined
+  }
+}
+
+function advance(state: State, to: Phase): void {
+  const pr = state.pr
+  refuse(!TERMINAL.includes(state.phase), `run for PR #${pr} is ${state.phase} (terminal): create a new run`)
+  if (to === 'aborted' || to === 'stopped') {
+    state.phase = to
+    return
+  }
+  const next = nextPhase(state)
+  refuse(to === next, `cannot advance PR #${pr} from ${state.phase} to ${to}: the next step is ${next}`)
+  const need = missing(state, to)
+  refuse(need === undefined, `cannot advance PR #${pr} to ${to}: ${need}`)
+  state.phase = to
 }
 
 // Why `value` is not a valid state, or undefined when it is.
@@ -113,7 +215,7 @@ export function stateRoot(): string {
   const override = process.env.HERO_POCOCK_STATE_DIR
   if (override !== undefined && override !== '') return override
   const git = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' })
-  if (git.status !== 0) throw new Failure('not inside a git repository (or set HERO_POCOCK_STATE_DIR)', 1)
+  refuse(git.status === 0, 'not inside a git repository (or set HERO_POCOCK_STATE_DIR)')
   return join(git.stdout.trim(), 'hero-pocock')
 }
 
@@ -178,9 +280,7 @@ const USAGE = `usage:
   review.ts run-state set     --pr N <key> <value>    (key: ${SETTABLE.join(' | ')})
   review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)`
 
-function usage(message: string): Failure {
-  return new Failure(`${message}\n${USAGE}`, 2)
-}
+const usage = usageFor(USAGE)
 
 const OPTIONS = {
   pr: { type: 'string' },
@@ -195,46 +295,46 @@ const OPTIONS = {
   'max-rounds': { type: 'string' },
 } as const
 
-function check(ok: boolean, message: string): void {
-  if (!ok) throw new Failure(message, 1)
-}
-
 async function create(pr: number, values: Record<string, string | boolean | undefined>): Promise<string> {
   const need = (name: string): string => {
     const v = values[name]
     if (typeof v !== 'string' || v === '') throw usage(`create needs --${name}`)
     return v
   }
+  const repo = need('repo')
+  const headSha = need('head-sha')
+  const runtime = need('runtime')
+  const login = need('reviewer-login')
+  const mode = typeof values.mode === 'string' ? values.mode : 'single'
+  refuse(FIELDS.repo!(repo), `repo must be OWNER/REPO, got "${repo}"`)
+  refuse(isSha(headSha), `head_sha must be 40 hex characters, got "${headSha}"`)
+  if (!isOneOf(RUNTIMES, runtime)) throw new Failure(`runtime must be codex or claude, got "${runtime}"`, 1)
+  refuse(isLogin(login), `reviewer_login must be "none" or <slug>[bot], got "${login}"`)
+  if (!isOneOf(MODES, mode)) throw new Failure(`mode must be ${MODES.join(', ')}, got "${mode}"`, 1)
   const now = new Date().toISOString()
   const state: State = {
-    schema: 1,
-    repo: need('repo'),
+    schema: 2,
+    repo,
     pr,
-    mode: typeof values.mode === 'string' ? values.mode : 'single',
+    mode,
     base_ref: need('base'),
     head_ref: need('head'),
-    head_sha: need('head-sha'),
-    runtime: need('runtime'),
-    reviewer_login: need('reviewer-login'),
+    head_sha: headSha,
+    runtime,
+    reviewer_login: login,
     round: 1,
     phase: 'created',
     reviews: [],
+    gates: [],
     explainer: null,
     created_at: now,
     updated_at: now,
   }
-  check(FIELDS.repo!(state.repo), `repo must be OWNER/REPO, got "${state.repo}"`)
-  check(isSha(state.head_sha), `head_sha must be 40 hex characters, got "${state.head_sha}"`)
-  check(FIELDS.runtime!(state.runtime), `runtime must be codex or claude, got "${state.runtime}"`)
-  check(isLogin(state.reviewer_login), `reviewer_login must be "none" or <slug>[bot], got "${state.reviewer_login}"`)
-  check(FIELDS.mode!(state.mode), `mode must be ${MODES.join(', ')}, got "${state.mode}"`)
 
   if (values.force !== true) {
     try {
       const old = await loadState(pr)
-      if (!TERMINAL.includes(old.phase)) {
-        throw new Failure(`run in flight for PR #${pr} (phase ${old.phase}): resume it, or create --force`, 1)
-      }
+      refuse(TERMINAL.includes(old.phase), `run in flight for PR #${pr} (phase ${old.phase}): resume it, or create --force`)
     } catch (error) {
       if (!(error instanceof Failure) || error.code !== 3) throw error
     }
@@ -245,18 +345,14 @@ async function create(pr: number, values: Record<string, string | boolean | unde
 
 function setValue(key: string, raw: string): unknown {
   switch (key) {
-    case 'round': {
-      check(/^[0-9]+$/.test(raw) && Number(raw) > 0, `round must be a positive whole number, got "${raw}"`)
+    case 'round':
+      refuse(/^[0-9]+$/.test(raw) && Number(raw) > 0, `round must be a positive whole number, got "${raw}"`)
       return Number(raw)
-    }
     case 'head_sha':
-      check(isSha(raw), `head_sha must be 40 hex characters, got "${raw}"`)
-      return raw
-    case 'reviewer_login':
-      check(isLogin(raw), `reviewer_login must be "none" or <slug>[bot], got "${raw}"`)
+      refuse(isSha(raw), `head_sha must be 40 hex characters, got "${raw}"`)
       return raw
     case 'explainer':
-      check(raw !== '', 'explainer must be a path')
+      refuse(raw !== '', 'explainer must be a path')
       return raw
     default:
       throw new Failure(`cannot set "${key}" (settable: ${SETTABLE.join(', ')})`, 1)
@@ -265,17 +361,8 @@ function setValue(key: string, raw: string): unknown {
 
 async function dispatch(argv: string[]): Promise<string> {
   const [command, ...rest] = argv
-  let parsed
-  try {
-    parsed = parseArgs({ args: rest, options: OPTIONS, strict: true, allowPositionals: true })
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
-  const { values, positionals } = parsed
-  if (values.pr === undefined || !/^[0-9]+$/.test(values.pr) || Number(values.pr) < 1) {
-    throw usage('--pr must be a positive whole number')
-  }
-  const pr = Number(values.pr)
+  const { values, positionals } = parse(rest, OPTIONS, usage, true)
+  const pr = positive('pr', values.pr, usage)
   const arity = (n: number) => {
     if (positionals.length !== n) throw usage(`${command} takes ${n} argument(s) after the options`)
   }
@@ -292,30 +379,29 @@ async function dispatch(argv: string[]): Promise<string> {
       const state = await loadState(pr)
       const [key] = positionals
       if (key === undefined) return `${JSON.stringify(state, null, 2)}\n`
-      if (!(key in FIELDS)) throw new Failure(`unknown key "${key}"`, 1)
+      refuse(key in FIELDS, `unknown key "${key}"`)
       const value = (state as Record<string, unknown>)[key]
       return `${typeof value === 'string' ? value : JSON.stringify(value)}\n`
     }
     case 'advance': {
       arity(1)
       const phase = positionals[0] ?? ''
-      check(PHASES.includes(phase), `unknown phase "${phase}" (${PHASES.join(', ')})`)
-      await update(pr, (state) => {
-        check(!TERMINAL.includes(state.phase), `run for PR #${pr} is ${state.phase} (terminal): create a new run`)
-        state.phase = phase
-      })
+      if (!isOneOf(PHASES, phase)) throw new Failure(`unknown phase "${phase}" (${PHASES.join(', ')})`, 1)
+      const state = await loadState(pr)
+      // A resumed step may repeat its advance: already there is success.
+      if (state.phase === phase) return ''
+      advance(state, phase)
+      state.updated_at = new Date().toISOString()
+      await saveState(state)
       return ''
     }
     case 'next-round': {
       arity(0)
-      const max = values['max-rounds']
-      if (max === undefined || !/^[0-9]+$/.test(max) || Number(max) < 1) {
-        throw usage('next-round needs --max-rounds <positive whole number> (max_rounds from the config)')
-      }
+      const max = positive('max-rounds', values['max-rounds'], usage)
       let result = {}
       await update(pr, (state) => {
-        check(state.phase === 'rechecked', `next-round needs phase rechecked, but PR #${pr} is at ${state.phase}`)
-        if (state.round < Number(max)) {
+        refuse(state.phase === 'rechecked', `next-round needs phase rechecked, but PR #${pr} is at ${state.phase}`)
+        if (state.round < max) {
           state.round += 1
           state.phase = 'review-posted'
         } else {
@@ -339,13 +425,4 @@ async function dispatch(argv: string[]): Promise<string> {
   }
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    process.stdout.write(await dispatch(argv))
-    return 0
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('run-state', dispatch)

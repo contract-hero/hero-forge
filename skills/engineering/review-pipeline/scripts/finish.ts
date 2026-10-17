@@ -2,16 +2,26 @@
 //
 //   review.ts merge-gate   one read of the PR: is it safe to squash-merge now?
 //                          Prints {gate: go|wait|stop|merged, ...}. It never
-//                          waits: the caller waits and runs it again.
+//                          waits: the caller waits and runs it again. On both
+//                          paths it needs a passing re-check recorded at the
+//                          head; with the reviewer App (the config says so,
+//                          not the run state) also the App's APPROVE there,
+//                          in the run state and on GitHub, by the login the
+//                          App's own credentials give (never the run state's
+//                          word alone).
 //   review.ts merge        runs the gate again and, on go, squash-merges the
 //                          re-checked head. A PR already merged is a no-op.
 //   review.ts explainer    records the explainer path in the run state and
 //                          links it from the PR in one comment, posted once.
 import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { parseArgs } from 'node:util'
-import { gh, json, listLines, oneLine, refuse, userIdentity } from './github.ts'
-import { Failure, loadState, saveState, type State } from './run-state.ts'
+import { Failure, parse as parseOptions, positive, refuse, repoOption, runMain, usageFor, type Usage } from './cli.ts'
+import { mintAppToken } from './app-token.ts'
+import { loadConfig } from './config.ts'
+import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
+import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
+import { refuseSecretsIn } from './secrets.ts'
+import { latestGate, latestVerdict, loadState, saveState, usesApp, type State } from './run-state.ts'
 
 const VIEW_FIELDS = 'state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup'
 
@@ -51,7 +61,32 @@ function outcome(check: Check): 'passed' | 'pending' | 'failed' {
   return PASSED_RUN.includes(check.conclusion ?? '') ? 'passed' : 'failed'
 }
 
-function judge(view: PrView, state: State): Gate {
+// A review as the GitHub reviews list has it.
+export type GitHubReview = { id: number; state: string; commit_id: string | null; login: string | null }
+
+// Why the reviewer App's approval of the head does not hold, or undefined.
+// Locally, the App's latest verdict recorded at the head must be APPROVE. On
+// GitHub, the App's latest review that is not a COMMENT (nor PENDING) must be
+// APPROVED, on the head commit: a later CHANGES_REQUESTED, a dismissal, or an
+// approval of an older commit does not count.
+function appApprovalProblem(state: State, bot: string, reviews: GitHubReview[]): string | undefined {
+  const head = state.head_sha
+  if (latestVerdict(state, head, bot)?.event !== 'APPROVE') {
+    return `the reviewer App ${bot} has not approved the re-checked head ${head}: post its APPROVE verdict first`
+  }
+  const latest = reviews.filter((r) => r.login === bot && r.state !== 'COMMENTED' && r.state !== 'PENDING').at(-1)
+  if (latest === undefined) return `GitHub shows no review by ${bot} that approves the head ${head}`
+  if (latest.state !== 'APPROVED' || latest.commit_id !== head) {
+    return `on GitHub, the latest review by ${bot} is ${latest.state} on ${latest.commit_id}, not APPROVED on the head ${head}`
+  }
+  return undefined
+}
+
+// `appLogin` is the reviewer App's login from its own credentials, or null
+// when the config does not enable the App. `reviews` is the PR's GitHub
+// reviews, read only with the App.
+function judge(view: PrView, state: State, appLogin: string | null, reviews: GitHubReview[]): Gate {
+  const app = appLogin !== null
   const checks = { passed: 0, pending: [] as string[], failed: [] as string[] }
   for (const check of view.statusCheckRollup ?? []) {
     const name = check.name ?? check.context ?? 'unnamed check'
@@ -71,19 +106,22 @@ function judge(view: PrView, state: State): Gate {
     stop.push(`the head moved since the re-check: the PR is at ${view.headRefOid}, the re-check graded ${state.head_sha}`)
   }
   if (view.isDraft) stop.push('the PR is still a draft: flip it to ready first')
-  // With the reviewer App, its APPROVE verdict on the re-checked head is part
-  // of the gate. post-review records a verdict only after it posts, refuses an
-  // APPROVE on a failing gate, and posts REQUEST_CHANGES only when the run
-  // stops, so a recorded verdict at this head by the App is its approval.
-  if (state.reviewer_login !== 'none') {
-    const approved = state.reviews.some(
-      (r) => r.kind === 'verdict' && r.commit === state.head_sha && r.as === state.reviewer_login,
-    )
-    if (!approved) {
-      stop.push(
-        `the reviewer App ${state.reviewer_login} has not approved the re-checked head ${state.head_sha}: post its APPROVE verdict first`,
-      )
-    }
+  // The re-check gate, on both paths: the latest result at the head.
+  const recheck = latestGate(state, state.head_sha)
+  if (recheck === undefined) stop.push(`no re-check is recorded at the head ${state.head_sha}: run the re-check first`)
+  else if (recheck.result !== 'pass') stop.push(`the latest re-check at the head ${state.head_sha} failed: the PR cannot merge`)
+  // The config decides whether the App's approval is part of the gate. A run
+  // state that disagrees cannot pass: a run created with no reviewer login
+  // would otherwise skip the approval check.
+  if (app && !usesApp(state)) {
+    stop.push('the config enables the reviewer App, but the run state has reviewer_login none: the App approval cannot be checked')
+  } else if (!app && usesApp(state)) {
+    stop.push(`the config does not enable the reviewer App, but the run state has reviewer_login ${state.reviewer_login}`)
+  } else if (appLogin !== null && appLogin !== state.reviewer_login) {
+    stop.push(`the run state names reviewer_login ${state.reviewer_login}, but the reviewer App's credentials say its login is ${appLogin}`)
+  } else if (appLogin !== null) {
+    const problem = appApprovalProblem(state, appLogin, reviews)
+    if (problem !== undefined) stop.push(problem)
   }
   if (ci === 'red') stop.push(`CI failed: ${checks.failed.join(', ')}`)
   if (ci === 'pending') wait.push(`CI is still running: ${checks.pending.join(', ')}`)
@@ -102,30 +140,45 @@ function judge(view: PrView, state: State): Gate {
   return { gate: 'go', ...base, problems: [] }
 }
 
-export async function readGate(repo: string, pr: number, state: State): Promise<Gate> {
+// Read the PR (and with the App, its reviews) and judge it. `appLogin` is
+// the App's verified login (appLogin()), or null without the App.
+export async function readGate(repo: string, pr: number, state: State, appLogin: string | null): Promise<Gate> {
   const viewed = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', VIEW_FIELDS])
   refuse(viewed.code === 0, `cannot read PR #${pr}: ${oneLine(viewed.stderr)}`)
-  return judge(json<PrView>(viewed.stdout, 'pr view'), state)
+  const view = json<PrView>(viewed.stdout, 'pr view')
+  const reviews =
+    appLogin !== null && view.state !== 'MERGED'
+      ? await listLines<GitHubReview>(
+          ['api', '--paginate', '--jq', '.[] | {id, state, commit_id, login: .user.login}', `repos/${repo}/pulls/${pr}/reviews`],
+          `the reviews of PR #${pr}`,
+        )
+      : []
+  return judge(view, state, appLogin, reviews)
 }
 
-type Args = { repo: string; pr: number; file?: string }
+// The reviewer App's login when the config enables it, from the App's own
+// credentials (the in-process path post-review and app-token --login use),
+// or null without the App. A broken App throws Failure 4.
+export async function appLogin(repo: string, app: boolean): Promise<string | null> {
+  return app ? (await mintAppToken(repo)).login : null
+}
 
-function parse(argv: string[], usage: (message: string) => Failure, withFile: boolean): Args {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: { repo: { type: 'string' }, pr: { type: 'string' }, ...(withFile ? { file: { type: 'string' } } : {}) },
-    }).values as { repo?: string; pr?: string; file?: string }
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
-  if (values.repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(values.repo)) throw usage('--repo must be OWNER/REPO')
-  if (values.pr === undefined || !/^[0-9]+$/.test(values.pr) || Number(values.pr) < 1) {
-    throw usage('--pr must be a positive whole number')
-  }
-  return { repo: values.repo, pr: Number(values.pr), file: values.file }
+// Whether the config enables the reviewer App. The pipeline never gets to
+// Finish without a valid config, so any problem is broken (4).
+export async function configApp(path: string | undefined): Promise<boolean> {
+  const loaded = await loadConfig(path)
+  if (!loaded.ok) throw new Failure(loaded.message, 4)
+  return loaded.config.app
+}
+
+type Args = { repo: string; pr: number; file?: string; config?: string }
+
+function parse(argv: string[], usage: Usage, withFile: boolean): Args {
+  const common = { repo: { type: 'string' }, pr: { type: 'string' } } as const
+  const values: { repo?: string; pr?: string; file?: string; config?: string } = withFile
+    ? parseOptions(argv, { ...common, file: { type: 'string' } }, usage).values
+    : parseOptions(argv, { ...common, config: { type: 'string' } }, usage).values
+  return { repo: repoOption(values.repo, usage), pr: positive('pr', values.pr, usage), file: values.file, config: values.config }
 }
 
 async function stateFor(args: Args): Promise<State> {
@@ -134,22 +187,20 @@ async function stateFor(args: Args): Promise<State> {
   return state
 }
 
-function usageFor(usage: string): (message: string) => Failure {
-  return (message) => new Failure(`${message}\n${usage}`, 2)
-}
-
-const MERGE_GATE_USAGE = 'usage: review.ts merge-gate --repo O/R --pr N'
-const MERGE_USAGE = 'usage: review.ts merge --repo O/R --pr N'
+const MERGE_GATE_USAGE = 'usage: review.ts merge-gate --repo O/R --pr N [--config <path>]'
+const MERGE_USAGE = 'usage: review.ts merge --repo O/R --pr N [--config <path>]'
 const EXPLAINER_USAGE = 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>'
 
 async function mergeGate(argv: string[]): Promise<string> {
   const args = parse(argv, usageFor(MERGE_GATE_USAGE), false)
+  const app = await configApp(args.config)
   const state = await stateFor(args)
-  return `${JSON.stringify(await readGate(args.repo, args.pr, state))}\n`
+  return `${JSON.stringify(await readGate(args.repo, args.pr, state, await appLogin(args.repo, app)))}\n`
 }
 
 async function merge(argv: string[]): Promise<string> {
   const args = parse(argv, usageFor(MERGE_USAGE), false)
+  const app = await configApp(args.config)
   const state = await stateFor(args)
   refuse(
     state.mode === 'single',
@@ -159,13 +210,13 @@ async function merge(argv: string[]): Promise<string> {
     state.phase === 'explained' || state.phase === 'merged',
     `merge needs phase explained, but PR #${args.pr} is at ${state.phase}`,
   )
-  return squashMerge(args.repo, args.pr, state)
+  return squashMerge(args.repo, args.pr, state, app)
 }
 
 // Run the gate again and, on go, squash-merge the run's head. A PR already
 // merged changes nothing. Shared by `merge` and `stack merge-layer`.
-export async function squashMerge(repo: string, pr: number, state: State): Promise<string> {
-  const gate = await readGate(repo, pr, state)
+export async function squashMerge(repo: string, pr: number, state: State, app: boolean): Promise<string> {
+  const gate = await readGate(repo, pr, state, await appLogin(repo, app))
   if (gate.gate === 'merged') return `${JSON.stringify({ merged: true, already: true })}\n`
   refuse(gate.gate === 'go', `not merging PR #${pr} (gate ${gate.gate}): ${gate.problems.join('; ')}`)
 
@@ -188,6 +239,12 @@ async function explainer(argv: string[]): Promise<string> {
   const state = await stateFor(args)
   const found = await stat(file).catch(() => undefined)
   refuse(found?.isFile() === true, `no explainer file at ${file}: build it first`)
+  // The comment holds an agent-supplied path: it is scanned like every post,
+  // before anything is recorded or sent.
+  const mark = marker({ pr: args.pr, kind: 'explainer' })
+  const body = withMarker(`Explainer (local, not published): \`${file}\``, mark)
+  refuseMarkerIn([file], '--file')
+  refuseSecretsIn({ body }, 'the explainer comment')
 
   if (state.explainer !== file) {
     state.explainer = file
@@ -195,36 +252,21 @@ async function explainer(argv: string[]): Promise<string> {
     await saveState(state)
   }
 
-  const marker = `<!-- hero-pocock:review-pipeline pr=${args.pr} kind=explainer -->`
   const me = await userIdentity()
   const existing = (
     await listLines<{ id: number; body: string | null; login: string | null }>(
       ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${args.repo}/issues/${args.pr}/comments`],
       `the comments of PR #${args.pr}`,
     )
-  ).find((c) => c.login === me.login && (c.body ?? '').includes(marker))
+  ).find((c) => c.login === me.login && hasOwnMarker(c.body, mark))
   if (existing !== undefined) return `${JSON.stringify({ explainer: file, comment: { id: existing.id, posted: false } })}\n`
 
-  const body = `Explainer (local, not published): \`${file}\`\n\n${marker}`
   const posted = await gh(['api', '-X', 'POST', `repos/${args.repo}/issues/${args.pr}/comments`, '--input', '-'], JSON.stringify({ body }))
   refuse(posted.code === 0, `GitHub rejected the explainer comment: ${oneLine(posted.stderr || posted.stdout)}`)
   const id = json<{ id: number }>(posted.stdout, 'post comment').id
   return `${JSON.stringify({ explainer: file, comment: { id, posted: true } })}\n`
 }
 
-function runner(name: string, fn: (argv: string[]) => Promise<string>): (argv: string[]) => Promise<number> {
-  return async (argv) => {
-    try {
-      process.stdout.write(await fn(argv))
-      return 0
-    } catch (error) {
-      if (!(error instanceof Failure)) throw error
-      process.stderr.write(`review.ts ${name}: ${error.message}\n`)
-      return error.code
-    }
-  }
-}
-
-export const mergeGateMain = runner('merge-gate', mergeGate)
-export const mergeMain = runner('merge', merge)
-export const explainerMain = runner('explainer', explainer)
+export const mergeGateMain = runMain('merge-gate', mergeGate)
+export const mergeMain = runMain('merge', merge)
+export const explainerMain = runMain('explainer', explainer)

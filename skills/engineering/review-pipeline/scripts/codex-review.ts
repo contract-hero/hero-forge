@@ -9,20 +9,21 @@
 //      review.schema.json;
 //   4. check that output, move inline anchors that are not in the diff into
 //      the walkthrough, write the run-dir files, and call post-review.
-// The repo, PR head and round come from the run state.
+// The repo, PR head and round come from the run state. It runs only at phase
+// review-dispatched and before this round's review is posted, so a re-run
+// never replaces the ledger of a review that is already on the PR.
 import { spawnSync } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseArgs } from 'node:util'
+import { Failure, parse, positive, refuse, runMain, usageFor } from './cli.ts'
 import { checkCodex, execRole, repoRoot, SCHEMAS, type CodexResult } from './codex-exec.ts'
 import { loadConfig, type ResolvedConfig } from './config.ts'
 import { gh, json, oneLine } from './github.ts'
 import { main as postReview } from './post-review.ts'
-import { Failure, loadState, runDir, type State } from './run-state.ts'
+import { loadState, runDir, type State } from './run-state.ts'
 import { schemaProblem } from './schema.ts'
 
-const PREFIX = 'review.ts codex-review: '
 const USAGE = 'usage: review.ts codex-review --pr N [--issue <n>]... [--config <path>]'
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const CHECKLIST = ['documented standards', 'smells', 'bugs', 'silent failures', 'test gaps']
@@ -40,28 +41,51 @@ function git(args: string[]): string {
   return result.stdout
 }
 
-// The right-side lines of the diff (added and context lines), per file: the
-// only lines GitHub accepts as an inline anchor.
-function anchorable(diff: string): Map<string, Set<number>> {
-  const lines = new Map<string, Set<number>>()
-  let file: Set<number> | undefined
-  let right = 0
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++ ')) {
-      const path = line.slice(4)
-      file = path === '/dev/null' ? undefined : new Set()
-      if (file !== undefined) lines.set(path.replace(/^b\//, ''), file)
-      continue
-    }
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
-    if (hunk !== null) {
-      right = Number(hunk[1])
-      continue
-    }
-    if (file === undefined || line.startsWith('--- ') || line.startsWith('\\')) continue
-    if (line.startsWith('+') || line.startsWith(' ')) file.add(right++)
+type Side = 'LEFT' | 'RIGHT'
+
+// The lines GitHub accepts as an inline anchor, per side and file: on the
+// RIGHT the added and context lines (numbered in the new file), on the LEFT
+// the deleted and context lines (numbered in the old file).
+function anchorable(diff: string): Record<Side, Map<string, Set<number>>> {
+  const sides: Record<Side, Map<string, Set<number>>> = { LEFT: new Map(), RIGHT: new Map() }
+  let left: Set<number> | undefined
+  let right: Set<number> | undefined
+  let oldLine = 0
+  let newLine = 0
+  const fileSet = (side: Side, path: string, strip: RegExp): Set<number> | undefined => {
+    if (path === '/dev/null') return undefined
+    const set = new Set<number>()
+    sides[side].set(path.replace(strip, ''), set)
+    return set
   }
-  return lines
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      left = undefined
+      right = undefined
+      continue
+    }
+    if (line.startsWith('--- ')) {
+      left = fileSet('LEFT', line.slice(4), /^a\//)
+      continue
+    }
+    if (line.startsWith('+++ ')) {
+      right = fileSet('RIGHT', line.slice(4), /^b\//)
+      continue
+    }
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    if (hunk !== null) {
+      oldLine = Number(hunk[1])
+      newLine = Number(hunk[2])
+      continue
+    }
+    if (line.startsWith('+')) right?.add(newLine++)
+    else if (line.startsWith('-')) left?.add(oldLine++)
+    else if (line.startsWith(' ')) {
+      left?.add(oldLine++)
+      right?.add(newLine++)
+    }
+  }
+  return sides
 }
 
 async function fetchSpec(repo: string, issues: string[], path: string): Promise<void> {
@@ -139,22 +163,15 @@ async function orchestratorTemplate(): Promise<string> {
 }
 
 async function review(argv: string[]): Promise<number> {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: { pr: { type: 'string' }, issue: { type: 'string', multiple: true }, config: { type: 'string' } },
-    }).values
-  } catch (error) {
-    throw new Failure(`${(error as Error).message}\n${USAGE}`, 2)
-  }
-  if (values.pr === undefined || !/^[0-9]+$/.test(values.pr) || Number(values.pr) < 1) {
-    throw new Failure(`--pr must be a positive whole number\n${USAGE}`, 2)
-  }
+  const usage = usageFor(USAGE)
+  const { values } = parse(
+    argv,
+    { pr: { type: 'string' }, issue: { type: 'string', multiple: true }, config: { type: 'string' } },
+    usage,
+  )
+  const pr = positive('pr', values.pr, usage)
   const issues = values.issue ?? []
-  for (const n of issues) if (!/^[0-9]+$/.test(n)) throw new Failure(`--issue must be an issue number, not "${n}"\n${USAGE}`, 2)
-  const pr = Number(values.pr)
+  for (const n of issues) if (!/^[0-9]+$/.test(n)) throw usage(`--issue must be an issue number, not "${n}"`)
 
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
@@ -163,6 +180,15 @@ async function review(argv: string[]): Promise<number> {
   if (broken !== undefined) throw new Failure(broken.message, broken.code)
 
   const state = await loadState(pr)
+  refuse(
+    state.phase === 'review-dispatched',
+    `codex-review runs at phase review-dispatched, but PR #${pr} is at ${state.phase}`,
+  )
+  const posted = state.reviews.find((r) => r.kind === 'review' && r.round === state.round)
+  refuse(
+    posted === undefined,
+    `the review of round ${state.round} is already posted (review ${posted?.id}): run run-state advance --pr ${pr} review-posted and go on`,
+  )
   const dir = runDir(pr)
   const base = `origin/${state.base_ref}`
   const range = `${base}...${state.head_sha}`
@@ -180,7 +206,7 @@ async function review(argv: string[]): Promise<number> {
   for (let k = 1; k <= config.pairs; k++) for (const axis of AXES) jobs.push(reviewer(config, c, k, axis))
   const reviewers = await Promise.all(jobs)
   const failed = reviewers.filter((r) => r.result !== 'reused' && !r.result.ok)
-  for (const r of failed) process.stderr.write(`${PREFIX}${r.name} failed: ${(r.result as { message: string }).message}\n`)
+  for (const r of failed) process.stderr.write(`review.ts codex-review: ${r.name} failed: ${(r.result as { message: string }).message}\n`)
   if (failed.length === reviewers.length) {
     await writeFile(join(dir, 'orchestrator-report.md'), `Every reviewer failed, so nothing was posted: ${failed.map((r) => r.name).join(', ')}.\n`)
     throw new Failure('every reviewer failed, so nothing was posted. See the reviewer logs in the run dir.', 1)
@@ -213,17 +239,17 @@ async function review(argv: string[]): Promise<number> {
   // GitHub refuses the whole review for one bad anchor: move those findings
   // into the walkthrough instead.
   const lines = anchorable(git(['diff', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3', range]))
-  const inDiff = (cm: Comment) => {
-    const set = lines.get(cm.path)
-    return set !== undefined && set.has(cm.line) && (cm.start_line === null || set.has(cm.start_line))
-  }
+  const onSide = (side: string, path: string, line: number) =>
+    (side === 'LEFT' || side === 'RIGHT') && lines[side].get(path)?.has(line) === true
+  const inDiff = (cm: Comment) =>
+    onSide(cm.side, cm.path, cm.line) && (cm.start_line === null || onSide(cm.start_side ?? cm.side, cm.path, cm.start_line))
   const moved = output.payload.comments.filter((cm) => !inDiff(cm))
   let body = output.payload.body
   if (moved.length > 0) {
     body += `\n\n### Findings outside the diff\n\n${moved.map((cm) => `- \`${cm.path}:${cm.line}\`: ${cm.body.replace(/\n/g, ' ')}`).join('\n')}`
   }
   const comments = output.payload.comments.filter(inDiff).map(({ start_line, start_side, ...cm }) =>
-    start_line === null ? cm : { ...cm, start_line, start_side: start_side ?? 'RIGHT' })
+    start_line === null ? cm : { ...cm, start_line, start_side: start_side ?? cm.side })
   const payloadPath = join(dir, 'review-payload.json')
   await writeFile(payloadPath, `${JSON.stringify({ event: output.payload.event, body, comments }, null, 2)}\n`)
   await writeFile(join(dir, 'findings.json'), `${JSON.stringify(output.ledger, null, 2)}\n`)
@@ -235,12 +261,4 @@ async function review(argv: string[]): Promise<number> {
     '--kind', 'review', '--payload', payloadPath, ...(values.config === undefined ? [] : ['--config', values.config])])
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    return await review(argv)
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('codex-review', review)

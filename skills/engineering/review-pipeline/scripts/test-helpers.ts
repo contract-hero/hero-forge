@@ -39,6 +39,10 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
     child.stderr.on('data', (chunk) => (stderr += chunk))
     child.on('error', reject)
     child.on('close', (code) => resolve({ code, stdout, stderr }))
+    // A child that exits before it reads stdin (a usage error, say) makes this
+    // write fail with EPIPE. The exit code and output are the result, so the
+    // error is ignored; unhandled, it would crash the test run.
+    child.stdin.on('error', () => {})
     child.stdin.end(options.stdin ?? '')
   })
 }
@@ -54,7 +58,44 @@ export async function tempDir(t: { after: (fn: () => Promise<void>) => void }): 
   return dir
 }
 
-export type FakeGhResponse = { match: string; stdout?: string; stderr?: string; exit?: number }
+// A valid run state for PR #13 at `phase` created, with `over` on top. Tests
+// that start a run in the middle write it with `seedState`, because `advance`
+// only moves one step at a time.
+export function stateFixture(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const now = new Date().toISOString()
+  return {
+    schema: 2,
+    repo: 'contract-hero/hero-pocock',
+    pr: 13,
+    mode: 'single',
+    base_ref: 'main',
+    head_ref: 'feature/x',
+    head_sha: 'c'.repeat(40),
+    runtime: 'claude',
+    reviewer_login: 'none',
+    round: 1,
+    phase: 'created',
+    reviews: [],
+    gates: [],
+    explainer: null,
+    created_at: now,
+    updated_at: now,
+    ...over,
+  }
+}
+
+// Write `stateFixture(over)` as the state file of its PR under `root`.
+export async function seedState(root: string, over: Record<string, unknown> = {}): Promise<string> {
+  const state = stateFixture(over)
+  const dir = join(root, `pr-${state.pr}`)
+  await mkdir(dir, { recursive: true })
+  const file = join(dir, 'state.json')
+  await writeFile(file, `${JSON.stringify(state, null, 2)}\n`)
+  return file
+}
+
+// `ignore_stdin`: exit without reading stdin, as a gh that fails early does.
+export type FakeGhResponse = { match: string; stdout?: string; stderr?: string; exit?: number; ignore_stdin?: boolean }
 
 export type FakeGhCall = { argv: string[]; gh_token: string | null; stdin: string }
 
@@ -67,11 +108,11 @@ export type FakeGh = {
 
 const FAKE_GH = `import { appendFileSync, readFileSync } from 'node:fs'
 const argv = process.argv.slice(2)
-const stdin = process.stdin.isTTY ? '' : readFileSync(0, 'utf8')
-appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify({ argv, gh_token: process.env.GH_TOKEN ?? null, stdin }) + '\\n')
 const responses = JSON.parse(readFileSync(process.env.FAKE_GH_RESPONSES, 'utf8'))
 const joined = argv.join(' ')
 const hit = responses.find((r) => joined.includes(r.match)) ?? {}
+const stdin = process.stdin.isTTY || hit.ignore_stdin ? '' : readFileSync(0, 'utf8')
+appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify({ argv, gh_token: process.env.GH_TOKEN ?? null, stdin }) + '\\n')
 if (hit.stdout) process.stdout.write(hit.stdout)
 if (hit.stderr) process.stderr.write(hit.stderr)
 process.exitCode = hit.exit ?? 0
@@ -214,9 +255,9 @@ export type FakeApiRequest = {
 export type FakeGitHubApi = { url: string; requests: FakeApiRequest[] }
 
 function checkJwt(auth: string | undefined, publicKey: KeyObject): { ok: boolean; iss: string | null } {
-  const parts = /^Bearer (.+)$/.exec(auth ?? '')?.[1].split('.') ?? []
+  const parts = /^Bearer (.+)$/.exec(auth ?? '')?.[1]?.split('.') ?? []
+  const [header = '', payload = '', signature = ''] = parts
   if (parts.length !== 3) return { ok: false, iss: null }
-  const [header, payload, signature] = parts
   const signed = verify('RSA-SHA256', Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, 'base64url'))
   if (!signed) return { ok: false, iss: null }
   const head = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'))

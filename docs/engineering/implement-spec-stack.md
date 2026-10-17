@@ -29,9 +29,9 @@ The `blocked_by` graph decides the shape. A ticket with one open blocker branche
 
 | Phase | What happens |
 | --- | --- |
-| Layer review | each layer's PR targets its parent layer's branch, so its review sees only that ticket's diff. The pipeline stops after the ready flip: no explainer, no merge |
-| Final review | a temporary draft PR from a `stack/spec-<N>` branch to `main` holds the whole stack. The pipeline reviews it against the spec and builds the explainer, once for the run. A fix lands on the layer it is about |
-| Landing | bottom-up: squash-merge a layer, then rebase each child `--onto main` from the parent's **pre-landing tip**, so no commit is duplicated. A `git range-diff` must show no content change before the child is pushed, and the reviewer App approves the new head |
+| Layer review | each layer's PR targets its parent layer's branch, so its review sees only that ticket's diff. The pipeline stops after the ready flip and, with the reviewer App, its approval: no explainer, no merge |
+| Final review | a temporary draft PR from a `stack/spec-<N>` branch to `main` holds the whole stack: the stack is a tree, so the branch merges every layer that has no children. The pipeline reviews it against the spec and builds the explainer, once for the run. A fix lands on the layer it is about. The PR stays a draft, so the App never approves it |
+| Landing | bottom-up: squash-merge a layer, then rebase each child `--onto main` from the parent's **pre-landing tip**, so no commit is duplicated. A `git range-diff` must show no content change before the child is pushed, and the gate runs again at the new head (the reviewer App, when you use one, approves it) |
 
 ## Common questions
 
@@ -49,7 +49,7 @@ The skill puts the branch back where it was, pushes nothing, and asks you. The s
 
 **Can a layer merge early?**
 
-No. A layer run ends at ready, and the skill lands nothing until the final review passes. The pipeline's own `merge` refuses a layer.
+No. A layer run ends at ready, and the skill lands nothing until the final review passes: `stack merge-layer` refuses to merge while the run of the stack PR is not complete. The pipeline's own `merge` refuses a layer.
 
 ## It's working if
 
