@@ -203,6 +203,35 @@ for (const [name, text] of [
   })
 }
 
+test('a payload with an unknown top-level key is refused before any gh call', async (t) => {
+  const s = await setup(t, { payload: { ...PAYLOAD, commit_id: 'd'.repeat(40) } })
+  const { code, stdout, stderr } = await s.post()
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, /payload has unknown keys: commit_id \(allowed: event, body, comments\)/)
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
+test('a token in an unexpected comment field is refused before any gh call', async (t) => {
+  const comment = { ...PAYLOAD.comments[0], note: `ghp_${'A1b2'.repeat(9)}` }
+  const s = await setup(t, { payload: { ...PAYLOAD, comments: [comment] } })
+  const { code, stderr } = await s.post()
+  assert.equal(code, 1)
+  assert.match(stderr, /payload\.comments\[0\] has unknown keys: note/)
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
+test('the review sent to GitHub holds only the allowed fields', async (t) => {
+  const s = await setup(t, { responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 557 }) }] })
+  const { code, stderr } = await s.post()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const sent = JSON.parse((await s.gh.calls()).find((c) => c.argv.includes('POST'))!.stdin)
+  assert.deepEqual(Object.keys(sent).sort(), ['body', 'comments', 'commit_id', 'event'])
+  assert.deepEqual(Object.keys(sent.comments[0]).sort(), ['body', 'line', 'path', 'side'])
+  assert.deepEqual(Object.keys(sent.comments[1]).sort(), ['body', 'line', 'path', 'side', 'start_line', 'start_side'])
+})
+
 test('a payload that only names a token prefix still posts', async (t) => {
   const s = await setup(t, {
     payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes', comments: [] },

@@ -36,3 +36,16 @@ export function refuseSecrets(texts: string[], what: string): void {
     }
   }
 }
+
+// Every string inside `value` (object keys included), at any depth.
+export function stringsIn(value: unknown): string[] {
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value)) return value.flatMap(stringsIn)
+  if (typeof value === 'object' && value !== null) return Object.entries(value).flatMap(([k, v]) => [k, ...stringsIn(v)])
+  return []
+}
+
+// refuseSecrets over every string of the exact object that will be sent.
+export function refuseSecretsIn(value: unknown, what: string): void {
+  refuseSecrets(stringsIn(value), what)
+}
