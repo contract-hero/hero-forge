@@ -205,7 +205,7 @@ review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind v
   --payload <run dir>/verdict-r<R>.json --ledger <run dir>/findings.json --recheck <run dir>/recheck-r<R>.json
 ```
 
-   It runs the gate again and refuses an APPROVE on a failing gate. It posts at most one verdict per round, so a resumed run can run it again safely. The APPROVE goes on the re-checked head, before **Finish**: the body rewrite and the ready flip add no commits, so the approval stays valid. With the App, **Finish**'s `merge-gate` stops until the run state records this APPROVE at `head_sha`.
+   It runs the gate again and refuses an APPROVE on a failing gate. It posts at most one verdict per round, so a resumed run can run it again safely. Exit 1 because GitHub refused the verdict: stop and tell the user, with the message. Do not flip the PR to ready to try again. The APPROVE goes on the re-checked head, before **Finish**: the body rewrite and the ready flip add no commits, so the approval stays valid. With the App, **Finish**'s `merge-gate` stops until the run state records this APPROVE at `head_sha`.
 
 Without the App, skip step 3: `--kind verdict` exits 1, because the PR author cannot approve their own PR.
 
