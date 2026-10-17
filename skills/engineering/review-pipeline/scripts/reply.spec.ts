@@ -255,6 +255,26 @@ test('without a run state it exits 3 and posts nothing', async (t) => {
   assert.deepEqual(await s.calls(), [])
 })
 
+test('round 2 without the last re-check is refused before any gh call: it would answer every finding again', async (t) => {
+  const s = await setup(t)
+  const { code, stdout, stderr } = await s.reply(2)
+  assert.equal(code, 2)
+  assert.equal(stdout, '')
+  assert.match(
+    stderr,
+    /^review\.ts reply: --round 2 needs --recheck <recheck-r1\.json>: a later round answers only what the last re-check left open\n/,
+  )
+  assert.deepEqual(await s.calls(), [])
+})
+
+test('round 1 with a re-check is refused: there is no earlier re-check in round 1', async (t) => {
+  const s = await setup(t, { recheck: { items: [] } })
+  const { code, stderr } = await s.reply(1)
+  assert.equal(code, 2)
+  assert.match(stderr, /^review\.ts reply: --recheck goes with round 2 and later \(round 1 answers the whole ledger\)\n/)
+  assert.deepEqual(await s.calls(), [])
+})
+
 test('bad arguments are a usage error (exit 2)', async (t) => {
   const s = await setup(t)
   for (const extra of [['--round', '0'], ['--bogus']]) {

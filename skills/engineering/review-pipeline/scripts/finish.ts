@@ -2,16 +2,21 @@
 //
 //   review.ts merge-gate   one read of the PR: is it safe to squash-merge now?
 //                          Prints {gate: go|wait|stop|merged, ...}. It never
-//                          waits: the caller waits and runs it again.
+//                          waits: the caller waits and runs it again. On both
+//                          paths it needs a passing re-check recorded at the
+//                          head; with the reviewer App (the config says so,
+//                          not the run state) also the App's APPROVE there,
+//                          in the run state and on GitHub.
 //   review.ts merge        runs the gate again and, on go, squash-merges the
 //                          re-checked head. A PR already merged is a no-op.
 //   review.ts explainer    records the explainer path in the run state and
 //                          links it from the PR in one comment, posted once.
 import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { parse as parseOptions, positive, refuse, repoOption, runMain, usageFor, type Usage } from './cli.ts'
+import { Failure, parse as parseOptions, positive, refuse, repoOption, runMain, usageFor, type Usage } from './cli.ts'
+import { loadConfig } from './config.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
-import { loadState, saveState, type State } from './run-state.ts'
+import { latestGate, latestVerdict, loadState, saveState, usesApp, type State } from './run-state.ts'
 
 const VIEW_FIELDS = 'state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup'
 
@@ -51,7 +56,31 @@ function outcome(check: Check): 'passed' | 'pending' | 'failed' {
   return PASSED_RUN.includes(check.conclusion ?? '') ? 'passed' : 'failed'
 }
 
-function judge(view: PrView, state: State): Gate {
+// A review as the GitHub reviews list has it.
+export type GitHubReview = { id: number; state: string; commit_id: string | null; login: string | null }
+
+// Why the reviewer App's approval of the head does not hold, or undefined.
+// Locally, the App's latest verdict recorded at the head must be APPROVE. On
+// GitHub, the App's latest review that is not a COMMENT (nor PENDING) must be
+// APPROVED, on the head commit: a later CHANGES_REQUESTED, a dismissal, or an
+// approval of an older commit does not count.
+function appApprovalProblem(state: State, reviews: GitHubReview[]): string | undefined {
+  const bot = state.reviewer_login
+  const head = state.head_sha
+  if (latestVerdict(state, head)?.event !== 'APPROVE') {
+    return `the reviewer App ${bot} has not approved the re-checked head ${head}: post its APPROVE verdict first`
+  }
+  const latest = reviews.filter((r) => r.login === bot && r.state !== 'COMMENTED' && r.state !== 'PENDING').at(-1)
+  if (latest === undefined) return `GitHub shows no review by ${bot} that approves the head ${head}`
+  if (latest.state !== 'APPROVED' || latest.commit_id !== head) {
+    return `on GitHub, the latest review by ${bot} is ${latest.state} on ${latest.commit_id}, not APPROVED on the head ${head}`
+  }
+  return undefined
+}
+
+// `app` is what the config says. `reviews` is the PR's GitHub reviews, read
+// only when the config enables the App.
+function judge(view: PrView, state: State, app: boolean, reviews: GitHubReview[]): Gate {
   const checks = { passed: 0, pending: [] as string[], failed: [] as string[] }
   for (const check of view.statusCheckRollup ?? []) {
     const name = check.name ?? check.context ?? 'unnamed check'
@@ -71,19 +100,20 @@ function judge(view: PrView, state: State): Gate {
     stop.push(`the head moved since the re-check: the PR is at ${view.headRefOid}, the re-check graded ${state.head_sha}`)
   }
   if (view.isDraft) stop.push('the PR is still a draft: flip it to ready first')
-  // With the reviewer App, its APPROVE verdict on the re-checked head is part
-  // of the gate. post-review records a verdict only after it posts, refuses an
-  // APPROVE on a failing gate, and posts REQUEST_CHANGES only when the run
-  // stops, so a recorded verdict at this head by the App is its approval.
-  if (state.reviewer_login !== 'none') {
-    const approved = state.reviews.some(
-      (r) => r.kind === 'verdict' && r.commit === state.head_sha && r.as === state.reviewer_login,
-    )
-    if (!approved) {
-      stop.push(
-        `the reviewer App ${state.reviewer_login} has not approved the re-checked head ${state.head_sha}: post its APPROVE verdict first`,
-      )
-    }
+  // The re-check gate, on both paths: the latest result at the head.
+  const recheck = latestGate(state, state.head_sha)
+  if (recheck === undefined) stop.push(`no re-check is recorded at the head ${state.head_sha}: run the re-check first`)
+  else if (recheck.result !== 'pass') stop.push(`the latest re-check at the head ${state.head_sha} failed: the PR cannot merge`)
+  // The config decides whether the App's approval is part of the gate. A run
+  // state that disagrees cannot pass: a run created with no reviewer login
+  // would otherwise skip the approval check.
+  if (app && !usesApp(state)) {
+    stop.push('the config enables the reviewer App, but the run state has reviewer_login none: the App approval cannot be checked')
+  } else if (!app && usesApp(state)) {
+    stop.push(`the config does not enable the reviewer App, but the run state has reviewer_login ${state.reviewer_login}`)
+  } else if (app) {
+    const problem = appApprovalProblem(state, reviews)
+    if (problem !== undefined) stop.push(problem)
   }
   if (ci === 'red') stop.push(`CI failed: ${checks.failed.join(', ')}`)
   if (ci === 'pending') wait.push(`CI is still running: ${checks.pending.join(', ')}`)
@@ -102,20 +132,38 @@ function judge(view: PrView, state: State): Gate {
   return { gate: 'go', ...base, problems: [] }
 }
 
-export async function readGate(repo: string, pr: number, state: State): Promise<Gate> {
+// Read the PR (and with the App, its reviews) and judge it. `app` is what the
+// config says.
+export async function readGate(repo: string, pr: number, state: State, app: boolean): Promise<Gate> {
   const viewed = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', VIEW_FIELDS])
   refuse(viewed.code === 0, `cannot read PR #${pr}: ${oneLine(viewed.stderr)}`)
-  return judge(json<PrView>(viewed.stdout, 'pr view'), state)
+  const view = json<PrView>(viewed.stdout, 'pr view')
+  const reviews =
+    app && view.state !== 'MERGED'
+      ? await listLines<GitHubReview>(
+          ['api', '--paginate', '--jq', '.[] | {id, state, commit_id, login: .user.login}', `repos/${repo}/pulls/${pr}/reviews`],
+          `the reviews of PR #${pr}`,
+        )
+      : []
+  return judge(view, state, app, reviews)
 }
 
-type Args = { repo: string; pr: number; file?: string }
+// Whether the config enables the reviewer App. The pipeline never gets to
+// Finish without a valid config, so any problem is broken (4).
+export async function configApp(path: string | undefined): Promise<boolean> {
+  const loaded = await loadConfig(path)
+  if (!loaded.ok) throw new Failure(loaded.message, 4)
+  return loaded.config.app
+}
+
+type Args = { repo: string; pr: number; file?: string; config?: string }
 
 function parse(argv: string[], usage: Usage, withFile: boolean): Args {
   const common = { repo: { type: 'string' }, pr: { type: 'string' } } as const
-  const values: { repo?: string; pr?: string; file?: string } = withFile
+  const values: { repo?: string; pr?: string; file?: string; config?: string } = withFile
     ? parseOptions(argv, { ...common, file: { type: 'string' } }, usage).values
-    : parseOptions(argv, common, usage).values
-  return { repo: repoOption(values.repo, usage), pr: positive('pr', values.pr, usage), file: values.file }
+    : parseOptions(argv, { ...common, config: { type: 'string' } }, usage).values
+  return { repo: repoOption(values.repo, usage), pr: positive('pr', values.pr, usage), file: values.file, config: values.config }
 }
 
 async function stateFor(args: Args): Promise<State> {
@@ -124,18 +172,20 @@ async function stateFor(args: Args): Promise<State> {
   return state
 }
 
-const MERGE_GATE_USAGE = 'usage: review.ts merge-gate --repo O/R --pr N'
-const MERGE_USAGE = 'usage: review.ts merge --repo O/R --pr N'
+const MERGE_GATE_USAGE = 'usage: review.ts merge-gate --repo O/R --pr N [--config <path>]'
+const MERGE_USAGE = 'usage: review.ts merge --repo O/R --pr N [--config <path>]'
 const EXPLAINER_USAGE = 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>'
 
 async function mergeGate(argv: string[]): Promise<string> {
   const args = parse(argv, usageFor(MERGE_GATE_USAGE), false)
+  const app = await configApp(args.config)
   const state = await stateFor(args)
-  return `${JSON.stringify(await readGate(args.repo, args.pr, state))}\n`
+  return `${JSON.stringify(await readGate(args.repo, args.pr, state, app))}\n`
 }
 
 async function merge(argv: string[]): Promise<string> {
   const args = parse(argv, usageFor(MERGE_USAGE), false)
+  const app = await configApp(args.config)
   const state = await stateFor(args)
   refuse(
     state.mode === 'single',
@@ -145,13 +195,13 @@ async function merge(argv: string[]): Promise<string> {
     state.phase === 'explained' || state.phase === 'merged',
     `merge needs phase explained, but PR #${args.pr} is at ${state.phase}`,
   )
-  return squashMerge(args.repo, args.pr, state)
+  return squashMerge(args.repo, args.pr, state, app)
 }
 
 // Run the gate again and, on go, squash-merge the run's head. A PR already
 // merged changes nothing. Shared by `merge` and `stack merge-layer`.
-export async function squashMerge(repo: string, pr: number, state: State): Promise<string> {
-  const gate = await readGate(repo, pr, state)
+export async function squashMerge(repo: string, pr: number, state: State, app: boolean): Promise<string> {
+  const gate = await readGate(repo, pr, state, app)
   if (gate.gate === 'merged') return `${JSON.stringify({ merged: true, already: true })}\n`
   refuse(gate.gate === 'go', `not merging PR #${pr} (gate ${gate.gate}): ${gate.problems.join('; ')}`)
 

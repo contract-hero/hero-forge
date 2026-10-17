@@ -40,8 +40,10 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
     await writeFile(envFile, text ?? `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
   }
   const env = { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: envFile, HERO_POCOCK_GITHUB_API_URL: api.url }
-  const mint = (...extra: string[]) => runCli(['app-token', '--repo', REPO, '--config', configPath, ...extra], { env })
-  return { dir, key, api, envFile, mint }
+  // `--check` unless the test names its own flags.
+  const mint = (...extra: string[]) =>
+    runCli(['app-token', '--repo', REPO, '--config', configPath, ...(extra.length === 0 ? ['--check'] : extra)], { env })
+  return { dir, key, api, envFile, mint, env, configPath }
 }
 
 test('no App in the config exits 3 and calls no API', async (t) => {
@@ -53,12 +55,12 @@ test('no App in the config exits 3 and calls no API', async (t) => {
   assert.deepEqual(s.api.requests, [])
 })
 
-test('a working App prints the minted token, signed by its key, for this one repo', async (t) => {
+test('--check mints a token for this one repo, signed by the App key, and prints nothing', async (t) => {
   const s = await setup(t)
-  const { code, stdout, stderr } = await s.mint()
+  const { code, stdout, stderr } = await s.mint('--check')
   assert.equal(stderr, '')
   assert.equal(code, 0)
-  assert.equal(stdout, `${TOKEN}\n`)
+  assert.equal(stdout, '')
   assert.deepEqual(
     s.api.requests.map((r) => [r.method, r.path, r.jwt_ok, r.iss, r.accept, r.api_version]),
     [
@@ -77,6 +79,15 @@ test('--login prints the App bot login and --check prints nothing', async (t) =>
   const s = await setup(t)
   assert.deepEqual(await s.mint('--login'), { code: 0, stdout: 'hero-reviewer[bot]\n', stderr: '' })
   assert.deepEqual(await s.mint('--check'), { code: 0, stdout: '', stderr: '' })
+})
+
+test('without --check or --login it is a usage error, calls no API, and never prints a token', async (t) => {
+  const s = await setup(t)
+  const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath], { env: s.env })
+  assert.equal(code, 2)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts app-token: app-token needs --check or --login: it never prints a token \(post-review mints its own\)\n/)
+  assert.deepEqual(s.api.requests, [])
 })
 
 const BROKEN: [string, Setup, RegExp][] = [
@@ -122,7 +133,7 @@ for (const [name, options, message] of BROKEN) {
 
 test('a missing config exits 4: the pipeline never asks for a token without one', async (t) => {
   const s = await setup(t)
-  const { code, stderr } = await runCli(['app-token', '--repo', REPO, '--config', join(s.dir, 'nope.md')], {
+  const { code, stderr } = await runCli(['app-token', '--repo', REPO, '--config', join(s.dir, 'nope.md'), '--check'], {
     env: { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: s.envFile, HERO_POCOCK_GITHUB_API_URL: s.api.url },
   })
   assert.equal(code, 4)

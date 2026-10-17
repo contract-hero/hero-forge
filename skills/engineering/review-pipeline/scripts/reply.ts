@@ -60,6 +60,12 @@ async function reply(argv: string[]): Promise<string> {
   const round = positive('round', values.round, usage)
   const ledgerPath = values.ledger
   if (ledgerPath === undefined) throw usage('--ledger is required')
+  // Without the last re-check a later round would answer the whole ledger
+  // again, as duplicates of round 1's answers.
+  if (round > 1 && values.recheck === undefined) {
+    throw usage(`--round ${round} needs --recheck <recheck-r${round - 1}.json>: a later round answers only what the last re-check left open`)
+  }
+  if (round === 1 && values.recheck !== undefined) throw usage('--recheck goes with round 2 and later (round 1 answers the whole ledger)')
 
   const ledger = await loadLedger(ledgerPath)
   const closed = new Set(

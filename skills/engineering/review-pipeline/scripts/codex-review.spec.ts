@@ -27,7 +27,7 @@ const git = async (cwd: string, ...args: string[]) => {
 }
 
 // A git repo with origin/main and a PR head that changes src/a.ts line 5 and
-// adds src/b.ts, a run state for PR #13 pinned to that head, a codex config,
+// adds src/b.ts (3 lines), a run state for PR #13 pinned to that head, a codex config,
 // a fake gh and a fake codex.
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await realpath(await tempDir(t))
@@ -41,7 +41,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   await git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
   lines[4] = 'line five'
   await writeFile(join(repo, 'src', 'a.ts'), `${lines.join('\n')}\n`)
-  await writeFile(join(repo, 'src', 'b.ts'), 'export const b = 1\n')
+  await writeFile(join(repo, 'src', 'b.ts'), 'export const b = 1\nexport const c = 2\nexport const d = 3\n')
   await git(repo, 'add', '.')
   await git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'head')
   const sha = await git(repo, 'rev-parse', 'HEAD')
@@ -58,11 +58,14 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const created = await runCli(['run-state', 'create', '--pr', '13', '--repo', 'contract-hero/hero-pocock', '--base', 'main',
     '--head', 'feature/x', '--head-sha', sha, '--runtime', 'codex', '--reviewer-login', 'none'], { cwd: repo, env })
   assert.equal(created.code, 0, created.stderr)
+  const dispatched = await runCli(['run-state', 'advance', '--pr', '13', 'review-dispatched'], { cwd: repo, env })
+  assert.equal(dispatched.code, 0, dispatched.stderr)
   const runDir = join(state, 'pr-13')
   const review = (...extra: string[]) => runCli(['codex-review', '--pr', '13', '--config', configPath, ...extra], { cwd: repo, env })
   const execs = async () => (await codex.calls()).filter((c) => c.argv[0] === 'exec')
   const posts = async () => (await gh.calls()).filter((c) => c.argv.includes('POST'))
-  return { dir, repo, sha, gh, codex, runDir, review, execs, posts }
+  const runState = (...args: string[]) => runCli(['run-state', ...args], { cwd: repo, env })
+  return { dir, repo, sha, gh, codex, runDir, review, execs, posts, runState }
 }
 
 const flag = (call: FakeCodexCall, name: string) => call.argv[call.argv.indexOf(name) + 1] ?? ''
@@ -176,6 +179,47 @@ test('an inline anchor outside the diff moves into the walkthrough instead of fa
   assert.match(sent.body, /### Findings outside the diff\n\n- `src\/a\.ts:12`: \*\*F2\*\* \(Standards, smell, low, 1\/2 pairs\) Far away\./)
 })
 
+test('the start of a multi-line anchor is checked on its own side of the diff', async (t) => {
+  // src/b.ts is a new file: lines 1 to 3 are on the right side, and it has no
+  // left side at all.
+  const right = { ...COMMENT, path: 'src/b.ts', start_line: 1, start_side: 'RIGHT', line: 3, body: '**F1** right span' }
+  const left = { ...COMMENT, path: 'src/b.ts', start_line: 1, start_side: 'LEFT', line: 3, body: '**F2** starts on a left side b.ts lacks' }
+  const s = await setup(t, { codex: withOrchestrator(JSON.stringify({ ...OUTPUT, payload: { ...OUTPUT.payload, comments: [right, left] } })) })
+  const { code, stderr } = await s.review()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const sent = JSON.parse((await s.posts())[0]!.stdin)
+  assert.deepEqual(sent.comments, [{ path: 'src/b.ts', line: 3, side: 'RIGHT', start_line: 1, start_side: 'RIGHT', body: '**F1** right span' }])
+  assert.match(sent.body, /### Findings outside the diff\n\n- `src\/b\.ts:3`: \*\*F2\*\* starts on a left side b\.ts lacks/)
+})
+
+test('a re-run after the review posted, before advance review-posted, never runs the Orchestrator or rewrites the ledger', async (t) => {
+  const s = await setup(t)
+  assert.equal((await s.review()).code, 0)
+  const ledger = await readFile(join(s.runDir, 'findings.json'), 'utf8')
+  const execs = (await s.execs()).length
+  await writeFile(join(s.runDir, 'findings.json'), `${ledger.trim()}\n`)
+  const again = await s.review()
+  assert.equal(again.code, 1)
+  assert.equal(again.stdout, '')
+  assert.equal(
+    again.stderr,
+    'review.ts codex-review: the review of round 1 is already posted (review 555): run run-state advance --pr 13 review-posted and go on\n',
+  )
+  assert.equal((await s.execs()).length, execs)
+  assert.equal(await readFile(join(s.runDir, 'findings.json'), 'utf8'), `${ledger.trim()}\n`)
+  assert.equal((await s.posts()).length, 1)
+})
+
+test('codex-review runs only at phase review-dispatched', async (t) => {
+  const s = await setup(t)
+  assert.equal((await s.review()).code, 0)
+  assert.equal((await s.runState('advance', '--pr', '13', 'review-posted')).code, 0)
+  const later = await s.review()
+  assert.equal(later.code, 1)
+  assert.equal(later.stderr, 'review.ts codex-review: codex-review runs at phase review-dispatched, but PR #13 is at review-posted\n')
+})
+
 test('anchors still match the diff when the user sets diff.noprefix', async (t) => {
   const s = await setup(t)
   await git(s.repo, 'config', 'diff.noprefix', 'true')
@@ -198,25 +242,30 @@ test('without --issue no spec is fetched, and the Spec reviewers look for the sp
   await assert.rejects(access(join(s.runDir, 'spec.md')))
 })
 
-test('a relaunch reuses each reviewer output for the same brief and runs only the failed ones', async (t) => {
+test('a relaunch after a failed Orchestrator reuses each reviewer output for the same brief and runs only the failed ones', async (t) => {
   const s = await setup(t, { codex: { routes: [
     { match: 'reviewer-p2-spec', out: null, exit: 1 },
     { match: 'reviewer-p', out: FINDINGS },
-    { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
+    { match: 'orchestrator-output', out: null, exit: 1 },
   ] } })
   const first = await s.review()
-  assert.equal(first.code, 0)
+  assert.equal(first.code, 1)
   assert.match(first.stderr, /reviewer-p2-spec failed/)
+  assert.match(first.stderr, /the Orchestrator failed, so nothing was posted/)
   const brief = (await s.execs()).find((c) => flag(c, '-o').includes('orchestrator-output'))!.stdin
   assert.match(brief, /reviewer-p2-spec\.json`: failed/)
   assert.match(brief, /reviewer-p1-spec\.json`: ok/)
 
+  await writeFile(join(s.dir, 'codex-spec.json'), JSON.stringify({ routes: [
+    { match: 'reviewer-p', out: FINDINGS },
+    { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
+  ] }))
   const before = (await s.execs()).length
   const again = await s.review()
-  assert.equal(again.code, 0)
+  assert.equal(again.code, 0, again.stderr)
   const rerun = (await s.execs()).slice(before).map((c) => flag(c, '-o').split('/').pop())
   assert.deepEqual(rerun, ['reviewer-p2-spec.json', 'orchestrator-output.json'])
-  assert.equal(JSON.parse(again.stdout).duplicate, true)
+  assert.equal(JSON.parse(again.stdout).posted, true)
 })
 
 test('when every reviewer fails, the Orchestrator never runs and nothing is posted', async (t) => {

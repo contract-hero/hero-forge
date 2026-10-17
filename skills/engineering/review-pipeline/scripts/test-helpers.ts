@@ -58,6 +58,42 @@ export async function tempDir(t: { after: (fn: () => Promise<void>) => void }): 
   return dir
 }
 
+// A valid run state for PR #13 at `phase` created, with `over` on top. Tests
+// that start a run in the middle write it with `seedState`, because `advance`
+// only moves one step at a time.
+export function stateFixture(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const now = new Date().toISOString()
+  return {
+    schema: 2,
+    repo: 'contract-hero/hero-pocock',
+    pr: 13,
+    mode: 'single',
+    base_ref: 'main',
+    head_ref: 'feature/x',
+    head_sha: 'c'.repeat(40),
+    runtime: 'claude',
+    reviewer_login: 'none',
+    round: 1,
+    phase: 'created',
+    reviews: [],
+    gates: [],
+    explainer: null,
+    created_at: now,
+    updated_at: now,
+    ...over,
+  }
+}
+
+// Write `stateFixture(over)` as the state file of its PR under `root`.
+export async function seedState(root: string, over: Record<string, unknown> = {}): Promise<string> {
+  const state = stateFixture(over)
+  const dir = join(root, `pr-${state.pr}`)
+  await mkdir(dir, { recursive: true })
+  const file = join(dir, 'state.json')
+  await writeFile(file, `${JSON.stringify(state, null, 2)}\n`)
+  return file
+}
+
 // `ignore_stdin`: exit without reading stdin, as a gh that fails early does.
 export type FakeGhResponse = { match: string; stdout?: string; stderr?: string; exit?: number; ignore_stdin?: boolean }
 

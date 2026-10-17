@@ -4,7 +4,9 @@
 //
 // The run dir is `${HERO_POCOCK_STATE_DIR:-<git common dir>/hero-pocock}/pr-<N>/`.
 // It holds `state.json` plus the pipeline's own files (briefs, reviewer
-// output, the review payload). `phase` is the last completed checkpoint.
+// output, the review payload). `phase` is the last completed checkpoint, and
+// `advance` moves it one step at a time, in the order of the run's mode.
+// `reviews` and `gates` are what post-review recorded; some steps need them.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -17,9 +19,9 @@ export const PHASES = [
   'review-posted',
   'adjudicated',
   'rechecked',
-  'verdict-posted',
   'body-rewritten',
   'ready',
+  'verdict-posted',
   'explained',
   'merged',
   'complete',
@@ -41,10 +43,17 @@ export function isOneOf<T extends string>(list: readonly T[], value: unknown): v
   return (list as readonly unknown[]).includes(value)
 }
 
-export type ReviewRecord = { round: number; kind: Kind; id: number; commit: string; as: string }
+export const EVENTS = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'] as const
+export type Event = (typeof EVENTS)[number]
+export const RESULTS = ['pass', 'fail'] as const
+
+// One posted review, and one gate result (a re-check or verdict post ran the
+// gate at `commit`).
+export type ReviewRecord = { round: number; kind: Kind; id: number; commit: string; as: string; event: Event }
+export type GateRecord = { round: number; commit: string; result: (typeof RESULTS)[number] }
 
 export type State = {
-  schema: 1
+  schema: 2
   repo: string
   pr: number
   mode: Mode
@@ -56,6 +65,7 @@ export type State = {
   round: number
   phase: Phase
   reviews: ReviewRecord[]
+  gates: GateRecord[]
   explainer: string | null
   created_at: string
   updated_at: string
@@ -68,7 +78,7 @@ const isText = (v: unknown) => typeof v === 'string' && v !== ''
 
 // Each field of the schema and the check its value must pass.
 const FIELDS: Record<string, (v: unknown) => boolean> = {
-  schema: (v) => v === 1,
+  schema: (v) => v === 2,
   repo: (v) => typeof v === 'string' && /^[\w.-]+\/[\w.-]+$/.test(v),
   pr: isPositiveInt,
   mode: (v) => isOneOf(MODES, v),
@@ -80,6 +90,7 @@ const FIELDS: Record<string, (v: unknown) => boolean> = {
   round: isPositiveInt,
   phase: (v) => isOneOf(PHASES, v),
   reviews: (v) => Array.isArray(v) && v.every(isReviewRecord),
+  gates: (v) => Array.isArray(v) && v.every(isGateRecord),
   explainer: (v) => v === null || isText(v),
   created_at: isText,
   updated_at: isText,
@@ -89,8 +100,98 @@ function isReviewRecord(v: unknown): boolean {
   if (typeof v !== 'object' || v === null) return false
   const r = v as Record<string, unknown>
   return (
-    isPositiveInt(r.round) && isOneOf(KINDS, r.kind) && isPositiveInt(r.id) && isSha(r.commit) && isText(r.as)
+    isPositiveInt(r.round) && isOneOf(KINDS, r.kind) && isPositiveInt(r.id) && isSha(r.commit) && isText(r.as) &&
+    isOneOf(EVENTS, r.event)
   )
+}
+
+function isGateRecord(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false
+  const g = v as Record<string, unknown>
+  return isPositiveInt(g.round) && isSha(g.commit) && isOneOf(RESULTS, g.result)
+}
+
+export const usesApp = (state: State) => state.reviewer_login !== 'none'
+
+// The last gate result recorded at `commit`, if any.
+export function latestGate(state: State, commit: string): GateRecord | undefined {
+  return state.gates.filter((g) => g.commit === commit).at(-1)
+}
+
+// The last verdict the reviewer App posted at `commit`, if any.
+export function latestVerdict(state: State, commit: string): ReviewRecord | undefined {
+  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === state.reviewer_login).at(-1)
+}
+
+// The one step after `state.phase` (aborted and stopped aside, which any
+// non-terminal phase may take). Finish depends on the mode and the App:
+//   single       body-rewritten, ready, [verdict-posted], explained, merged, complete
+//   layer        body-rewritten, ready, [verdict-posted], complete
+//   stack-final  body-rewritten, explained, complete (a draft PR that never merges)
+// where [verdict-posted] is the App's APPROVE, only with the App.
+function nextPhase(state: State): Phase | undefined {
+  switch (state.phase) {
+    case 'created':
+      return 'review-dispatched'
+    case 'review-dispatched':
+      return 'review-posted'
+    case 'review-posted':
+      return 'adjudicated'
+    case 'adjudicated':
+      return 'rechecked'
+    case 'rechecked':
+      return 'body-rewritten'
+    case 'body-rewritten':
+      return state.mode === 'stack-final' ? 'explained' : 'ready'
+    case 'ready':
+      if (usesApp(state)) return 'verdict-posted'
+      return state.mode === 'layer' ? 'complete' : 'explained'
+    case 'verdict-posted':
+      return state.mode === 'layer' ? 'complete' : 'explained'
+    case 'explained':
+      return state.mode === 'stack-final' ? 'complete' : 'merged'
+    case 'merged':
+      return 'complete'
+    default:
+      return undefined
+  }
+}
+
+// What a step needs on record before the run may reach it, or undefined.
+function missing(state: State, to: Phase): string | undefined {
+  const { round, head_sha: head } = state
+  switch (to) {
+    case 'review-posted':
+      return state.reviews.some((r) => r.kind === 'review' && r.round === round)
+        ? undefined
+        : `no review of round ${round} is recorded. Post it first`
+    case 'rechecked':
+      return state.gates.some((g) => g.round === round && g.commit === head)
+        ? undefined
+        : `no re-check gate of round ${round} at ${head} is recorded. Post the re-check first`
+    case 'body-rewritten':
+      return latestGate(state, head)?.result === 'pass' ? undefined : `the re-check gate at ${head} did not pass. Run next-round`
+    case 'verdict-posted':
+      return latestVerdict(state, head)?.event === 'APPROVE'
+        ? undefined
+        : `the reviewer App ${state.reviewer_login} has no APPROVE recorded at ${head}. Post it first`
+    default:
+      return undefined
+  }
+}
+
+function advance(state: State, to: Phase): void {
+  const pr = state.pr
+  refuse(!TERMINAL.includes(state.phase), `run for PR #${pr} is ${state.phase} (terminal): create a new run`)
+  if (to === 'aborted' || to === 'stopped') {
+    state.phase = to
+    return
+  }
+  const next = nextPhase(state)
+  refuse(to === next, `cannot advance PR #${pr} from ${state.phase} to ${to}: the next step is ${next}`)
+  const need = missing(state, to)
+  refuse(need === undefined, `cannot advance PR #${pr} to ${to}: ${need}`)
+  state.phase = to
 }
 
 // Why `value` is not a valid state, or undefined when it is.
@@ -209,7 +310,7 @@ async function create(pr: number, values: Record<string, string | boolean | unde
   if (!isOneOf(MODES, mode)) throw new Failure(`mode must be ${MODES.join(', ')}, got "${mode}"`, 1)
   const now = new Date().toISOString()
   const state: State = {
-    schema: 1,
+    schema: 2,
     repo,
     pr,
     mode,
@@ -221,6 +322,7 @@ async function create(pr: number, values: Record<string, string | boolean | unde
     round: 1,
     phase: 'created',
     reviews: [],
+    gates: [],
     explainer: null,
     created_at: now,
     updated_at: now,
@@ -285,10 +387,12 @@ async function dispatch(argv: string[]): Promise<string> {
       arity(1)
       const phase = positionals[0] ?? ''
       if (!isOneOf(PHASES, phase)) throw new Failure(`unknown phase "${phase}" (${PHASES.join(', ')})`, 1)
-      await update(pr, (state) => {
-        refuse(!TERMINAL.includes(state.phase), `run for PR #${pr} is ${state.phase} (terminal): create a new run`)
-        state.phase = phase
-      })
+      const state = await loadState(pr)
+      // A resumed step may repeat its advance: already there is success.
+      if (state.phase === phase) return ''
+      advance(state, phase)
+      state.updated_at = new Date().toISOString()
+      await saveState(state)
       return ''
     }
     case 'next-round': {
