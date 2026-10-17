@@ -212,7 +212,7 @@ async function review(argv: string[]): Promise<number> {
 
   // GitHub refuses the whole review for one bad anchor: move those findings
   // into the walkthrough instead.
-  const lines = anchorable(git(['diff', '--no-color', '--no-ext-diff', '--unified=3', range]))
+  const lines = anchorable(git(['diff', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3', range]))
   const inDiff = (cm: Comment) => {
     const set = lines.get(cm.path)
     return set !== undefined && set.has(cm.line) && (cm.start_line === null || set.has(cm.start_line))

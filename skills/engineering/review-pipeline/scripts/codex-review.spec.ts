@@ -176,6 +176,17 @@ test('an inline anchor outside the diff moves into the walkthrough instead of fa
   assert.match(sent.body, /### Findings outside the diff\n\n- `src\/a\.ts:12`: \*\*F2\*\* \(Standards, smell, low, 1\/2 pairs\) Far away\./)
 })
 
+test('anchors still match the diff when the user sets diff.noprefix', async (t) => {
+  const s = await setup(t)
+  await git(s.repo, 'config', 'diff.noprefix', 'true')
+  const { code, stderr } = await s.review()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const sent = JSON.parse((await s.posts())[0]!.stdin)
+  assert.deepEqual(sent.comments, [{ path: 'src/a.ts', line: 5, side: 'RIGHT', body: COMMENT.body }])
+  assert.doesNotMatch(sent.body, /Findings outside the diff/)
+})
+
 test('without --issue no spec is fetched, and the Spec reviewers look for the spec themselves', async (t) => {
   const s = await setup(t)
   const { code, stderr } = await s.review()

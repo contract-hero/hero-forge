@@ -242,7 +242,7 @@ With `runtime: codex`, the Orchestrator, every reviewer and the re-checker are `
 - **Effort rejected.** Exit 1 with "Codex rejected <role>.effort": that model does not support that effort. Stop and tell the user to fix the effort in `docs/agents/review.md` or re-run `/setup-review-pipeline`.
 - **Sub-agent models.** `agent_model` is `null` on this runtime. Where a brief names `<reviewer.agent_model>`, write `<reviewer.model>`.
 
-**You, in Review round:** do not fill [orchestrator-brief.md](./orchestrator-brief.md). After `advance review-dispatched`, run from the repo root, with one `--issue` for each spec issue the PR closes:
+**You, in Review round:** do not fill [orchestrator-brief.md](./orchestrator-brief.md). After `advance review-dispatched`, run from the repo root, with one `--issue` for each spec issue the PR closes (find them as **Review round** says for the spec line: `closingIssuesReferences`, then `Closes #N` or `Fixes #N` in the body and commit messages):
 
 ```sh
 review.ts codex-review --pr N --issue <n>
