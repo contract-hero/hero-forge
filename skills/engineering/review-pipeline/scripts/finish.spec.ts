@@ -1,6 +1,6 @@
 // The Finish subcommands: merge-gate, merge, explainer.
 import assert from 'node:assert/strict'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fakeGh, runCli, tempDir, type FakeGhResponse } from './test-helpers.ts'
@@ -41,7 +41,7 @@ function pr(over: Pr = {}): string {
   })
 }
 
-type Setup = { mode?: string; phase?: string; noState?: boolean }
+type Setup = { mode?: string; phase?: string; noState?: boolean; reviewerLogin?: string }
 
 // A run state for PR #13 at `phase` (default explained), and a fake gh.
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
@@ -51,7 +51,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   if (options.noState !== true) {
     const created = await runCli(
       ['run-state', 'create', '--pr', '13', '--repo', REPO, '--base', 'main', '--head', 'feature/x', '--head-sha', SHA,
-        '--runtime', 'claude', '--reviewer-login', 'none', '--mode', options.mode ?? 'single'],
+        '--runtime', 'claude', '--reviewer-login', options.reviewerLogin ?? 'none', '--mode', options.mode ?? 'single'],
       { env },
     )
     assert.equal(created.code, 0, created.stderr)
@@ -60,7 +60,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   }
   const cli = (...args: string[]) => runCli([...args, '--repo', REPO, '--pr', '13'], { env })
   const state = async () => JSON.parse((await runCli(['run-state', 'read', '--pr', '13'], { env })).stdout)
-  return { dir, gh, cli, state }
+  return { dir, gh, cli, state, env }
 }
 
 test('merge-gate says go when CI is green and the PR is mergeable at the re-checked head', async (t) => {
@@ -111,6 +111,34 @@ for (const c of CASES) {
     assert.equal(out.ci, c.ci)
     if (c.problem === undefined) assert.deepEqual(out.problems, [])
     else assert.ok(out.problems.some((p: string) => c.problem!.test(p)), JSON.stringify(out.problems))
+  })
+}
+
+// With the reviewer App, the App's APPROVE verdict on the re-checked head is
+// part of the gate. post-review records it in the run state when it posts.
+const BOT = 'hero-reviewer[bot]'
+const APPROVALS: { name: string; reviews: { kind: string; commit: string; as: string }[]; gate: string }[] = [
+  { name: 'an App approval of the re-checked head is go', reviews: [{ kind: 'verdict', commit: SHA, as: BOT }], gate: 'go' },
+  { name: 'no App approval yet is stop', reviews: [{ kind: 'recheck', commit: SHA, as: BOT }], gate: 'stop' },
+  { name: 'an App approval of an older head is stop', reviews: [{ kind: 'verdict', commit: OTHER, as: BOT }], gate: 'stop' },
+  { name: 'a verdict by another poster is stop', reviews: [{ kind: 'verdict', commit: SHA, as: 'user' }], gate: 'stop' },
+]
+
+for (const c of APPROVALS) {
+  test(`merge-gate with the App: ${c.name}`, async (t) => {
+    const s = await setup(t, { reviewerLogin: BOT })
+    const file = (await runCli(['run-state', 'path', '--pr', '13'], { env: s.env })).stdout.trim()
+    const state = JSON.parse(await readFile(join(file, 'state.json'), 'utf8'))
+    state.reviews = c.reviews.map((r, i) => ({ round: 1, id: 600 + i, ...r }))
+    await writeFile(join(file, 'state.json'), JSON.stringify(state))
+    await s.gh.respond([{ match: 'mergeStateStatus', stdout: pr() }])
+    const { code, stdout, stderr } = await s.cli('merge-gate')
+    assert.equal(code, 0, stderr)
+    const out = JSON.parse(stdout)
+    assert.equal(out.gate, c.gate)
+    if (c.gate === 'stop') {
+      assert.deepEqual(out.problems, [`the reviewer App ${BOT} has not approved the re-checked head ${SHA}: post its APPROVE verdict first`])
+    }
   })
 }
 

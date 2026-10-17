@@ -1,14 +1,18 @@
 // The `gh` calls the subcommands share. `gh` is found through PATH, so the
 // tests' fake `gh` stands in for it.
 import { spawn } from 'node:child_process'
+import { mintAppToken } from './app-token.ts'
 import { Failure } from './run-state.ts'
 
 export type GhResult = { code: number | null; stdout: string; stderr: string }
 
 // Run `gh` with `input` on stdin (closed either way, so the call returns).
-export function gh(args: string[], input = ''): Promise<GhResult> {
+// With `token`, gh runs as that token (the reviewer App) through GH_TOKEN;
+// without it, gh runs as the user, with the environment unchanged.
+export function gh(args: string[], input = '', token?: string): Promise<GhResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn('gh', args, { env: process.env })
+    const env = token === undefined ? process.env : { ...process.env, GH_TOKEN: token }
+    const child = spawn('gh', args, { env })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => (stdout += chunk))
@@ -36,8 +40,8 @@ export function json<T>(text: string, what: string): T {
 }
 
 // One JSON object per line, as `gh api --paginate --jq '.[] | {...}'` prints.
-export async function listLines<T>(args: string[], what: string): Promise<T[]> {
-  const listed = await gh(args)
+export async function listLines<T>(args: string[], what: string, token?: string): Promise<T[]> {
+  const listed = await gh(args, '', token)
   refuse(listed.code === 0, `cannot list ${what}: ${oneLine(listed.stderr)}`)
   return listed.stdout
     .split('\n')
@@ -45,15 +49,23 @@ export async function listLines<T>(args: string[], what: string): Promise<T[]> {
     .map((line) => json<T>(line, `list ${what}`))
 }
 
-// Who posts: the login GitHub will show, and the `as` value recorded in run
-// state. The App identity (a `<slug>[bot]` login) plugs in here.
-export type Identity = { login: string; as: string }
+// Who posts: the login GitHub will show, the `as` value recorded in run state
+// (`user`, or the App's `<slug>[bot]`), and the token gh posts with (none for
+// the user).
+export type Identity = { login: string; as: string; token?: string }
 
 export async function userIdentity(): Promise<Identity> {
   const user = await gh(['api', 'user', '--jq', '.login'])
   const login = user.stdout.trim()
   refuse(user.code === 0 && login !== '', `cannot read the gh user: ${oneLine(user.stderr)}`)
   return { login, as: 'user' }
+}
+
+// The reviewer App, with a token minted for `repo`. A broken App throws
+// Failure 4: the caller stops and never falls back to the user.
+export async function appIdentity(repo: string): Promise<Identity> {
+  const { token, login } = await mintAppToken(repo)
+  return { login, as: login, token }
 }
 
 export type InlineComment = {

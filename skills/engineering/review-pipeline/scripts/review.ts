@@ -2,6 +2,7 @@
 //   node review.ts <subcommand> [options]
 // Each subcommand module exports `main(argv): Promise<number>`; the number is
 // the exit code (0 ok, 1 failed, 2 usage, 3 absent, 4 broken).
+import { main as appToken } from './app-token.ts'
 import { main as codexExec } from './codex-exec.ts'
 import { main as config } from './config.ts'
 import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as merge } from './finish.ts'
@@ -12,6 +13,7 @@ import { main as runState } from './run-state.ts'
 const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   config,
   'run-state': runState,
+  'app-token': appToken,
   'post-review': postReview,
   reply,
   'codex-exec': codexExec,

@@ -6,7 +6,7 @@ Every pull request in this repo goes through `review-pipeline`: an Orchestrator 
 - Orchestrator: `<orchestrator model>` at <orchestrator effort> effort. Reviewers: `<reviewer model>` at <reviewer effort> effort.
 - Reviewer pairs per round: <N>.
 - Failed re-check rounds before the pipeline stops and asks: <max_rounds>.
-- Reviewer identity: your own `gh` account, COMMENT reviews only.
+- Reviewer identity: <the reviewer GitHub App, which also approves the PR or requests changes (credentials in `~/.config/hero-pocock/`, never in this repo) | your own `gh` account, COMMENT reviews only>.
 
 Edit the block below, or re-run `/setup-review-pipeline`. Agents read only the block.
 
@@ -20,4 +20,5 @@ reviewer:
   model: <reviewer model>
   effort: <reviewer effort>
 max_rounds: <max_rounds>
+app: enabled   <only with the reviewer App; leave the line out without it>
 ```

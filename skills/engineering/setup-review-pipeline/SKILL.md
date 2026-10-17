@@ -1,6 +1,6 @@
 ---
 name: setup-review-pipeline
-description: "Configure how this repo reviews pull requests: the runtime, the number of reviewer pairs, the model and effort of each role, and the round limit. Run once before the first review-pipeline run."
+description: "Configure how this repo reviews pull requests: the runtime, the number of reviewer pairs, the model and effort of each role, the round limit, and whether a reviewer GitHub App posts the reviews. Run once before the first review-pipeline run."
 disable-model-invocation: true
 ---
 
@@ -22,6 +22,10 @@ Read whatever exists; don't assume:
 - `codex --version`: exit 0 means Codex is installed. This picks the recommended runtime.
 - `docs/agents/review.md`: a previous run's output. If it exists, run `review.ts config` (from the repo root). Exit 0 gives the current answers as JSON: use them as the recommended answers below in place of the defaults. Exit 4 means the file is broken: show the message, and recommend the defaults.
 - `CLAUDE.md` and `AGENTS.md` at the repo root: which exists, and does it already have an `## Agent skills` block with a `### Review` entry?
+- `gh repo view --json nameWithOwner`: the repo as `O/R`, for the App check.
+- Reviewer App credentials. Check only that these files exist (`test -f <path>`). Never print, `cat` or read them: they hold the App ID and the path to a private key.
+  - `~/.config/hero-pocock/reviewer-app.env`: this plugin's credentials.
+  - `~/.config/lfg/reviewer-app.env`: the credentials of the personal `/lfg` skill, which this skill can copy.
 
 ### 2. Present findings and ask
 
@@ -46,6 +50,23 @@ Offer `codex` only when Codex is installed.
 
 **Round limit.** How many failed re-check rounds run before the pipeline stops and asks the user (`max_rounds`, default 2).
 
+**Reviewer App.** Does a reviewer GitHub App post the reviews? With the App, the reviews show the App's bot, not the user, and at the end of the loop the App approves the PR or requests changes. Without it, the reviews post from the user's own `gh` account as COMMENT reviews, and the re-check gate is the merge gate. This skill uses an App that already exists and is installed on the repo; it does not create one. The App needs these permissions: Pull requests read and write, Contents read, Metadata read.
+
+Offer the answers that fit what step 1 found, the recommended one first:
+
+| Found | Answers |
+| --- | --- |
+| `~/.config/hero-pocock/reviewer-app.env` | use the App (recommended when the current config has `app: enabled`, or there is no config yet); no App |
+| only `~/.config/lfg/reviewer-app.env` | copy the `/lfg` credentials and use the App (recommended); no App |
+| neither | no App (recommended); add the credentials by hand, then use the App |
+
+Offer the copy only when `~/.config/lfg/reviewer-app.env` exists. For credentials by hand, tell the user to create `~/.config/hero-pocock/` (mode 700) with two files, both mode 600, and to tell you when they are there:
+
+- `reviewer-app.pem`: the App's private key, as GitHub downloads it.
+- `reviewer-app.env`, two lines: `HERO_POCOCK_REVIEWER_APP_ID=<App ID or Client ID>` and `HERO_POCOCK_REVIEWER_APP_KEY=<absolute path of reviewer-app.pem>`.
+
+Never ask the user to paste the App ID or the key into the conversation.
+
 ### 3. Confirm and edit
 
 Show the user both drafts and let them edit before you write:
@@ -53,9 +74,16 @@ Show the user both drafts and let them edit before you write:
 - The whole new `docs/agents/review.md`, from the seed template [review.md](./review.md) with every placeholder filled. The YAML block states every field, even the ones left at their defaults.
 - The `### Review` entry for the `## Agent skills` block (step 4 has the format).
 
-The reviews post from the user's own `gh` account as COMMENT reviews. If the existing block has an `app: enabled` line, keep it in the new block.
+With the App, the block has the line `app: enabled`. Without it, the block has no `app` line.
 
 ### 4. Write
+
+**The App credentials** (only when the user chose the App):
+
+1. If the user chose the copy, run `review.ts app-token --copy-from ~/.config/lfg/reviewer-app.env`. It copies the private key to `~/.config/hero-pocock/reviewer-app.pem`, writes `~/.config/hero-pocock/reviewer-app.env` with this plugin's names and the new key path, and prints only the two paths. Do not copy the files yourself: the `/lfg` env file uses other names and points at the `/lfg` key. Exit 1 means credentials already exist there: ask the user whether to keep them or to copy over them (run it again with `--force`). Exit 4: show the message and stop the App part.
+2. Check the App before the config says `app: enabled`. Save the draft config to a temp file outside the repo and run `review.ts app-token --repo O/R --check --config <temp file>`. It mints a token and prints nothing.
+   - Exit 0: the App can post on this repo. Write the config with `app: enabled`.
+   - Exit 4: show the message (for example, the App is not installed on `O/R`, or GitHub refused the key). Ask the user to fix it and check again, or to write the config without the App. Never write `app: enabled` for an App that fails this check.
 
 **`docs/agents/review.md`**: write the whole file, replacing any previous version. Create `docs/agents/` if it is missing.
 
@@ -70,7 +98,7 @@ The entry:
 ```markdown
 ### Review
 
-<N> reviewer pairs on <Codex | Claude sub-agents>, max <max_rounds> rounds, COMMENT reviews as you. See `docs/agents/review.md`.
+<N> reviewer pairs on <Codex | Claude sub-agents>, max <max_rounds> rounds, <reviews and approval by the reviewer App | COMMENT reviews as you>. See `docs/agents/review.md`.
 ```
 
 Keep it to one entry:
@@ -83,7 +111,7 @@ Don't change the other subsections of the block or any other part of the file.
 
 ### 5. Check
 
-From the repo root, run `review.ts config`. It must exit 0. Show the user the JSON it prints: that is what `review-pipeline` will use. A non-zero exit means the file you wrote is wrong: fix it and run the check again.
+From the repo root, run `review.ts config`. It must exit 0. Show the user the JSON it prints: that is what `review-pipeline` will use. A non-zero exit means the file you wrote is wrong: fix it and run the check again. With the App, `app` is `true`; also run `review.ts app-token --repo O/R --login` and show the login it prints, `<slug>[bot]`: the reviews will show that name.
 
 ### 6. Done
 
