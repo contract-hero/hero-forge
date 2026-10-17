@@ -27,6 +27,7 @@ import {
 } from './github.ts'
 import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
 import { Failure, loadState, saveState, type State } from './run-state.ts'
+import { refuseSecretsIn } from './secrets.ts'
 
 const PREFIX = 'review.ts post-review: '
 const EVENTS = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES']
@@ -53,9 +54,18 @@ function usage(message: string): Failure {
   return new Failure(`${message}\n${USAGE}`, 2)
 }
 
+const PAYLOAD_KEYS = ['event', 'body', 'comments']
+const COMMENT_KEYS = ['path', 'line', 'side', 'start_line', 'start_side', 'body']
+
+function onlyKeys(value: Record<string, unknown>, allowed: string[], at: string): void {
+  const unknown = Object.keys(value).filter((k) => !allowed.includes(k))
+  refuse(unknown.length === 0, `${at} has unknown keys: ${unknown.join(', ')} (allowed: ${allowed.join(', ')})`)
+}
+
 function checkPayload(value: unknown): Payload {
   refuse(typeof value === 'object' && value !== null && !Array.isArray(value), 'payload must be a JSON object')
   const p = value as Record<string, unknown>
+  onlyKeys(p, PAYLOAD_KEYS, 'payload')
   refuse(EVENTS.includes(p.event as string), 'payload.event must be COMMENT, APPROVE or REQUEST_CHANGES')
   refuse(typeof p.body === 'string', 'payload.body must be a string')
   refuse(Array.isArray(p.comments), 'payload.comments must be an array')
@@ -63,6 +73,7 @@ function checkPayload(value: unknown): Payload {
     const at = `payload.comments[${i}]`
     refuse(typeof raw === 'object' && raw !== null, `${at} must be an object`)
     const c = raw as Record<string, unknown>
+    onlyKeys(c, COMMENT_KEYS, at)
     refuse(typeof c.path === 'string' && c.path !== '', `${at}.path must be a string`)
     refuse(isPositiveInt(c.line), `${at}.line must be a positive whole number`)
     refuse(SIDES.includes(c.side as string), `${at}.side must be RIGHT or LEFT`)
@@ -144,6 +155,17 @@ async function post(argv: string[]): Promise<string> {
     throw new Failure(`payload ${payloadPath} is not valid JSON`, 1)
   }
   const payload = checkPayload(parsed)
+  // The exact object that is sent, built from the allowed fields only, and
+  // scanned for secrets before any gh call.
+  const marker = `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=${kind} -->`
+  const outgoing = {
+    event: payload.event,
+    body: `${payload.body}\n\n${marker}`,
+    commit_id: commit,
+    comments: payload.comments.map(({ path, line, side, start_line, start_side, body }) =>
+      start_line === undefined ? { path, line, side, body } : { path, line, side, start_line, start_side, body }),
+  }
+  refuseSecretsIn(outgoing, `payload ${payloadPath}`)
   if (kind === 'verdict') refuse(payload.event !== 'COMMENT', '--kind verdict posts APPROVE or REQUEST_CHANGES only')
   else refuse(payload.event === 'COMMENT', `--kind ${kind} posts COMMENT only`)
 
@@ -180,7 +202,6 @@ async function post(argv: string[]): Promise<string> {
   // With the App, a token that cannot be minted stops here (exit 4), before
   // any gh call: never post as the user instead.
   const poster = app ? await appIdentity(repo) : await userIdentity()
-  const marker = `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=${kind} -->`
   const reviewsPath = `repos/${repo}/pulls/${pr}/reviews`
   const existing = await findOwnReview(reviewsPath, pr, marker, poster, commit)
   if (existing !== undefined) {
@@ -188,8 +209,7 @@ async function post(argv: string[]): Promise<string> {
     return `${JSON.stringify({ posted: false, duplicate: true, id: existing, ...gate })}\n`
   }
 
-  const body = { ...payload, body: `${payload.body}\n\n${marker}`, commit_id: commit }
-  const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(body), poster.token)
+  const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(outgoing), poster.token)
   refuse(posted.code === 0, `GitHub rejected the review: ${oneLine(posted.stderr || posted.stdout)}`)
   const { id } = json<{ id: number }>(posted.stdout, 'post review')
   await record(state, { round, kind, id, commit, as: poster.as })
