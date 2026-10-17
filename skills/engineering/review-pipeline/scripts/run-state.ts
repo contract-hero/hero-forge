@@ -1,4 +1,4 @@
-// `review.ts run-state <path|create|read|advance|set> --pr <N> ...`: the
+// `review.ts run-state <path|create|read|advance|set|next-round> --pr <N> ...`: the
 // per-PR checkpoint that lets an interrupted pipeline run resume without
 // repeating a step that already reached GitHub.
 //
@@ -175,7 +175,8 @@ const USAGE = `usage:
                               [--mode single|layer|stack-final] [--force]
   review.ts run-state read    --pr N [<key>]
   review.ts run-state advance --pr N <phase>
-  review.ts run-state set     --pr N <key> <value>    (key: ${SETTABLE.join(' | ')})`
+  review.ts run-state set     --pr N <key> <value>    (key: ${SETTABLE.join(' | ')})
+  review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)`
 
 function usage(message: string): Failure {
   return new Failure(`${message}\n${USAGE}`, 2)
@@ -191,6 +192,7 @@ const OPTIONS = {
   'reviewer-login': { type: 'string' },
   mode: { type: 'string' },
   force: { type: 'boolean' },
+  'max-rounds': { type: 'string' },
 } as const
 
 function check(ok: boolean, message: string): void {
@@ -303,6 +305,25 @@ async function dispatch(argv: string[]): Promise<string> {
         state.phase = phase
       })
       return ''
+    }
+    case 'next-round': {
+      arity(0)
+      const max = values['max-rounds']
+      if (max === undefined || !/^[0-9]+$/.test(max) || Number(max) < 1) {
+        throw usage('next-round needs --max-rounds <positive whole number> (max_rounds from the config)')
+      }
+      let result = {}
+      await update(pr, (state) => {
+        check(state.phase === 'rechecked', `next-round needs phase rechecked, but PR #${pr} is at ${state.phase}`)
+        if (state.round < Number(max)) {
+          state.round += 1
+          state.phase = 'review-posted'
+        } else {
+          state.phase = 'stopped'
+        }
+        result = { round: state.round, phase: state.phase }
+      })
+      return `${JSON.stringify(result)}\n`
     }
     case 'set': {
       arity(2)

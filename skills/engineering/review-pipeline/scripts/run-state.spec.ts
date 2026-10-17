@@ -98,6 +98,58 @@ test('advance moves the phase and set changes one field', async (t) => {
   assert.equal(state.explainer, '/tmp/explainer.html')
 })
 
+// A run at the end of round `round` (re-check posted), and its next-round call.
+async function rechecked(t: Parameters<typeof tempDir>[0], round: number) {
+  const s = await stateRoot(t)
+  await s.cli(...CREATE)
+  await s.cli('set', '--pr', '13', 'round', String(round))
+  await s.cli('advance', '--pr', '13', 'rechecked')
+  return { ...s, next: (max: string) => s.cli('next-round', '--pr', '13', '--max-rounds', max) }
+}
+
+test('next-round after a failed re-check starts the next round at Adjudication', async (t) => {
+  const s = await rechecked(t, 1)
+  const { code, stdout, stderr } = await s.next('2')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { round: 2, phase: 'review-posted' })
+  const state = JSON.parse(await readFile(s.file, 'utf8'))
+  assert.equal(state.round, 2)
+  assert.equal(state.phase, 'review-posted')
+  assert.deepEqual(await readdir(join(s.root, 'pr-13')), ['state.json'])
+})
+
+for (const [round, max] of [[2, '2'], [1, '1'], [3, '2']] as const) {
+  test(`next-round at round ${round} of max ${max} stops the run, and it stays stopped`, async (t) => {
+    const s = await rechecked(t, round)
+    const { code, stdout } = await s.next(max)
+    assert.equal(code, 0)
+    assert.deepEqual(JSON.parse(stdout), { round, phase: 'stopped' })
+    assert.equal(JSON.parse(await readFile(s.file, 'utf8')).phase, 'stopped')
+    assert.equal((await s.next(max)).code, 1)
+    assert.equal((await s.cli('advance', '--pr', '13', 'review-posted')).code, 1)
+  })
+}
+
+test('next-round before the re-check is posted is refused and changes nothing', async (t) => {
+  const s = await stateRoot(t)
+  await s.cli(...CREATE)
+  await s.cli('advance', '--pr', '13', 'adjudicated')
+  const before = await readFile(s.file, 'utf8')
+  const { code, stderr } = await s.cli('next-round', '--pr', '13', '--max-rounds', '2')
+  assert.equal(code, 1)
+  assert.equal(stderr, 'review.ts run-state: next-round needs phase rechecked, but PR #13 is at adjudicated\n')
+  assert.equal(await readFile(s.file, 'utf8'), before)
+})
+
+test('next-round without a whole-number --max-rounds is a usage error', async (t) => {
+  const s = await rechecked(t, 1)
+  for (const args of [['next-round', '--pr', '13'], ['next-round', '--pr', '13', '--max-rounds', '0'], ['next-round', '--pr', '13', '--max-rounds', 'two']]) {
+    assert.equal((await s.cli(...args)).code, 2, args.join(' '))
+  }
+  assert.equal(JSON.parse(await readFile(s.file, 'utf8')).round, 1)
+})
+
 const REFUSED = [
   ['an unknown phase', ['advance', '--pr', '13', 'shipped'], /unknown phase "shipped"/],
   ['an unknown key', ['set', '--pr', '13', 'phase', 'merged'], /cannot set "phase"/],

@@ -53,6 +53,8 @@ export type FakeGhCall = { argv: string[]; gh_token: string | null; stdin: strin
 export type FakeGh = {
   env: Record<string, string | undefined>
   calls: () => Promise<FakeGhCall[]>
+  // Replace the responses for the calls that follow (the log is kept).
+  respond: (responses: FakeGhResponse[]) => Promise<void>
 }
 
 const FAKE_GH = `import { appendFileSync, readFileSync } from 'node:fs'
@@ -95,5 +97,6 @@ export async function fakeGh(dir: string, responses: FakeGhResponse[] = []): Pro
         .split('\n')
         .filter((line) => line !== '')
         .map((line) => JSON.parse(line) as FakeGhCall),
+    respond: (next) => writeFile(responsesFile, JSON.stringify(next)),
   }
 }

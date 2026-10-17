@@ -1,15 +1,20 @@
 // `review.ts post-review --repo O/R --pr N --commit <sha> --round R
-//   --kind review|recheck|verdict --payload <file> [--config <path>]`
+//   --kind review|recheck|verdict --payload <file> [--config <path>]
+//   [--ledger <findings.json> --recheck <recheck-rN.json>]`
 // Post one review payload (event, body, inline comments) to a PR through
 // `gh api`, at most once per PR, round and kind.
 //
 // Before posting it checks for this round's review twice: first in the run
 // state, then (in case the state lost the record) on GitHub, by a hidden
 // marker in the body of a review by the same poster on the same commit.
-import { spawn } from 'node:child_process'
+//
+// `recheck` and `verdict` posts also run the gate (ledger.ts) and print its
+// result, on a duplicate too. An APPROVE on a failing gate is refused.
 import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { loadConfig } from './config.ts'
+import { gh, json, listInlineComments, listLines, oneLine, postedFindings, refuse, userIdentity } from './github.ts'
+import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
 import { Failure, loadState, saveState, type State } from './run-state.ts'
 
 const PREFIX = 'review.ts post-review: '
@@ -18,7 +23,8 @@ const SIDES = ['RIGHT', 'LEFT']
 const KINDS = ['review', 'recheck', 'verdict']
 
 const USAGE = `usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R
-                             --kind review|recheck|verdict --payload <file> [--config <path>]`
+                             --kind review|recheck|verdict --payload <file> [--config <path>]
+                             [--ledger <findings.json> --recheck <recheck-rN.json>]   (recheck, verdict)`
 
 type Comment = {
   path: string
@@ -34,10 +40,6 @@ const isPositiveInt = (v: unknown) => typeof v === 'number' && Number.isInteger(
 
 function usage(message: string): Failure {
   return new Failure(`${message}\n${USAGE}`, 2)
-}
-
-function refuse(ok: boolean, message: string): void {
-  if (!ok) throw new Failure(message, 1)
 }
 
 function checkPayload(value: unknown): Payload {
@@ -61,32 +63,6 @@ function checkPayload(value: unknown): Payload {
     }
   })
   return p as Payload
-}
-
-// Run `gh` with `input` on stdin (closed either way, so the call returns).
-function gh(args: string[], input = ''): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('gh', args, { env: process.env })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk) => (stdout += chunk))
-    child.stderr.on('data', (chunk) => (stderr += chunk))
-    child.on('error', reject)
-    child.on('close', (code) => resolve({ code, stdout, stderr }))
-    child.stdin.end(input)
-  })
-}
-
-function json<T>(text: string, what: string): T {
-  try {
-    return JSON.parse(text) as T
-  } catch {
-    throw new Failure(`unexpected output from gh (${what}): ${oneLine(text)}`, 1)
-  }
-}
-
-function oneLine(text: string): string {
-  return text.trim().split('\n').filter((l) => l.trim() !== '').join(' ') || 'no output'
 }
 
 // Append a review record to the PR's run state, when there is one.
@@ -113,6 +89,8 @@ async function post(argv: string[]): Promise<string> {
         kind: { type: 'string' },
         payload: { type: 'string' },
         config: { type: 'string' },
+        ledger: { type: 'string' },
+        recheck: { type: 'string' },
       },
     }).values
   } catch (error) {
@@ -127,6 +105,13 @@ async function post(argv: string[]): Promise<string> {
   }
   if (kind === undefined || !KINDS.includes(kind)) throw usage('--kind must be review, recheck or verdict')
   if (payloadPath === undefined) throw usage('--payload is required')
+  const gated = kind !== 'review'
+  if (gated && (values.ledger === undefined || values.recheck === undefined)) {
+    throw usage(`--kind ${kind} needs --ledger and --recheck (the gate)`)
+  }
+  if (!gated && (values.ledger !== undefined || values.recheck !== undefined)) {
+    throw usage('--ledger and --recheck go with --kind recheck or verdict only')
+  }
   const pr = Number(prText)
   const round = Number(roundText)
 
@@ -150,22 +135,38 @@ async function post(argv: string[]): Promise<string> {
     throw new Failure(`payload ${payloadPath} is not valid JSON`, 1)
   }
   const payload = checkPayload(parsed)
-  if (kind === 'verdict') {
-    refuse(payload.event !== 'COMMENT', '--kind verdict posts APPROVE or REQUEST_CHANGES only')
-    throw new Failure('APPROVE/REQUEST_CHANGES need the reviewer App: the PR author cannot approve their own PR', 1)
-  }
-  refuse(payload.event === 'COMMENT', `--kind ${kind} posts COMMENT only`)
+  if (kind === 'verdict') refuse(payload.event !== 'COMMENT', '--kind verdict posts APPROVE or REQUEST_CHANGES only')
+  else refuse(payload.event === 'COMMENT', `--kind ${kind} posts COMMENT only`)
+
+  const ledger = gated ? await loadLedger(values.ledger as string) : []
+  const recheck = gated ? await loadRecheck(values.recheck as string) : []
 
   let state: State | undefined
   try {
     state = await loadState(pr)
   } catch (error) {
-    if (!(error instanceof Failure) || error.code !== 3) throw error
+    // The gate counts the findings of the reviews the run state records.
+    if (gated || !(error instanceof Failure) || error.code !== 3) throw error
+  }
+
+  let gate: { gate: string; problems: string[] } | undefined
+  if (gated) {
+    const reviewIds = (state as State).reviews.filter((r) => r.kind === 'review').map((r) => r.id)
+    const posted = postedFindings(await listInlineComments(repo, pr), reviewIds)
+    const problems = gateProblems(ledger, recheck, posted)
+    gate = { gate: problems.length === 0 ? 'pass' : 'fail', problems }
+    refuse(
+      payload.event !== 'APPROVE' || problems.length === 0,
+      `the gate fails, so the PR cannot be approved: ${problems.join('; ')}`,
+    )
+  }
+  if (kind === 'verdict') {
+    throw new Failure('APPROVE/REQUEST_CHANGES need the reviewer App: the PR author cannot approve their own PR', 1)
   }
 
   // Primary resume check: the run state already records this round's review.
   const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit)
-  if (recorded !== undefined) return `${JSON.stringify({ posted: false, duplicate: true, id: recorded.id })}\n`
+  if (recorded !== undefined) return `${JSON.stringify({ posted: false, duplicate: true, id: recorded.id, ...gate })}\n`
 
   const poster = await userIdentity()
   const marker = `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=${kind} -->`
@@ -173,7 +174,7 @@ async function post(argv: string[]): Promise<string> {
   const existing = await findOwnReview(reviewsPath, pr, marker, poster.login, commit)
   if (existing !== undefined) {
     await record(state, { round, kind, id: existing, commit, as: poster.as })
-    return `${JSON.stringify({ posted: false, duplicate: true, id: existing })}\n`
+    return `${JSON.stringify({ posted: false, duplicate: true, id: existing, ...gate })}\n`
   }
 
   const body = { ...payload, body: `${payload.body}\n\n${marker}`, commit_id: commit }
@@ -181,18 +182,7 @@ async function post(argv: string[]): Promise<string> {
   refuse(posted.code === 0, `GitHub rejected the review: ${oneLine(posted.stderr || posted.stdout)}`)
   const { id } = json<{ id: number }>(posted.stdout, 'post review')
   await record(state, { round, kind, id, commit, as: poster.as })
-  return `${JSON.stringify({ posted: true, id, as: poster.as, event: payload.event, round, kind })}\n`
-}
-
-// Who posts: the login GitHub will show on the review, and the `as` value
-// recorded in run state. The App identity (a `<slug>[bot]` login) plugs in here.
-type Identity = { login: string; as: string }
-
-async function userIdentity(): Promise<Identity> {
-  const user = await gh(['api', 'user', '--jq', '.login'])
-  const login = user.stdout.trim()
-  refuse(user.code === 0 && login !== '', `cannot read the gh user: ${oneLine(user.stderr)}`)
-  return { login, as: 'user' }
+  return `${JSON.stringify({ posted: true, id, as: poster.as, event: payload.event, round, kind, ...gate })}\n`
 }
 
 // Fallback resume check, for a run state that lost its record: a review on
@@ -206,17 +196,11 @@ async function findOwnReview(
   login: string,
   commit: string,
 ): Promise<number | undefined> {
-  const listed = await gh(['api', '--paginate', '--jq', '.[] | {id, body, commit_id, login: .user.login}', reviewsPath])
-  refuse(listed.code === 0, `cannot list the reviews of PR #${pr}: ${oneLine(listed.stderr)}`)
-  for (const line of listed.stdout.split('\n')) {
-    if (line.trim() === '') continue
-    const review = json<{ id: number; body: string | null; commit_id: string | null; login: string | null }>(
-      line,
-      'list reviews',
-    )
-    if (review.login === login && review.commit_id === commit && (review.body ?? '').includes(marker)) return review.id
-  }
-  return undefined
+  const reviews = await listLines<{ id: number; body: string | null; commit_id: string | null; login: string | null }>(
+    ['api', '--paginate', '--jq', '.[] | {id, body, commit_id, login: .user.login}', reviewsPath],
+    `the reviews of PR #${pr}`,
+  )
+  return reviews.find((r) => r.login === login && r.commit_id === commit && (r.body ?? '').includes(marker))?.id
 }
 
 export async function main(argv: string[]): Promise<number> {
