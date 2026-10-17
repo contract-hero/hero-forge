@@ -64,7 +64,7 @@ Yes. With `runtime: codex`, every Codex call goes through the helper CLI, which 
 
 **Does the Codex runtime need Claude Code?**
 
-No. The coding agent needs a shell, `node`, `gh` and `codex`, and nothing else. A Codex session can run the whole pipeline.
+No. The coding agent needs a shell, `git`, `node`, `gh` and `codex`, and nothing else. A Codex session can run the whole pipeline.
 
 ## It's working if
 

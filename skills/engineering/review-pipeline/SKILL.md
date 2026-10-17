@@ -49,7 +49,7 @@ Run `review.ts config`. Exit 3 (no `docs/agents/review.md`) or exit 4 (invalid f
 
 Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with `model`, `effort`, and `agent_model`, the sub-agent model family), `max_rounds`, `app`.
 
-- `runtime: codex`: see **Codex runtime**.
+- `runtime: codex`: run `codex --version` now. If it fails, stop before **Resume** as **Codex runtime** says for a missing or broken Codex. Then see **Codex runtime**.
 - `app: true`: see **App identity**.
 
 ## Resume
