@@ -6,7 +6,7 @@ The agent that wrote the code never reviews it. The coding [agent](https://www.a
 
 Then the coding agent does **Adjudication**: it accepts or refutes every finding, answers each one on the PR (a reply in each inline thread, plus one comment per round with every answer), and lands all accepted fixes of the round in one commit. A fresh re-checker, which is neither the coding agent nor the Orchestrator, then checks every finding against the new code: fixed, validly refuted, or still open. A deterministic gate in the helper CLI reads that result, and the pipeline posts it as a re-check comment. Without the reviewer App, that gate is the merge gate.
 
-This version stops after a passing re-check, with the PR still in draft. The reviewer App identity and the merge arrive in later steps of the [spec](https://github.com/contract-hero/hero-pocock/issues/2).
+When the re-check passes, the pipeline finishes the PR. It rewrites the PR body with [pr](https://aihero.dev/skills-pr) so the body matches the final code, flips the PR from draft to ready, and builds an explainer page that pitches the change to reviewers and stakeholders. Then it squash-merges the PR, but only when CI is green and GitHub reports the PR mergeable. Red CI or a merge conflict stops the pipeline and asks you: it never merges around them. The reviewer App identity arrives in a later step of the [spec](https://github.com/contract-hero/hero-pocock/issues/2).
 
 ## When to reach for it
 
@@ -60,6 +60,18 @@ A round is one Adjudication plus one re-check. When the re-check leaves findings
 
 `max_rounds` in `docs/agents/review.md` sets how many failed rounds the pipeline accepts (2 by default). When the last one fails, the pipeline stops, the PR stays in draft, and the agent asks you what to do, with the open findings listed. It never starts an extra round by itself.
 
+**Will it merge when CI is red, or when the PR has a conflict?**
+
+No. Before the merge, the helper CLI reads the PR's checks and its mergeability. A failed check, a conflict, a branch that is behind or blocked by branch protection, or a new commit after the re-check stops the pipeline, and the agent asks you what to do. While CI runs, it waits. The merge is always a squash merge of the exact commit the re-checker graded, and it never uses `--admin`.
+
+**Where does the explainer go? Is it published?**
+
+It stays on your machine, in the run dir (`hero-pocock/pr-<N>/explainer.html` inside the git common dir). It is never committed and never published. The PR gets one comment with its local path, so whoever opens the PR on that machine can find it.
+
+**Can I review a PR without merging it?**
+
+A plain `/review-pipeline <PR>` merges at the end. A stack skill can start the run in a mode that stops earlier: a stack layer stops once the PR is ready, and the whole-stack PR stops after the explainer, because the stack lands its layers itself. A plain run has no "do not merge" switch yet: to keep the PR open, tell the agent so before it reaches the merge.
+
 **Can the coding agent mark its own fixes as done?**
 
 No. The coding agent writes the fixes and the refutations, so a fresh re-checker grades them, and the gate is a fixed check, not a judgment: every finding has a decision, every posted finding is in the ledger, the re-check covers exactly the ledger, and nothing is open.
@@ -88,6 +100,8 @@ No. The coding agent needs a shell, `git`, `node`, `gh` and `codex`, and nothing
 - Every inline finding gets an `ACCEPT:` or `REFUTE:` reply in its thread, and each round gets one adjudication comment that also covers the walkthrough items.
 - Each round with accepted fixes adds exactly one `apply review round <R>` commit.
 - Each round ends with a re-check comment that lists every finding as fixed, refutation accepted, or open.
+- After a passing re-check, the PR body shows the `pr` template for the final code and still closes its issues, the PR is ready for review, and it carries one "Explainer (local, not published)" comment.
+- The PR lands as one squash commit only after its checks pass. A red check or a conflict gets a question from the agent, not a merge.
 - A repo with no `docs/agents/review.md` gets a pointer to `/setup-review-pipeline`, not a guessed review.
 - On `runtime: codex`, each Codex log in the run dir shows the model and the reasoning effort from your config, not your `~/.codex/config.toml` defaults.
 
