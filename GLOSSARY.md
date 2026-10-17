@@ -18,11 +18,33 @@ A `wayfinder` unit: a child **Issue** of a `wayfinder:map` holding a *question* 
 **Triage role**:
 A canonical state-machine label applied to an **Issue** during triage (e.g. `needs-triage`, `ready-for-afk`). Each role maps to a real label string in the **Issue tracker** via `docs/agents/triage-labels.md`.
 
+**Review pipeline**:
+The path a pull request takes from draft to merge: review, adjudication, re-check, and merge. A repo configures it once, at setup.
+
+**Orchestrator**:
+The agent that owns one review round: it dispatches the **Reviewer pairs**, verifies and consolidates their findings, and posts one review on the pull request. It is never the agent that wrote the code.
+_Avoid_: lead, coordinator
+
+**Reviewer pair**:
+Two fresh reviewers that look at the same fixed point: **Standards** and **Spec**. A **Review pipeline** runs one or more pairs per round.
+
+**Standards** (reviewer):
+The reviewer that judges the change against the repo's own standards, a code-smell baseline, and correctness (bugs, silent failures, test gaps).
+
+**Spec** (reviewer):
+The reviewer that judges the change against the **Issue** or spec it came from.
+
+**Adjudication**:
+The coding agent's answer to a posted review: it accepts or refutes each finding, and lands the accepted fixes.
+
 ## Relationships
 
 - An **Issue tracker** holds many **Issues**
 - An **Issue** carries one **Triage role** at a time
 - A **Decision ticket** is an **Issue** (a child of a `wayfinder:map`)
+- An **Orchestrator** runs one or more **Reviewer pairs** per review round
+- Each **Reviewer pair** is one **Standards** reviewer plus one **Spec** reviewer
+- Every posted review is followed by **Adjudication**
 
 ## Flagged ambiguities
 
