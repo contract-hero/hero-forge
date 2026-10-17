@@ -16,6 +16,8 @@ import { isAbsolute } from 'node:path'
 import { Failure, parse as parseOptions, positive, refuse, repoOption, runMain, usageFor, type Usage } from './cli.ts'
 import { loadConfig } from './config.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
+import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
+import { refuseSecretsIn } from './secrets.ts'
 import { latestGate, latestVerdict, loadState, saveState, usesApp, type State } from './run-state.ts'
 
 const VIEW_FIELDS = 'state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup'
@@ -224,6 +226,12 @@ async function explainer(argv: string[]): Promise<string> {
   const state = await stateFor(args)
   const found = await stat(file).catch(() => undefined)
   refuse(found?.isFile() === true, `no explainer file at ${file}: build it first`)
+  // The comment holds an agent-supplied path: it is scanned like every post,
+  // before anything is recorded or sent.
+  const mark = marker({ pr: args.pr, kind: 'explainer' })
+  const body = withMarker(`Explainer (local, not published): \`${file}\``, mark)
+  refuseMarkerIn([file], '--file')
+  refuseSecretsIn({ body }, 'the explainer comment')
 
   if (state.explainer !== file) {
     state.explainer = file
@@ -231,17 +239,15 @@ async function explainer(argv: string[]): Promise<string> {
     await saveState(state)
   }
 
-  const marker = `<!-- hero-pocock:review-pipeline pr=${args.pr} kind=explainer -->`
   const me = await userIdentity()
   const existing = (
     await listLines<{ id: number; body: string | null; login: string | null }>(
       ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${args.repo}/issues/${args.pr}/comments`],
       `the comments of PR #${args.pr}`,
     )
-  ).find((c) => c.login === me.login && (c.body ?? '').includes(marker))
+  ).find((c) => c.login === me.login && hasOwnMarker(c.body, mark))
   if (existing !== undefined) return `${JSON.stringify({ explainer: file, comment: { id: existing.id, posted: false } })}\n`
 
-  const body = `Explainer (local, not published): \`${file}\`\n\n${marker}`
   const posted = await gh(['api', '-X', 'POST', `repos/${args.repo}/issues/${args.pr}/comments`, '--input', '-'], JSON.stringify({ body }))
   refuse(posted.code === 0, `GitHub rejected the explainer comment: ${oneLine(posted.stderr || posted.stdout)}`)
   const id = json<{ id: number }>(posted.stdout, 'post comment').id

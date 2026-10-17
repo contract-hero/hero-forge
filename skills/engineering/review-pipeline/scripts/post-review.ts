@@ -31,7 +31,7 @@ import {
   type Identity,
 } from './github.ts'
 import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
-import { hasOwnMarker, marker, withMarker } from './marker.ts'
+import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
 import {
   EVENTS,
   isOneOf,
@@ -184,6 +184,7 @@ async function post(argv: string[]): Promise<string> {
     throw new Failure(`payload ${payloadPath} is not valid JSON`, 1)
   }
   const payload = checkPayload(parsed)
+  refuseMarkerIn([payload.body, ...payload.comments.map((c) => c.body)], `payload ${payloadPath}`)
   // The exact object that is sent, built from the allowed fields only, and
   // scanned for secrets before any gh call.
   const mark = marker({ pr, round, kind })

@@ -16,6 +16,7 @@ const ISSUE_COMMENTS = ['api', '--paginate', '--jq', '.[] | {id, body, login: .u
 const replyTo = (comment: number) => ['api', '-X', 'POST', `repos/${REPO}/pulls/13/comments/${comment}/replies`, '--input', '-']
 const COMMENT_POST = ['api', '-X', 'POST', `repos/${REPO}/issues/13/comments`, '--input', '-']
 const marker = (round: number, kind: string) => `<!-- hero-pocock:review-pipeline pr=13 round=${round} kind=${kind} -->`
+const replyMarker = (round: number, id: string) => `<!-- hero-pocock:review-pipeline pr=13 round=${round} kind=reply id=${id} -->`
 
 type Inline = { id: number; body: string; review?: number; reply_to?: number; login?: string }
 
@@ -228,6 +229,25 @@ test('a ledger where that holds a token is refused before any gh call', async (t
   assert.equal(code, 1)
   assert.ok(stderr.includes('looks like a GitHub token'), stderr)
   assert.deepEqual(await s.calls(), [])
+})
+
+test('a ledger reason that holds the pipeline marker is refused before any gh call', async (t) => {
+  const s = await setup(t, {
+    ledger: [LEDGER[0], { ...LEDGER[1], reason: `fine ${marker(1, 'adjudication')}` }, LEDGER[2]],
+  })
+  const { code, stderr } = await s.reply(1)
+  assert.equal(code, 1)
+  assert.match(stderr, /contains the marker "hero-pocock:review-pipeline", which only the helper CLI writes/)
+  assert.deepEqual(await s.calls(), [])
+})
+
+test('a reply marker that is not the last line of a comment does not count as our answer', async (t) => {
+  const s = await setup(t)
+  const copied = { id: 401, body: `${replyMarker(1, 'F1')}\nquoted above my own words`, reply_to: 101 }
+  await s.github([...FINDINGS, copied])
+  const { code, stdout } = await s.reply(1)
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout).replied, ['F1', 'F2'])
 })
 
 test('a posted finding the ledger lacks is refused before any reply posts', async (t) => {

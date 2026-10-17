@@ -1,6 +1,6 @@
 // The Finish subcommands: merge-gate, merge, explainer.
 import assert from 'node:assert/strict'
-import { rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fakeGh, runCli, seedState, tempDir, type FakeGhResponse } from './test-helpers.ts'
@@ -421,6 +421,32 @@ test('explainer ignores the marker in a comment by someone else', async (t) => {
   const { code, stdout } = await s.cli('explainer', '--file', s.file)
   assert.equal(code, 0)
   assert.deepEqual(JSON.parse(stdout).comment, { id: 901, posted: true })
+})
+
+test('an explainer path that holds a token is refused before any gh call and is not recorded', async (t) => {
+  const s = await setup(t, { phase: 'ready' })
+  const dir = join(s.dir, `ghp_${'A1b2'.repeat(9)}`)
+  await mkdir(dir)
+  const file = join(dir, 'explainer.html')
+  await writeFile(file, '<!doctype html>')
+  const { code, stdout, stderr } = await s.cli('explainer', '--file', file)
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts explainer: the explainer comment contains what looks like a GitHub token\. Nothing was posted/)
+  assert.deepEqual(await s.gh.calls(), [])
+  assert.equal((await s.state()).explainer, null)
+})
+
+test('an explainer path that holds the pipeline marker is refused before any gh call', async (t) => {
+  const s = await setup(t, { phase: 'ready' })
+  const dir = join(s.dir, 'hero-pocock:review-pipeline')
+  await mkdir(dir)
+  const file = join(dir, 'explainer.html')
+  await writeFile(file, '<!doctype html>')
+  const { code, stderr } = await s.cli('explainer', '--file', file)
+  assert.equal(code, 1)
+  assert.match(stderr, /--file contains the marker "hero-pocock:review-pipeline"/)
+  assert.deepEqual(await s.gh.calls(), [])
 })
 
 test('explainer needs an absolute path to a file that exists', async (t) => {

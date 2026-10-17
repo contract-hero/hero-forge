@@ -12,6 +12,7 @@
 import { parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { gh, json, listInlineComments, listLines, oneLine, postedFindings, userIdentity } from './github.ts'
 import { CLOSED, DECISIONS, loadLedger, loadRecheck, type LedgerEntry } from './ledger.ts'
+import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
 import { loadState } from './run-state.ts'
 import { refuseSecretsIn } from './secrets.ts'
 
@@ -22,11 +23,11 @@ const usage = usageFor(USAGE)
 
 const cell = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|')
 
-const replyMarker = (pr: number, round: number, id: string) => `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=reply id=${id} -->`
-const commentMarker = (pr: number, round: number) => `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=adjudication -->`
+const replyMarker = (pr: number, round: number, id: string) => marker({ pr, round, kind: 'reply', id })
+const commentMarker = (pr: number, round: number) => marker({ pr, round, kind: 'adjudication' })
 // The exact objects posted: a finding's thread reply, and the PR comment.
 const replyPost = (pr: number, round: number, entry: LedgerEntry) => ({
-  body: `${entry.decision}: ${entry.reason}\n\n${replyMarker(pr, round, entry.id)}`,
+  body: withMarker(`${entry.decision}: ${entry.reason}`, replyMarker(pr, round, entry.id)),
 })
 
 function summary(round: number, targets: LedgerEntry[], marker: string): string {
@@ -79,6 +80,10 @@ async function reply(argv: string[]): Promise<string> {
     undecided.length === 0,
     `every finding needs a decision (ACCEPT or REFUTE) and a reason first: ${undecided.map((e) => e.id).join(', ')}`,
   )
+  refuseMarkerIn(
+    targets.flatMap((e) => [e.id, e.reason, typeof e.where === 'string' ? e.where : '']),
+    `ledger ${ledgerPath}`,
+  )
   const commentPost = { body: summary(round, targets, commentMarker(pr, round)) }
   refuseSecretsIn([...targets.map((e) => replyPost(pr, round, e)), commentPost], `ledger ${ledgerPath}`)
 
@@ -105,10 +110,10 @@ async function reply(argv: string[]): Promise<string> {
       walkthrough.push(entry.id)
       continue
     }
-    const marker = replyMarker(pr, round, entry.id)
+    const mark = replyMarker(pr, round, entry.id)
     let postedAny = false
     for (const thread of threads) {
-      const done = comments.some((c) => c.in_reply_to_id === thread && c.login === me.login && (c.body ?? '').includes(marker))
+      const done = comments.some((c) => c.in_reply_to_id === thread && c.login === me.login && hasOwnMarker(c.body, mark))
       if (done) continue
       const result = await gh(
         ['api', '-X', 'POST', `repos/${repo}/pulls/${pr}/comments/${thread}/replies`, '--input', '-'],
@@ -122,13 +127,13 @@ async function reply(argv: string[]): Promise<string> {
 
   let comment: { id: number; posted: boolean } | null = null
   if (targets.length > 0) {
-    const marker = commentMarker(pr, round)
+    const mark = commentMarker(pr, round)
     const existing = (
       await listLines<{ id: number; body: string | null; login: string | null }>(
         ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${repo}/issues/${pr}/comments`],
         `the comments of PR #${pr}`,
       )
-    ).find((c) => c.login === me.login && (c.body ?? '').includes(marker))
+    ).find((c) => c.login === me.login && hasOwnMarker(c.body, mark))
     if (existing !== undefined) {
       comment = { id: existing.id, posted: false }
     } else {

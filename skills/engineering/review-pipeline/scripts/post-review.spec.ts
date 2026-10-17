@@ -222,6 +222,8 @@ for (const [kind, secret] of [
   ['a private key', '-----BEGIN OPENSSH PRIVATE KEY-----'],
   ['an API key (sk-)', `sk-proj-${'q'.repeat(24)}`],
   ['a Slack token', 'xoxb-1234567890-abcdef'],
+  ['a JWT', `eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiIxMjMifQ.${'s'.repeat(30)}`],
+  ['an OAuth token in a credential file', `"refresh_token": "${'r'.repeat(12)}-${'Q7'.repeat(10)}"`],
 ] as [string, string][]) {
   test(`a payload that holds ${kind} is refused before any gh call`, async (t) => {
     const comment = { ...PAYLOAD.comments[0], body: `**F1** leaked: ${secret}` }
@@ -242,6 +244,14 @@ for (const [name, text] of [
   ['split by an HTML comment', `ghp<!-- hidden -->_${'A1b2'.repeat(9)}`],
   ['with a zero-width character in its prefix', `gh\u200Bp_${'A1b2'.repeat(9)}`],
   ['in a suggestion block', '**F1** fix\n\n```suggestion\nconst t = "' + LEAK + '"\n```'],
+  ['split by a soft hyphen', `gh\u00ADp_${'A1b2'.repeat(9)}`],
+  ['split by a word joiner and a bidi mark', `g\u2060h\u200Fp_${'A1b2'.repeat(9)}`],
+  ['in fullwidth letters', `\uFF47\uFF48\uFF50_${'A1b2'.repeat(9)}`],
+  ['written with HTML entities', `&#103;&#x68;p&lowbar;${'A1b2'.repeat(9)}`],
+  ['written with double-encoded entities', `&amp;#103;hp_${'A1b2'.repeat(9)}`],
+  ['with a markdown backslash escape', `ghp\\_${'A1b2'.repeat(9)}`],
+  ['split by an HTML tag', `gh<b></b>p_${'A1b2'.repeat(4)}<span>${'A1b2'.repeat(5)}</span>`],
+  ['split by a tag with attributes', `ghp_<i class="x">${'A1b2'.repeat(9)}</i>`],
 ]) {
   test(`a GitHub token ${name} is refused before any gh call`, async (t) => {
     const comment = { ...PAYLOAD.comments[0], body: text }
@@ -253,6 +263,29 @@ for (const [name, text] of [
     assert.deepEqual(await s.gh.calls(), [])
   })
 }
+
+// Only the helper CLI writes the pipeline marker. A marker in agent-written
+// text could pass for an earlier post, so it is refused wherever it appears.
+for (const [name, change] of [
+  ['the walkthrough body', (m: string) => ({ ...PAYLOAD, body: `## Review\n\n${m}` })],
+  ['an inline comment body', (m: string) => ({ ...PAYLOAD, comments: [{ ...PAYLOAD.comments[0], body: `**F1** x ${m}` }] })],
+] as const) {
+  test(`a pipeline marker in ${name} is refused before any gh call`, async (t) => {
+    const s = await setup(t, { payload: change(MARKER.replace('round=1', 'round=2')) })
+    const { code, stdout, stderr } = await s.post()
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.match(stderr, /contains the marker "hero-pocock:review-pipeline", which only the helper CLI writes\. Nothing was posted/)
+    assert.deepEqual(await s.gh.calls(), [])
+  })
+}
+
+test('a marker tag written in another case is refused too', async (t) => {
+  const s = await setup(t, { payload: { ...PAYLOAD, body: 'x <!-- HERO-POCOCK:Review-Pipeline pr=13 -->' } })
+  const { code, stderr } = await s.post()
+  assert.equal(code, 1)
+  assert.match(stderr, /contains the marker/)
+})
 
 test('a payload with an unknown top-level key is refused before any gh call', async (t) => {
   const s = await setup(t, { payload: { ...PAYLOAD, commit_id: 'd'.repeat(40) } })
