@@ -102,7 +102,7 @@ function judge(view: PrView, state: State): Gate {
   return { gate: 'go', ...base, problems: [] }
 }
 
-async function readGate(repo: string, pr: number, state: State): Promise<Gate> {
+export async function readGate(repo: string, pr: number, state: State): Promise<Gate> {
   const viewed = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', VIEW_FIELDS])
   refuse(viewed.code === 0, `cannot read PR #${pr}: ${oneLine(viewed.stderr)}`)
   return judge(json<PrView>(viewed.stdout, 'pr view'), state)
@@ -159,18 +159,24 @@ async function merge(argv: string[]): Promise<string> {
     state.phase === 'explained' || state.phase === 'merged',
     `merge needs phase explained, but PR #${args.pr} is at ${state.phase}`,
   )
-  const gate = await readGate(args.repo, args.pr, state)
+  return squashMerge(args.repo, args.pr, state)
+}
+
+// Run the gate again and, on go, squash-merge the run's head. A PR already
+// merged changes nothing. Shared by `merge` and `stack merge-layer`.
+export async function squashMerge(repo: string, pr: number, state: State): Promise<string> {
+  const gate = await readGate(repo, pr, state)
   if (gate.gate === 'merged') return `${JSON.stringify({ merged: true, already: true })}\n`
-  refuse(gate.gate === 'go', `not merging PR #${args.pr} (gate ${gate.gate}): ${gate.problems.join('; ')}`)
+  refuse(gate.gate === 'go', `not merging PR #${pr} (gate ${gate.gate}): ${gate.problems.join('; ')}`)
 
   // Never --admin (it skips the checks), never --delete-branch (it fails in a
   // linked worktree). --match-head-commit refuses a head nobody re-checked.
-  const merged = await gh(['pr', 'merge', String(args.pr), '--repo', args.repo, '--squash', '--match-head-commit', state.head_sha])
-  refuse(merged.code === 0, `GitHub refused the squash merge of PR #${args.pr}: ${oneLine(merged.stderr || merged.stdout)}`)
-  const after = await gh(['pr', 'view', String(args.pr), '--repo', args.repo, '--json', 'state,mergeCommit'])
-  refuse(after.code === 0, `cannot read PR #${args.pr} after the merge: ${oneLine(after.stderr)}`)
+  const merged = await gh(['pr', 'merge', String(pr), '--repo', repo, '--squash', '--match-head-commit', state.head_sha])
+  refuse(merged.code === 0, `GitHub refused the squash merge of PR #${pr}: ${oneLine(merged.stderr || merged.stdout)}`)
+  const after = await gh(['pr', 'view', String(pr), '--repo', repo, '--json', 'state,mergeCommit'])
+  refuse(after.code === 0, `cannot read PR #${pr} after the merge: ${oneLine(after.stderr)}`)
   const view = json<{ state: string; mergeCommit: { oid?: string } | null }>(after.stdout, 'pr view')
-  refuse(view.state === 'MERGED', `PR #${args.pr} is ${view.state} after the merge call, not MERGED`)
+  refuse(view.state === 'MERGED', `PR #${pr} is ${view.state} after the merge call, not MERGED`)
   return `${JSON.stringify({ merged: true, already: false, merge_commit: view.mergeCommit?.oid ?? null })}\n`
 }
 

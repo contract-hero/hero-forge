@@ -9,6 +9,7 @@ import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as me
 import { main as postReview } from './post-review.ts'
 import { main as reply } from './reply.ts'
 import { main as runState } from './run-state.ts'
+import { main as stack } from './stack.ts'
 
 const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   config,
@@ -20,6 +21,7 @@ const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   'merge-gate': mergeGate,
   merge,
   explainer,
+  stack,
 }
 
 const USAGE = `usage: review.ts <subcommand> [options]

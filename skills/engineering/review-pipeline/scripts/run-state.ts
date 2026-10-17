@@ -109,7 +109,7 @@ function problem(value: unknown): string | undefined {
   return undefined
 }
 
-function stateRoot(): string {
+export function stateRoot(): string {
   const override = process.env.HERO_POCOCK_STATE_DIR
   if (override !== undefined && override !== '') return override
   const git = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' })
