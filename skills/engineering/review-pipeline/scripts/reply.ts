@@ -9,19 +9,16 @@
 // Each post carries a hidden marker, so a re-run skips what is already on the
 // PR (counting only posts by the same gh user). Replies always post as the
 // user: the PR author answers the review.
-import { parseArgs } from 'node:util'
-import { gh, json, listInlineComments, listLines, oneLine, postedFindings, refuse, userIdentity } from './github.ts'
+import { parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
+import { gh, json, listInlineComments, listLines, oneLine, postedFindings, userIdentity } from './github.ts'
 import { CLOSED, DECISIONS, loadLedger, loadRecheck, type LedgerEntry } from './ledger.ts'
-import { Failure, loadState } from './run-state.ts'
+import { loadState } from './run-state.ts'
 import { refuseSecretsIn } from './secrets.ts'
 
-const PREFIX = 'review.ts reply: '
 const USAGE = `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
                        [--recheck <recheck-r(R-1).json>]   (round 2 and later)`
 
-function usage(message: string): Failure {
-  return new Failure(`${message}\n${USAGE}`, 2)
-}
+const usage = usageFor(USAGE)
 
 const cell = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|')
 
@@ -47,31 +44,22 @@ function summary(round: number, targets: LedgerEntry[], marker: string): string 
 }
 
 async function reply(argv: string[]): Promise<string> {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: {
-        repo: { type: 'string' },
-        pr: { type: 'string' },
-        round: { type: 'string' },
-        ledger: { type: 'string' },
-        recheck: { type: 'string' },
-      },
-    }).values
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
-  const { repo, pr: prText, round: roundText, ledger: ledgerPath } = values
-  if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
-  if (prText === undefined || !/^[0-9]+$/.test(prText) || Number(prText) < 1) throw usage('--pr must be a positive whole number')
-  if (roundText === undefined || !/^[0-9]+$/.test(roundText) || Number(roundText) < 1) {
-    throw usage('--round must be a positive whole number')
-  }
+  const { values } = parse(
+    argv,
+    {
+      repo: { type: 'string' },
+      pr: { type: 'string' },
+      round: { type: 'string' },
+      ledger: { type: 'string' },
+      recheck: { type: 'string' },
+    },
+    usage,
+  )
+  const repo = repoOption(values.repo, usage)
+  const pr = positive('pr', values.pr, usage)
+  const round = positive('round', values.round, usage)
+  const ledgerPath = values.ledger
   if (ledgerPath === undefined) throw usage('--ledger is required')
-  const pr = Number(prText)
-  const round = Number(roundText)
 
   const ledger = await loadLedger(ledgerPath)
   const closed = new Set(
@@ -149,13 +137,4 @@ async function reply(argv: string[]): Promise<string> {
   return `${JSON.stringify({ round, replied, skipped, walkthrough, comment })}\n`
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    process.stdout.write(await reply(argv))
-    return 0
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('reply', reply)

@@ -2,11 +2,14 @@
 // tests' fake `gh` stands in for it.
 import { spawn } from 'node:child_process'
 import { mintAppToken } from './app-token.ts'
-import { Failure } from './run-state.ts'
+import { Failure, refuse } from './cli.ts'
 
 export type GhResult = { code: number | null; stdout: string; stderr: string }
 
-// Run `gh` with `input` on stdin (closed either way, so the call returns).
+// Run `gh` with `input` on stdin (closed either way, so the call returns). A
+// gh that exits before it reads stdin makes the write fail with EPIPE; the
+// exit code and output still tell the caller what happened, so that error is
+// ignored rather than left to crash the process.
 // With `token`, gh runs as that token (the reviewer App) through GH_TOKEN;
 // without it, gh runs as the user, with the environment unchanged.
 export function gh(args: string[], input = '', token?: string): Promise<GhResult> {
@@ -19,12 +22,9 @@ export function gh(args: string[], input = '', token?: string): Promise<GhResult
     child.stderr.on('data', (chunk) => (stderr += chunk))
     child.on('error', reject)
     child.on('close', (code) => resolve({ code, stdout, stderr }))
+    child.stdin.on('error', () => {})
     child.stdin.end(input)
   })
-}
-
-export function refuse(ok: boolean, message: string): void {
-  if (!ok) throw new Failure(message, 1)
 }
 
 export function oneLine(text: string): string {

@@ -14,15 +14,14 @@ import { spawnSync } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseArgs } from 'node:util'
+import { Failure, parse, positive, runMain, usageFor } from './cli.ts'
 import { checkCodex, execRole, repoRoot, SCHEMAS, type CodexResult } from './codex-exec.ts'
 import { loadConfig, type ResolvedConfig } from './config.ts'
 import { gh, json, oneLine } from './github.ts'
 import { main as postReview } from './post-review.ts'
-import { Failure, loadState, runDir, type State } from './run-state.ts'
+import { loadState, runDir, type State } from './run-state.ts'
 import { schemaProblem } from './schema.ts'
 
-const PREFIX = 'review.ts codex-review: '
 const USAGE = 'usage: review.ts codex-review --pr N [--issue <n>]... [--config <path>]'
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const CHECKLIST = ['documented standards', 'smells', 'bugs', 'silent failures', 'test gaps']
@@ -139,22 +138,15 @@ async function orchestratorTemplate(): Promise<string> {
 }
 
 async function review(argv: string[]): Promise<number> {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: { pr: { type: 'string' }, issue: { type: 'string', multiple: true }, config: { type: 'string' } },
-    }).values
-  } catch (error) {
-    throw new Failure(`${(error as Error).message}\n${USAGE}`, 2)
-  }
-  if (values.pr === undefined || !/^[0-9]+$/.test(values.pr) || Number(values.pr) < 1) {
-    throw new Failure(`--pr must be a positive whole number\n${USAGE}`, 2)
-  }
+  const usage = usageFor(USAGE)
+  const { values } = parse(
+    argv,
+    { pr: { type: 'string' }, issue: { type: 'string', multiple: true }, config: { type: 'string' } },
+    usage,
+  )
+  const pr = positive('pr', values.pr, usage)
   const issues = values.issue ?? []
-  for (const n of issues) if (!/^[0-9]+$/.test(n)) throw new Failure(`--issue must be an issue number, not "${n}"\n${USAGE}`, 2)
-  const pr = Number(values.pr)
+  for (const n of issues) if (!/^[0-9]+$/.test(n)) throw usage(`--issue must be an issue number, not "${n}"`)
 
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
@@ -180,7 +172,7 @@ async function review(argv: string[]): Promise<number> {
   for (let k = 1; k <= config.pairs; k++) for (const axis of AXES) jobs.push(reviewer(config, c, k, axis))
   const reviewers = await Promise.all(jobs)
   const failed = reviewers.filter((r) => r.result !== 'reused' && !r.result.ok)
-  for (const r of failed) process.stderr.write(`${PREFIX}${r.name} failed: ${(r.result as { message: string }).message}\n`)
+  for (const r of failed) process.stderr.write(`review.ts codex-review: ${r.name} failed: ${(r.result as { message: string }).message}\n`)
   if (failed.length === reviewers.length) {
     await writeFile(join(dir, 'orchestrator-report.md'), `Every reviewer failed, so nothing was posted: ${failed.map((r) => r.name).join(', ')}.\n`)
     throw new Failure('every reviewer failed, so nothing was posted. See the reviewer logs in the run dir.', 1)
@@ -235,12 +227,4 @@ async function review(argv: string[]): Promise<number> {
     '--kind', 'review', '--payload', payloadPath, ...(values.config === undefined ? [] : ['--config', values.config])])
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    return await review(argv)
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('codex-review', review)

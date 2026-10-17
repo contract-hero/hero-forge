@@ -203,6 +203,15 @@ test('a brief that does not exist exits 1 without calling codex exec', async (t)
   assert.deepEqual((await codex.calls()).map((c) => c.argv[0]), ['--version'])
 })
 
+test('a log that cannot be written exits 1 without calling codex exec', async (t) => {
+  const { dir, brief, codex, exec } = await setup(t)
+  const log = join(dir, 'no-such-dir', 'r.log')
+  const { code, stderr } = await exec('--role', 'reviewer', '--brief', brief, '--out', join(dir, 'r.json'), '--log', log)
+  assert.equal(code, 1)
+  assert.match(stderr, /^review\.ts codex-exec: cannot write the log .*no-such-dir\/r\.log/)
+  assert.deepEqual((await codex.calls()).map((c) => c.argv[0]), ['--version'])
+})
+
 test('a bad role or a missing flag is a usage error', async (t) => {
   const { dir, brief, exec } = await setup(t)
   assert.equal((await exec('--role', 'rechecker', '--brief', brief, '--out', join(dir, 'r.json'))).code, 2)

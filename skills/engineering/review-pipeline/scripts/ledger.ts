@@ -1,7 +1,7 @@
 // The findings ledger (`<run dir>/findings.json`), the re-checker's output
 // (`<run dir>/recheck-r<N>.json`), and the gate that compares them.
 import { readFile } from 'node:fs/promises'
-import { Failure } from './run-state.ts'
+import { Failure, refuse as check } from './cli.ts'
 
 export const DECISIONS = ['ACCEPT', 'REFUTE']
 export const CLOSED = ['fixed', 'refutation_accepted']
@@ -22,10 +22,6 @@ async function readJson(path: string, what: string): Promise<unknown> {
   } catch {
     throw new Failure(`${what} ${path} is not valid JSON`, 1)
   }
-}
-
-function check(ok: boolean, message: string): void {
-  if (!ok) throw new Failure(message, 1)
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)

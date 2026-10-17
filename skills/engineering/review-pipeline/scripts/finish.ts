@@ -9,9 +9,9 @@
 //                          links it from the PR in one comment, posted once.
 import { stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { parseArgs } from 'node:util'
-import { gh, json, listLines, oneLine, refuse, userIdentity } from './github.ts'
-import { Failure, loadState, saveState, type State } from './run-state.ts'
+import { parse as parseOptions, positive, refuse, repoOption, runMain, usageFor, type Usage } from './cli.ts'
+import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
+import { loadState, saveState, type State } from './run-state.ts'
 
 const VIEW_FIELDS = 'state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup'
 
@@ -110,32 +110,18 @@ export async function readGate(repo: string, pr: number, state: State): Promise<
 
 type Args = { repo: string; pr: number; file?: string }
 
-function parse(argv: string[], usage: (message: string) => Failure, withFile: boolean): Args {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: { repo: { type: 'string' }, pr: { type: 'string' }, ...(withFile ? { file: { type: 'string' } } : {}) },
-    }).values as { repo?: string; pr?: string; file?: string }
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
-  if (values.repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(values.repo)) throw usage('--repo must be OWNER/REPO')
-  if (values.pr === undefined || !/^[0-9]+$/.test(values.pr) || Number(values.pr) < 1) {
-    throw usage('--pr must be a positive whole number')
-  }
-  return { repo: values.repo, pr: Number(values.pr), file: values.file }
+function parse(argv: string[], usage: Usage, withFile: boolean): Args {
+  const common = { repo: { type: 'string' }, pr: { type: 'string' } } as const
+  const values: { repo?: string; pr?: string; file?: string } = withFile
+    ? parseOptions(argv, { ...common, file: { type: 'string' } }, usage).values
+    : parseOptions(argv, common, usage).values
+  return { repo: repoOption(values.repo, usage), pr: positive('pr', values.pr, usage), file: values.file }
 }
 
 async function stateFor(args: Args): Promise<State> {
   const state = await loadState(args.pr)
   refuse(state.repo === args.repo, `the run state for PR #${args.pr} is for ${state.repo}, not ${args.repo}`)
   return state
-}
-
-function usageFor(usage: string): (message: string) => Failure {
-  return (message) => new Failure(`${message}\n${usage}`, 2)
 }
 
 const MERGE_GATE_USAGE = 'usage: review.ts merge-gate --repo O/R --pr N'
@@ -212,19 +198,6 @@ async function explainer(argv: string[]): Promise<string> {
   return `${JSON.stringify({ explainer: file, comment: { id, posted: true } })}\n`
 }
 
-function runner(name: string, fn: (argv: string[]) => Promise<string>): (argv: string[]) => Promise<number> {
-  return async (argv) => {
-    try {
-      process.stdout.write(await fn(argv))
-      return 0
-    } catch (error) {
-      if (!(error instanceof Failure)) throw error
-      process.stderr.write(`review.ts ${name}: ${error.message}\n`)
-      return error.code
-    }
-  }
-}
-
-export const mergeGateMain = runner('merge-gate', mergeGate)
-export const mergeMain = runner('merge', merge)
-export const explainerMain = runner('explainer', explainer)
+export const mergeGateMain = runMain('merge-gate', mergeGate)
+export const mergeMain = runMain('merge', merge)
+export const explainerMain = runMain('explainer', explainer)

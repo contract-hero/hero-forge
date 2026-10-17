@@ -4,7 +4,7 @@
 //
 // Scan the exact strings that get posted, never a JSON encoding of them: in
 // JSON a newline becomes `\n`, and `n` before a token hides its start.
-import { Failure } from './run-state.ts'
+import { Failure } from './cli.ts'
 
 // A token starts where no letter or digit comes before it.
 const START = '(?<![A-Za-z0-9])'

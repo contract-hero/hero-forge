@@ -11,7 +11,7 @@
 // `recheck` and `verdict` posts also run the gate (ledger.ts) and print its
 // result, on a duplicate too. An APPROVE on a failing gate is refused.
 import { readFile } from 'node:fs/promises'
-import { parseArgs } from 'node:util'
+import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { loadConfig } from './config.ts'
 import {
   appIdentity,
@@ -21,18 +21,15 @@ import {
   listLines,
   oneLine,
   postedFindings,
-  refuse,
   userIdentity,
   type Identity,
 } from './github.ts'
 import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
-import { Failure, loadState, saveState, type State } from './run-state.ts'
+import { isOneOf, KINDS, loadState, saveState, type State } from './run-state.ts'
 import { refuseSecretsIn } from './secrets.ts'
 
-const PREFIX = 'review.ts post-review: '
 const EVENTS = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES']
 const SIDES = ['RIGHT', 'LEFT']
-const KINDS = ['review', 'recheck', 'verdict']
 
 const USAGE = `usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R
                              --kind review|recheck|verdict --payload <file> [--config <path>]
@@ -50,9 +47,7 @@ type Payload = { event: string; body: string; comments: Comment[] }
 
 const isPositiveInt = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v > 0
 
-function usage(message: string): Failure {
-  return new Failure(`${message}\n${USAGE}`, 2)
-}
+const usage = usageFor(USAGE)
 
 const PAYLOAD_KEYS = ['event', 'body', 'comments']
 const COMMENT_KEYS = ['path', 'line', 'side', 'start_line', 'start_side', 'body']
@@ -98,34 +93,27 @@ async function record(state: State | undefined, entry: State['reviews'][number])
 }
 
 async function post(argv: string[]): Promise<string> {
-  let values
-  try {
-    values = parseArgs({
-      args: argv,
-      strict: true,
-      options: {
-        repo: { type: 'string' },
-        pr: { type: 'string' },
-        commit: { type: 'string' },
-        round: { type: 'string' },
-        kind: { type: 'string' },
-        payload: { type: 'string' },
-        config: { type: 'string' },
-        ledger: { type: 'string' },
-        recheck: { type: 'string' },
-      },
-    }).values
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
-  const { repo, pr: prText, commit, round: roundText, kind, payload: payloadPath } = values
-  if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
-  if (prText === undefined || !/^[0-9]+$/.test(prText) || Number(prText) < 1) throw usage('--pr must be a positive whole number')
+  const { values } = parse(
+    argv,
+    {
+      repo: { type: 'string' },
+      pr: { type: 'string' },
+      commit: { type: 'string' },
+      round: { type: 'string' },
+      kind: { type: 'string' },
+      payload: { type: 'string' },
+      config: { type: 'string' },
+      ledger: { type: 'string' },
+      recheck: { type: 'string' },
+    },
+    usage,
+  )
+  const { commit, kind, payload: payloadPath } = values
+  const repo = repoOption(values.repo, usage)
+  const pr = positive('pr', values.pr, usage)
   if (commit === undefined || !/^[0-9a-f]{40}$/.test(commit)) throw usage('--commit must be a 40-hex commit SHA')
-  if (roundText === undefined || !/^[0-9]+$/.test(roundText) || Number(roundText) < 1) {
-    throw usage('--round must be a positive whole number')
-  }
-  if (kind === undefined || !KINDS.includes(kind)) throw usage('--kind must be review, recheck or verdict')
+  const round = positive('round', values.round, usage)
+  if (!isOneOf(KINDS, kind)) throw usage('--kind must be review, recheck or verdict')
   if (payloadPath === undefined) throw usage('--payload is required')
   const gated = kind !== 'review'
   if (gated && (values.ledger === undefined || values.recheck === undefined)) {
@@ -134,8 +122,6 @@ async function post(argv: string[]): Promise<string> {
   if (!gated && (values.ledger !== undefined || values.recheck !== undefined)) {
     throw usage('--ledger and --recheck go with --kind recheck or verdict only')
   }
-  const pr = Number(prText)
-  const round = Number(roundText)
 
   // The pipeline never gets here without a valid config, so any problem is broken (4).
   const loaded = await loadConfig(values.config)
@@ -236,13 +222,4 @@ async function findOwnReview(
   return reviews.find((r) => r.login === poster.login && r.commit_id === commit && (r.body ?? '').includes(marker))?.id
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    process.stdout.write(await post(argv))
-    return 0
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('post-review', post)

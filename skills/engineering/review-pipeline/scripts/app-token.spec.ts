@@ -67,7 +67,7 @@ test('a working App prints the minted token, signed by its key, for this one rep
       ['GET', '/app', true, '123456', 'application/vnd.github+json', '2022-11-28'],
     ],
   )
-  assert.deepEqual(s.api.requests[1].body, {
+  assert.deepEqual(s.api.requests[1]?.body, {
     repositories: ['hero-pocock'],
     permissions: { pull_requests: 'write', contents: 'read' },
   })
@@ -185,7 +185,7 @@ test('--copy-from copies lfg credentials into a fresh env file and key, and prin
     env: { ...env, HERO_POCOCK_GITHUB_API_URL: api.url },
   })
   assert.deepEqual(minted, { code: 0, stdout: '', stderr: '' })
-  assert.equal(api.requests[0].iss, '987654')
+  assert.equal(api.requests[0]?.iss, '987654')
 })
 
 test('--copy-from never overwrites existing credentials without --force', async (t) => {
@@ -238,11 +238,11 @@ test('the env file is read as data: export, quotes, comments and a ~/ key path',
     `# reviewer App\n\nexport HERO_POCOCK_REVIEWER_APP_ID="Iv23liFAKE"\nHERO_POCOCK_REVIEWER_APP_KEY='~/.config/hero-pocock/reviewer-app.pem'\n`,
   )
   // No HERO_POCOCK_REVIEWER_APP_ENV: the default path under this test's HOME is used.
-  const env = { ...baseEnv(), HOME: home, HERO_POCOCK_GITHUB_API_URL: `${api.url}/` }
+  const env: Record<string, string | undefined> = { ...baseEnv(), HOME: home, HERO_POCOCK_GITHUB_API_URL: `${api.url}/` }
   delete env.HERO_POCOCK_REVIEWER_APP_ENV
   const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', configPath, '--login'], { env })
   assert.equal(stderr, '')
   assert.equal(code, 0)
   assert.equal(stdout, 'hero-reviewer[bot]\n')
-  assert.equal(api.requests[0].iss, 'Iv23liFAKE')
+  assert.equal(api.requests[0]?.iss, 'Iv23liFAKE')
 })

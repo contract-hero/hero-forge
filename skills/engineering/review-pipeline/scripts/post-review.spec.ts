@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   appKey,
@@ -188,6 +188,18 @@ test('GitHub rejecting the review exits 1 with its message and records nothing',
   assert.deepEqual(await s.reviews(), [])
 })
 
+test('a gh that refuses a large review without reading it is a clean exit 1, not an EPIPE crash', async (t) => {
+  const big = { ...PAYLOAD, body: `## Review pipeline: round 1\n\n${'A long walkthrough line.\n'.repeat(200000)}` }
+  const s = await setup(t, {
+    payload: big,
+    responses: [{ match: '-X POST', stderr: 'HTTP 422: body too long', exit: 1, ignore_stdin: true }],
+  })
+  const { code, stdout, stderr } = await s.post()
+  assert.equal(stdout, '')
+  assert.equal(code, 1)
+  assert.match(stderr, /^review\.ts post-review: GitHub rejected the review: HTTP 422: body too long\n$/)
+})
+
 test('listing the existing reviews failing exits 1 and posts nothing', async (t) => {
   const s = await setup(t, { responses: [{ match: '--paginate', stderr: 'HTTP 404\n', exit: 1 }] })
   const { code, stderr } = await s.post()
@@ -202,7 +214,7 @@ for (const [kind, secret] of [
   ['a private key', '-----BEGIN OPENSSH PRIVATE KEY-----'],
   ['an API key (sk-)', `sk-proj-${'q'.repeat(24)}`],
   ['a Slack token', 'xoxb-1234567890-abcdef'],
-]) {
+] as [string, string][]) {
   test(`a payload that holds ${kind} is refused before any gh call`, async (t) => {
     const comment = { ...PAYLOAD.comments[0], body: `**F1** leaked: ${secret}` }
     const s = await setup(t, { payload: { ...PAYLOAD, comments: [comment, PAYLOAD.comments[1]] } })

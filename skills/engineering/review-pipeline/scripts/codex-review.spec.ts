@@ -65,7 +65,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   return { dir, repo, sha, gh, codex, runDir, review, execs, posts }
 }
 
-const flag = (call: FakeCodexCall, name: string) => call.argv[call.argv.indexOf(name) + 1]
+const flag = (call: FakeCodexCall, name: string) => call.argv[call.argv.indexOf(name) + 1] ?? ''
 
 test('codex-review runs each reviewer read-only, has the Orchestrator consolidate read-only, then posts its checked payload', async (t) => {
   const s = await setup(t)

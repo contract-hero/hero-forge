@@ -10,11 +10,8 @@
 import { spawnSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { parseArgs } from 'node:util'
-
-const PREFIX = 'review.ts config: '
-
-type Runtime = 'codex' | 'claude'
+import { Failure, parse as parseOptions, runMain, usageFor } from './cli.ts'
+import type { Runtime } from './run-state.ts'
 
 const DEFAULTS: Record<Runtime, Record<RoleName, { model: string; effort: string }>> = {
   codex: { orchestrator: { model: 'gpt-6-astra', effort: 'low' }, reviewer: { model: 'gpt-6.1-sol', effort: 'high' } },
@@ -120,8 +117,12 @@ function parse(text: string): Parsed {
   return parsed
 }
 
-function count(name: string, value: Value | undefined): number {
-  if (value === undefined) return 2
+// `pairs` and `max_rounds` when the block leaves them out.
+const DEFAULT_PAIRS = 2
+const DEFAULT_MAX_ROUNDS = 2
+
+function count(name: string, value: Value | undefined, fallback: number): number {
+  if (value === undefined) return fallback
   if (value.quoted || !/^[0-9]+$/.test(value.text)) {
     throw new Invalid(`${name} must be a whole number, got "${value.text}"`, value.line)
   }
@@ -148,14 +149,14 @@ function resolveConfig(path: string, parsed: Parsed) {
     throw new Invalid(`unknown runtime "${runtimeValue.text}" (codex or claude)`, runtimeValue.line)
   }
   const runtime: Runtime = runtimeValue.text
-  const pairs = count('pairs', parsed.top.get('pairs'))
-  const maxRounds = count('max_rounds', parsed.top.get('max_rounds'))
+  const pairs = count('pairs', parsed.top.get('pairs'), DEFAULT_PAIRS)
+  const maxRounds = count('max_rounds', parsed.top.get('max_rounds'), DEFAULT_MAX_ROUNDS)
   const appValue = parsed.top.get('app')
   if (appValue !== undefined && appValue.text !== 'enabled') {
     throw new Invalid(`app must be "enabled" or left out, got "${appValue.text}"`, appValue.line)
   }
 
-  const roles = ROLES.map((role) => {
+  const resolveRole = (role: RoleName) => {
     const given = parsed.roles.get(role) ?? new Map<string, Value>()
     const modelValue = given.get('model')
     const effortValue = given.get('effort')
@@ -176,22 +177,17 @@ function resolveConfig(path: string, parsed: Parsed) {
     }
     const agent = runtime === 'claude' ? agentModel(model, `${role}.model`, modelValue?.line) : null
     return { model, effort, agent_model: agent }
-  })
+  }
 
   return {
     config_path: path,
     runtime,
     pairs,
-    orchestrator: roles[0],
-    reviewer: roles[1],
+    orchestrator: resolveRole('orchestrator'),
+    reviewer: resolveRole('reviewer'),
     max_rounds: maxRounds,
     app: appValue !== undefined,
   }
-}
-
-function fail(message: string, code: number): number {
-  process.stderr.write(`${PREFIX}${message}\n`)
-  return code
 }
 
 function defaultPath(): string {
@@ -227,16 +223,11 @@ export async function loadConfig(
   }
 }
 
-export async function main(argv: string[]): Promise<number> {
-  let path: string | undefined
-  try {
-    const { values } = parseArgs({ args: argv, options: { config: { type: 'string' } }, strict: true })
-    path = values.config
-  } catch (error) {
-    return fail(`${(error as Error).message}\nusage: review.ts config [--config <path>]`, 2)
-  }
-  const loaded = await loadConfig(path)
-  if (!loaded.ok) return fail(loaded.message, loaded.code)
-  process.stdout.write(`${JSON.stringify(loaded.config, null, 2)}\n`)
-  return 0
+async function config(argv: string[]): Promise<string> {
+  const { values } = parseOptions(argv, { config: { type: 'string' } }, usageFor('usage: review.ts config [--config <path>]'))
+  const loaded = await loadConfig(values.config)
+  if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
+  return `${JSON.stringify(loaded.config, null, 2)}\n`
 }
+
+export const main = runMain('config', config)

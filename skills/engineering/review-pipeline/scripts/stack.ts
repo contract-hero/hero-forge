@@ -12,12 +12,10 @@
 //   stack merge-layer  squash-merges one reviewed layer at its re-checked head.
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
-import { parseArgs } from 'node:util'
+import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { squashMerge } from './finish.ts'
-import { gh, json, listLines, oneLine, refuse } from './github.ts'
-import { Failure, loadState, stateRoot } from './run-state.ts'
-
-const PREFIX = 'review.ts stack: '
+import { gh, json, listLines, oneLine } from './github.ts'
+import { loadState, stateRoot } from './run-state.ts'
 
 const USAGE = `usage:
   review.ts stack order       --repo O/R --spec N
@@ -25,9 +23,7 @@ const USAGE = `usage:
   review.ts stack restack     --from <parent pre-landing tip> --onto <ref>   (in the layer's worktree)
   review.ts stack merge-layer --repo O/R --pr N --base <default branch>`
 
-function usage(message: string): Failure {
-  return new Failure(`${message}\n${USAGE}`, 2)
-}
+const usage = usageFor(USAGE)
 
 type Issue = { number: number; title: string; state: string }
 type Blocker = { number: number; state: string; repository_url: string }
@@ -80,13 +76,8 @@ function cycle(pending: Set<number>, blockers: Map<number, number[]>): Failure {
 }
 
 async function order(values: Record<string, string | boolean | undefined>): Promise<string> {
-  const repo = values.repo
-  const specText = values.spec
-  if (typeof repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
-  if (typeof specText !== 'string' || !/^[0-9]+$/.test(specText) || Number(specText) < 1) {
-    throw usage('--spec must be a positive whole number')
-  }
-  const spec = Number(specText)
+  const repo = repoOption(values.repo, usage)
+  const spec = positive('spec', values.spec, usage)
 
   const children = await listLines<Issue>(
     ['api', '--paginate', '--jq', '.[] | {number, title, state}', `repos/${repo}/issues/${spec}/sub_issues`],
@@ -252,13 +243,10 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
 // Land one layer: its review passed (`mode: layer`, phase complete), its PR
 // now targets the default branch, and the gate of review.ts merge says go.
 async function mergeLayer(values: Record<string, string | boolean | undefined>): Promise<string> {
-  const { repo, pr: prText, base } = values
-  if (typeof repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
-  if (typeof prText !== 'string' || !/^[0-9]+$/.test(prText) || Number(prText) < 1) {
-    throw usage('--pr must be a positive whole number')
-  }
+  const repo = repoOption(values.repo, usage)
+  const pr = positive('pr', values.pr, usage)
+  const { base } = values
   if (typeof base !== 'string' || base === '') throw usage('merge-layer needs --base <the default branch>')
-  const pr = Number(prText)
   const state = await loadState(pr)
   refuse(state.repo === repo, `the run state for PR #${pr} is for ${state.repo}, not ${repo}`)
   refuse(state.mode === 'layer', `the run for PR #${pr} is in ${state.mode} mode, not layer: use review.ts merge`)
@@ -287,12 +275,7 @@ const OPTIONS = {
 
 async function dispatch(argv: string[]): Promise<string> {
   const [command, ...rest] = argv
-  let values
-  try {
-    values = parseArgs({ args: rest, options: OPTIONS, strict: true }).values
-  } catch (error) {
-    throw usage((error as Error).message)
-  }
+  const { values } = parse(rest, OPTIONS, usage)
   switch (command) {
     case 'order':
       return order(values)
@@ -300,25 +283,11 @@ async function dispatch(argv: string[]): Promise<string> {
       return restack(values)
     case 'merge-layer':
       return mergeLayer(values)
-    case 'path': {
-      const spec = values.spec
-      if (typeof spec !== 'string' || !/^[0-9]+$/.test(spec) || Number(spec) < 1) {
-        throw usage('--spec must be a positive whole number')
-      }
-      return `${join(stateRoot(), `stack-${spec}`)}\n`
-    }
+    case 'path':
+      return `${join(stateRoot(), `stack-${positive('spec', values.spec, usage)}`)}\n`
     default:
       throw usage(`unknown command "${command ?? ''}"`)
   }
 }
 
-export async function main(argv: string[]): Promise<number> {
-  try {
-    process.stdout.write(await dispatch(argv))
-    return 0
-  } catch (error) {
-    if (!(error instanceof Failure)) throw error
-    process.stderr.write(`${PREFIX}${error.message}\n`)
-    return error.code
-  }
-}
+export const main = runMain('stack', dispatch)
