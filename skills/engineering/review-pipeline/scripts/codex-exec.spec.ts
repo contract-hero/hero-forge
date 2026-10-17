@@ -5,7 +5,10 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { baseEnv, fakeCodex, runCli, tempDir, type FakeCodexSpec } from './test-helpers.ts'
 
-const SCHEMA = join(dirname(dirname(fileURLToPath(import.meta.url))), 'findings.schema.json')
+const SKILL = dirname(dirname(fileURLToPath(import.meta.url)))
+const SCHEMA = join(SKILL, 'findings.schema.json')
+const REVIEW_SCHEMA = join(SKILL, 'review.schema.json')
+const REVIEW_OUTPUT = JSON.stringify({ payload: { event: 'COMMENT', body: '## Review pipeline: round 1', comments: [] }, ledger: [], report: 'kept 0' })
 const CODEX_CONFIG = '# Review pipeline\n\n```yaml\nruntime: codex\norchestrator:\n  model: gpt-6-astra\n  effort: low\nreviewer:\n  model: gpt-6.1-sol\n  effort: xhigh\n```\n'
 const FINDINGS = '{"axis":"standards","pair":1,"findings":[],"notes":""}'
 
@@ -41,30 +44,50 @@ test('a reviewer runs codex exec read-only with the configured model, effort and
     log,
   })
   assert.deepEqual(await codex.calls(), [
-    { argv: ['--version'], stdin: '' },
+    { argv: ['--version'], stdin: '', tokens: [] },
     {
       argv: ['exec', '-C', dir, '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=xhigh', '-s', 'read-only',
         '--output-schema', SCHEMA, '-o', out, '-'],
       stdin: 'You are the Standards reviewer of pair 1 of 2.\n',
+      tokens: [],
     },
   ])
   assert.equal(await readFile(out, 'utf8'), FINDINGS)
   assert.equal(await readFile(log, 'utf8'), 'session id: abc\n')
 })
 
-test('the orchestrator runs with full access, its own model and effort, and no output schema', async (t) => {
-  const { dir, codex, brief, exec } = await setup(t, { spec: { exec: { out: 'Posted review 99.\n' } } })
-  const out = join(dir, 'orchestrator-final.md')
+test('the orchestrator runs read-only, with its own model and effort, held to the review schema', async (t) => {
+  const { dir, codex, brief, exec } = await setup(t, { spec: { exec: { out: REVIEW_OUTPUT } } })
+  const out = join(dir, 'orchestrator-output.json')
   const log = join(dir, 'orchestrator.log')
 
   const { code, stdout, stderr } = await exec('--role', 'orchestrator', '--brief', brief, '--out', out, '--log', log)
 
   assert.equal(stderr, '')
   assert.equal(code, 0)
-  assert.deepEqual(JSON.parse(stdout), { role: 'orchestrator', model: 'gpt-6-astra', effort: 'low', sandbox: 'danger-full-access', out, log })
+  assert.deepEqual(JSON.parse(stdout), { role: 'orchestrator', model: 'gpt-6-astra', effort: 'low', sandbox: 'read-only', out, log })
   const [, call] = await codex.calls()
-  assert.deepEqual(call?.argv, ['exec', '-C', dir, '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=low', '-s', 'danger-full-access', '-o', out, '-'])
-  assert.equal(await readFile(out, 'utf8'), 'Posted review 99.\n')
+  assert.deepEqual(call?.argv, ['exec', '-C', dir, '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=low', '-s', 'read-only',
+    '--output-schema', REVIEW_SCHEMA, '-o', out, '-'])
+})
+
+test('codex never sees a gh token, even when the caller has one', async (t) => {
+  const { dir, codex, brief } = await setup(t, { spec: { exec: { out: FINDINGS } } })
+  const { code, stderr } = await runCli(
+    ['codex-exec', '--config', join(dir, 'review.md'), '--role', 'reviewer', '--brief', brief, '--out', join(dir, 'r.json')],
+    { cwd: dir, env: { ...codex.env, GH_TOKEN: 'ghp_secret', GITHUB_TOKEN: 'ghs_secret', GH_ENTERPRISE_TOKEN: 'x' } },
+  )
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual((await codex.calls()).map((c) => c.tokens), [[], []])
+})
+
+test('an output that is JSON but breaks the schema is a failed call', async (t) => {
+  const { dir, brief, exec } = await setup(t, { spec: { exec: { out: '{"axis":"standards","pair":1,"findings":[]}' } } })
+  const { code, stdout, stderr } = await exec('--role', 'reviewer', '--brief', brief, '--out', join(dir, 'r.json'))
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, /does not match .*findings\.schema\.json: \$: missing "notes"/)
 })
 
 const SETUP_HINT = /Codex CLI is missing or broken.*\/setup-review-pipeline/

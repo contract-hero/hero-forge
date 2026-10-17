@@ -105,9 +105,17 @@ export type FakeCodexStep = { exit?: number; stdout?: string; stderr?: string }
 
 // `version` answers `codex --version`. `exec` answers `codex exec ...`; its
 // `out` is written to the file named after `-o` (null: write nothing).
-export type FakeCodexSpec = { version?: FakeCodexStep; exec?: FakeCodexStep & { out?: string | null } }
+// `routes` answer an exec whose `-o` path contains `match` (first match wins;
+// no match falls back to `exec`).
+export type FakeCodexExec = FakeCodexStep & { out?: string | null }
+export type FakeCodexSpec = {
+  version?: FakeCodexStep
+  exec?: FakeCodexExec
+  routes?: (FakeCodexExec & { match: string })[]
+}
 
-export type FakeCodexCall = { argv: string[]; stdin: string }
+// `tokens` names the gh token variables the call could see.
+export type FakeCodexCall = { argv: string[]; stdin: string; tokens: string[] }
 
 export type FakeCodex = {
   env: Record<string, string | undefined>
@@ -118,10 +126,12 @@ const FAKE_CODEX = `import { appendFileSync, readFileSync, writeFileSync } from 
 const argv = process.argv.slice(2)
 const exec = argv[0] === 'exec'
 const stdin = exec && !process.stdin.isTTY ? readFileSync(0, 'utf8') : ''
-appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ argv, stdin }) + '\\n')
+const tokens = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'].filter((k) => process.env[k] !== undefined)
+appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ argv, stdin, tokens }) + '\\n')
 const spec = JSON.parse(readFileSync(process.env.FAKE_CODEX_SPEC, 'utf8'))
-const step = (exec ? spec.exec : spec.version) ?? {}
 const o = argv.indexOf('-o')
+const route = exec && o !== -1 ? (spec.routes ?? []).find((r) => argv[o + 1].includes(r.match)) : undefined
+const step = route ?? (exec ? spec.exec : spec.version) ?? {}
 if (exec && o !== -1 && step.out !== null) writeFileSync(argv[o + 1], step.out ?? '{}')
 if (step.stdout !== undefined) process.stdout.write(step.stdout)
 else if (!exec) process.stdout.write('codex-cli 0.163.0\\n')
