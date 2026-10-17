@@ -500,6 +500,46 @@ test('merge-layer does not merge a layer with no passing re-check at its head', 
   assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [BASE_VIEW, GATE_VIEW])
 })
 
+// Landing without the App: a restack moved the head, so the gate is run again
+// at the new head with `post-review --kind recheck`, which records it there.
+test('merge-layer lands a restacked layer without the App once the re-check is posted again at the new head', async (t) => {
+  const s = await layerRun(t)
+  const root = s.env.HERO_POCOCK_STATE_DIR!
+  const old = 'd'.repeat(40)
+  await seedState(root, {
+    base_ref: 'ticket/4-parent', head_ref: 'ticket/5-child', head_sha: SHA, mode: 'layer', phase: 'complete',
+    gates: [{ round: 1, commit: old, result: 'pass' }],
+  })
+  const stopped = await s.mergeLayer()
+  assert.equal(stopped.code, 1)
+  assert.match(stopped.stderr, /gate stop.*no re-check is recorded at the head/)
+
+  const dir = join(root, '..')
+  const config = join(dir, 'review.md')
+  const files = { ledger: join(dir, 'findings.json'), recheck: join(dir, 'recheck-r1.json'), payload: join(dir, 'landing.json') }
+  await writeFile(files.ledger, '[]')
+  await writeFile(files.recheck, JSON.stringify({ items: [] }))
+  await writeFile(files.payload, JSON.stringify({ event: 'COMMENT', body: '## Re-check: landing', comments: [] }))
+  await s.gh.respond([
+    { match: 'api user', stdout: 'alilloig\n' },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 880 }) },
+    { match: 'baseRefName', stdout: JSON.stringify({ baseRefName: 'main' }) },
+    { match: 'mergeStateStatus', stdout: prView() },
+    { match: 'state,mergeCommit', stdout: JSON.stringify({ state: 'MERGED', mergeCommit: { oid: MERGE_COMMIT } }) },
+  ])
+  const rechecked = await runCli(
+    ['post-review', '--repo', REPO, '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'recheck', '--payload', files.payload,
+      '--config', config, '--ledger', files.ledger, '--recheck', files.recheck],
+    { env: s.env },
+  )
+  assert.equal(rechecked.code, 0, rechecked.stderr)
+  assert.equal(JSON.parse(rechecked.stdout).gate, 'pass')
+  const landed = await s.mergeLayer()
+  assert.equal(landed.stderr, '')
+  assert.equal(landed.code, 0)
+  assert.deepEqual(JSON.parse(landed.stdout), { merged: true, already: false, merge_commit: MERGE_COMMIT })
+})
+
 test('merge-layer does not merge when the gate stops (the head moved after the re-check)', async (t) => {
   const s = await layerRun(t, { view: prView({ headRefOid: 'd'.repeat(40) }) })
   const { code, stderr } = await s.mergeLayer()

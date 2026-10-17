@@ -318,7 +318,7 @@ test('the review sent to GitHub holds only the allowed fields', async (t) => {
 
 test('a payload that only names a token prefix still posts', async (t) => {
   const s = await setup(t, {
-    payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes', comments: [] },
+    payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes, and read access_token: process.env.REVIEWER_APP_TOKEN_NAME', comments: [] },
     responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 556 }) }],
   })
   const { code, stderr } = await s.post()
