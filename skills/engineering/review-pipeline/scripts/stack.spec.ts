@@ -229,9 +229,30 @@ async function layers(t: Parameters<typeof tempDir>[0]) {
     }
     await git('checkout', '-q', 'child')
   }
+  // A stack-final fix: one more commit on the parent after the child branched.
+  const fixParent = async () => {
+    await git('checkout', '-q', 'parent')
+    await write('p.txt', 'parent, fixed\n')
+    await git('commit', '-qam', 'apply review round 1')
+    await git('checkout', '-q', 'child')
+    return git('rev-parse', 'parent')
+  }
   const restack = (from = parentTip) => runCli(['stack', 'restack', '--from', from, '--onto', 'main'], { cwd: dir, env })
-  return { dir, git, write, lines, parentTip, childTip, land, restack }
+  return { dir, git, write, lines, parentTip, childTip, land, fixParent, restack }
 }
+
+test('restack keeps only the child commits when the parent got a fix after the child branched', async (t) => {
+  const s = await layers(t)
+  const fixedTip = await s.fixParent()
+  await s.land()
+  const { code, stdout, stderr } = await s.restack(fixedTip)
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.equal(JSON.parse(stdout).same, true)
+  assert.equal(JSON.parse(stdout).commits, 2)
+  assert.equal(await s.git('log', '--format=%s', 'main..HEAD'), 'child adds c.txt\nchild edits line 5')
+  assert.equal(await s.git('show', 'HEAD:p.txt'), 'parent, fixed')
+})
 
 test('restack moves a layer onto main from the landed parent tip when the range-diff shows no content change', async (t) => {
   const s = await layers(t)
@@ -288,7 +309,7 @@ test('restack refuses a worktree with uncommitted changes', async (t) => {
   assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
 })
 
-test('restack refuses a --from that is not below the layer', async (t) => {
+test('restack refuses a --from that cuts no deeper into the layer than --onto', async (t) => {
   const s = await layers(t)
   await s.land()
   const mainTip = await s.git('rev-parse', 'main')
@@ -296,7 +317,7 @@ test('restack refuses a --from that is not below the layer', async (t) => {
   assert.equal(code, 1)
   assert.equal(
     stderr,
-    `review.ts stack: --from ${mainTip} is not an ancestor of child: pass the parent layer's pre-landing tip\n`,
+    `review.ts stack: --from ${mainTip} cuts no deeper into child than --onto main: pass the parent layer's pre-landing tip\n`,
   )
 })
 

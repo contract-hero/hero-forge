@@ -214,11 +214,18 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
     'the worktree has uncommitted changes: commit or remove them before restack',
   )
   const oldTip = mustGit(['rev-parse', 'HEAD'], 'cannot read HEAD')
-  refuse(
-    git(['merge-base', '--is-ancestor', from, 'HEAD']).ok,
-    `--from ${from} is not an ancestor of ${branch.out}: pass the parent layer's pre-landing tip`,
-  )
+  mustGit(['rev-parse', '--verify', '--quiet', `${from}^{commit}`], `--from ${from} is not a commit`)
   mustGit(['rev-parse', '--verify', '--quiet', `${onto}^{commit}`], `--onto ${onto} is not a commit`)
+  // The parent's tip can be past the point this layer branched from (a fix
+  // from the stack review), so it need not be an ancestor: git takes
+  // `<from>..HEAD` as this layer's own commits either way. But a `--from`
+  // that shares no more history with the layer than `--onto` does would
+  // replay the parent's commits too.
+  refuse(
+    mustGit(['merge-base', from, 'HEAD'], `--from ${from} shares no history with ${branch.out}`) !==
+      mustGit(['merge-base', onto, 'HEAD'], `--onto ${onto} shares no history with ${branch.out}`),
+    `--from ${from} cuts no deeper into ${branch.out} than --onto ${onto}: pass the parent layer's pre-landing tip`,
+  )
 
   const rebased = git(['rebase', '--onto', onto, from])
   if (!rebased.ok) {
