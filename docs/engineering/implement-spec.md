@@ -1,3 +1,5 @@
+> **Archived.** This skill was removed from the plugin in hero-pocock v0.2.0. It still lives in the repo under `skills/misc/` and takes upstream changes, but the plugin no longer ships it. Use [implement-spec-stack](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-spec-stack.md) instead: it lands a spec as a stack of reviewed pull requests, one per ticket. The page stays up for reference.
+
 ## What it does
 
 `implement-spec` takes a [spec](https://www.aihero.dev/ai-coding-dictionary/spec) and its [tickets](https://www.aihero.dev/ai-coding-dictionary/ticket) and lands the whole thing in one run. The orchestrating [agent](https://www.aihero.dev/ai-coding-dictionary/agent) hands each ticket to an implementer [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) working in its own git worktree, merges each finished branch into a single **integration branch**, runs [code-review](https://aihero.dev/skills-code-review) over the result, and resolves the tickets.

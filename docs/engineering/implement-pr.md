@@ -1,6 +1,6 @@
 ## What it does
 
-`implement-pr` builds one [ticket](https://www.aihero.dev/ai-coding-dictionary/ticket) and takes it to a reviewed pull request. It fetches the ticket, builds it with [tdd](https://aihero.dev/skills-tdd) at the pre-agreed seams the way [implement](https://aihero.dev/skills-implement) does, pushes a branch, and opens a **draft** PR whose body follows [pr](https://aihero.dev/skills-pr) and closes the ticket. Then it hands the PR to [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) with no question in between.
+`implement-pr` builds one [ticket](https://www.aihero.dev/ai-coding-dictionary/ticket) and takes it to a reviewed pull request. It fetches the ticket, builds it with [tdd](https://aihero.dev/skills-tdd) at the pre-agreed seams the way upstream `implement` does, pushes a branch, and opens a **draft** PR whose body follows [pr](https://aihero.dev/skills-pr) and closes the ticket. Then it hands the PR to [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) with no question in between.
 
 The [agent](https://www.aihero.dev/ai-coding-dictionary/agent) that writes the code never reviews it. Upstream `implement` runs `code-review` in its own session and commits to the current branch. `implement-pr` never commits on the default branch and runs no review of its own: the review comes from the pipeline's Orchestrator and lands on the PR.
 
@@ -11,7 +11,6 @@ You invoke this by typing `/implement-pr <ticket>`, and the agent won't reach fo
 | The work is... | Reach for |
 | --- | --- |
 | A ticket that should reach `main` through a reviewed PR | `/implement-pr #42` |
-| A ticket you want committed to the current branch, with an in-session review | [implement](https://aihero.dev/skills-implement) |
 | A PR that is already open, built by hand or by another tool | [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) directly |
 | A spec, not yet split up | [to-tickets](https://aihero.dev/skills-to-tickets) first, then `/implement-pr` per ticket |
 
@@ -40,7 +39,7 @@ The draft state is the point. A PR goes ready only after the pipeline's re-check
 
 **Why not `/implement` and then `/review-pipeline`?**
 
-That works, but `implement` commits to the branch you are on, which can be the default branch, and it runs a review inside the coding session first. `implement-pr` puts the work on a ticket branch, opens the PR, and starts the pipeline itself, so an AFK run goes from ticket to merge without you. The fork keeps upstream `implement` unedited so that upstream merges do not conflict.
+Upstream `implement` commits to the branch you are on, which can be the default branch, and it runs a review inside the coding session first. `implement-pr` puts the work on a ticket branch, opens the PR, and starts the pipeline itself, so an AFK run goes from ticket to merge without you. That is why the plugin no longer ships `implement`: it moved to `misc/`, unedited, so that upstream merges do not conflict.
 
 **What happens without `docs/agents/review.md`?**
 
