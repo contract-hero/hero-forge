@@ -46,3 +46,7 @@ Canonical names, unchanged. See `docs/agents/triage-labels.md`. Issues are judge
 ### Domain docs
 
 Single-context: `GLOSSARY.md` at the root, ADRs in `.agents/adr/`. See `docs/agents/domain.md`.
+
+### Review
+
+2 reviewer pairs on Codex, max 2 rounds, COMMENT reviews as you. See `docs/agents/review.md`.

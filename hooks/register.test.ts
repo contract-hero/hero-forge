@@ -20,6 +20,7 @@ const cases = [
   ['bare grilling from the plugin gets both addenda', { skill: 'grilling', source: 'plugin', pluginName: PLUGIN }, ASK + GRILL],
   ["another plugin's namespaced grilling is left alone", { skill: 'mattpocock-skills:grilling', source: 'plugin', pluginName: 'mattpocock-skills' }, ''],
   ['grill-me gets the general addendum only', { skill: 'grill-me', source: 'userSettings' }, ASK],
+  ['a loose copy of setup-review-pipeline gets the general addendum only', { skill: 'setup-review-pipeline', source: 'userSettings' }, ASK],
 ] as const
 
 describe('skill.prompt', () => {
