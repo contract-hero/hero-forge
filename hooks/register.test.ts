@@ -23,6 +23,9 @@ const cases = [
   ['a loose copy of setup-review-pipeline gets the general addendum only', { skill: 'setup-review-pipeline', source: 'userSettings' }, ASK],
   ['a loose copy of review-pipeline gets the general addendum only', { skill: 'review-pipeline', source: 'userSettings' }, ASK],
   ['a loose copy of implement-pr gets the general addendum only', { skill: 'implement-pr', source: 'userSettings' }, ASK],
+  ['a loose copy of implement-spec-stack gets the general addendum only', { skill: 'implement-spec-stack', source: 'userSettings' }, ASK],
+  ['a loose copy of the retired implement is left alone', { skill: 'implement', source: 'userSettings' }, ''],
+  ['a loose copy of the retired implement-spec is left alone', { skill: 'implement-spec', source: 'userSettings' }, ''],
 ] as const
 
 describe('skill.prompt', () => {

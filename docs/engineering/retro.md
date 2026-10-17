@@ -70,7 +70,7 @@ The input is different. [improve-codebase-architecture](https://aihero.dev/skill
 `retro` is the last step of the main chain, where you review how the chain went:
 
 ```txt
-grill-with-docs → to-spec → to-tickets → implement → code-review → retro
+grill-with-docs → to-spec → to-tickets → implement-pr → review-pipeline → retro
 ```
 
 Run it after a build worth learning from, in the same session or pointed at that session's log. You can skip it after a smooth build.

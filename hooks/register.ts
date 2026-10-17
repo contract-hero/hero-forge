@@ -18,8 +18,6 @@ const SKILLS = new Set([
   'to-spec',
   'to-tickets',
   'wayfinder',
-  'implement',
-  'implement-spec',
   'implement-pr',
   'implement-spec-stack',
   'prototype',

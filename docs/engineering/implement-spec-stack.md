@@ -2,7 +2,7 @@
 
 `implement-spec-stack` takes a [spec](https://www.aihero.dev/ai-coding-dictionary/spec) and its [tickets](https://www.aihero.dev/ai-coding-dictionary/ticket) and turns them into a **stack** of draft pull requests, one per ticket. Each ticket is a **layer**: a branch cut from the ticket it waits on, with a PR that targets that branch. Implementer [subagents](https://www.aihero.dev/ai-coding-dictionary/subagent) build the ready tickets in their own git worktrees, and each layer goes through [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) against its parent layer. Then one final review of the whole stack runs against the spec, and the stack lands bottom-up.
 
-Nothing merges until the whole stack has passed its final review. Upstream [implement-spec](https://aihero.dev/skills-implement-spec) collapses every ticket into one integration branch and reviews it once in the coding session; this skill keeps one reviewed PR per ticket, so each review is small, and the final review can still change any layer before the first one lands.
+Nothing merges until the whole stack has passed its final review. Upstream `implement-spec` collapses every ticket into one integration branch and reviews it once in the coding session; this skill keeps one reviewed PR per ticket, so each review is small, and the final review can still change any layer before the first one lands.
 
 ## When to reach for it
 
@@ -12,7 +12,6 @@ You invoke this by typing `/implement-spec-stack <spec>`, and the agent won't re
 | --- | --- |
 | A spec split into tickets with `blocked_by` edges, that should reach `main` as reviewed PRs, one per ticket | `/implement-spec-stack #2` |
 | One ticket that should reach `main` through a reviewed PR | [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) |
-| A whole spec on one integration branch, with an in-session review | [implement-spec](https://aihero.dev/skills-implement-spec) |
 | A spec that isn't split into tickets yet | [to-tickets](https://aihero.dev/skills-to-tickets) first |
 
 ## Prerequisites
@@ -38,7 +37,7 @@ The `blocked_by` graph decides the shape. A ticket with one open blocker branche
 
 **Why not `/implement-spec` and then `/review-pipeline` on the integration branch?**
 
-One PR for a whole spec gives the reviewers one huge diff, and the review lands only at the end. A stack keeps one PR per ticket, so each review is small and sees only that ticket's change, while the final review still checks the gaps between tickets against the spec.
+One PR for a whole spec gives the reviewers one huge diff, and the review lands only at the end. A stack keeps one PR per ticket, so each review is small and sees only that ticket's change, while the final review still checks the gaps between tickets against the spec. That is why the plugin no longer ships `implement-spec`: it moved to `misc/`, unedited, so that upstream merges do not conflict.
 
 **Why a temporary stack PR for the final review?**
 

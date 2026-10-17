@@ -14,8 +14,6 @@ Reachable only when you type them (Claude Code: `disable-model-invocation: true`
 - **[setup-review-pipeline](./setup-review-pipeline/SKILL.md)**: Configure how this repo reviews pull requests (runtime, reviewer pairs, model and effort per role, round limit, reviewer App). Run once per repo.
 - **[to-spec](./to-spec/SKILL.md)**: Turn the current conversation into a spec and publish it to the issue tracker.
 - **[to-tickets](./to-tickets/SKILL.md)**: Break any plan, spec, or conversation into a set of tracer-bullet tickets, each declaring its blocking edges, whether as text in a local file or as native blocking links on a real tracker.
-- **[implement](./implement/SKILL.md)**: Build the work described by a spec or set of tickets, driving `/tdd` at pre-agreed seams and closing out with `/code-review` before committing.
-- **[implement-spec](./implement-spec/SKILL.md)**: Implement a whole spec on one integration branch. Works the tickets as a task graph, running implementer subagents across the ready frontier for maximum concurrency, then closes out with `/code-review`.
 - **[implement-pr](./implement-pr/SKILL.md)**: Build one ticket with `/tdd`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge.
 - **[implement-spec-stack](./implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket, reviewed layer by layer and then as a whole, and landed bottom-up.
 - **[wayfinder](./wayfinder/SKILL.md)**: Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on the issue tracker, resolved one at a time until the way to the destination is clear.

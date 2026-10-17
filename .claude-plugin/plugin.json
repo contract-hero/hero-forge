@@ -33,8 +33,6 @@
     "./skills/engineering/to-spec",
     "./skills/engineering/to-tickets",
     "./skills/engineering/wayfinder",
-    "./skills/engineering/implement",
-    "./skills/engineering/implement-spec",
     "./skills/engineering/implement-pr",
     "./skills/engineering/implement-spec-stack",
     "./skills/engineering/prototype",

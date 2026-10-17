@@ -32,7 +32,7 @@ Not blindly, and that is the point of stating it. The agent that wrote the chang
 
 **Does it open the PR for me?**
 
-No. `pr` covers only the body. [implement](https://aihero.dev/skills-implement) ends by committing to the current branch. Requests for a skill or option that opens the PR (a `/to-pr`, or `implement` opening a PR instead of committing) are still open proposals. One user's workaround is a one-sentence local override of `implement` that tells it to open a PR. [implement-spec](https://aihero.dev/skills-implement-spec) is the exception: it opens a draft PR when your issue tracker closes work through PRs or when you ask for one. Because `pr` is model-invoked, the agent uses this shape for the body whenever you ask it to open a PR.
+No. `pr` covers only the body. [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) does: it builds one ticket, opens a draft PR whose body comes from `pr`, and hands the PR to [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md). [implement-spec-stack](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-spec-stack.md) opens one draft PR per ticket of a spec. Because `pr` is model-invoked, the agent uses this shape for the body whenever you ask it to open a PR.
 
 **Won't it just produce another wall of text and diagrams?**
 
@@ -71,9 +71,10 @@ Not by itself. One user's approach is a standing instruction in the repo's agent
 
 ## Where it fits
 
-`pr` comes between review and retro when the build ships as a pull request: `to-spec → to-tickets → implement → code-review → pr → retro`. It is model-invoked, so it also fires on its own any time the agent writes a PR body outside that chain.
+`pr` comes between review and retro when the build ships as a pull request: `to-spec → to-tickets → implement-pr → pr → review-pipeline → retro`. It is model-invoked, so it also fires on its own any time the agent writes a PR body outside that chain.
 
-- [code-review](https://aihero.dev/skills-code-review) runs before it, because a PR body should describe a diff that has already been reviewed.
-- [implement](https://aihero.dev/skills-implement) produces the commits the body describes.
+- [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) produces the commits the body describes, and calls `pr` for the draft PR's body.
+- [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) calls `pr` again after Adjudication, so the body matches the reviewed code before the PR goes ready.
+- [code-review](https://aihero.dev/skills-code-review) is the in-session review to run first when you open a PR by hand.
 
 [ask-matt](https://aihero.dev/skills-ask-matt) routes across the whole set when you are unsure which skill the situation wants.
