@@ -4,12 +4,14 @@
 // the exit code (0 ok, 1 failed, 2 usage, 3 absent, 4 broken).
 import { main as config } from './config.ts'
 import { main as postReview } from './post-review.ts'
+import { main as reply } from './reply.ts'
 import { main as runState } from './run-state.ts'
 
 const SUBCOMMANDS: Record<string, (argv: string[]) => Promise<number>> = {
   config,
   'run-state': runState,
   'post-review': postReview,
+  reply,
 }
 
 const USAGE = `usage: review.ts <subcommand> [options]
