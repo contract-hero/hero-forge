@@ -6,7 +6,14 @@ import { fakeGh, runCli, tempDir, type FakeGhResponse } from './test-helpers.ts'
 
 const SHA = 'c'.repeat(40)
 const MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=review -->'
-const LIST = ['api', '--paginate', '--jq', '.[] | {id, body}', 'repos/contract-hero/hero-pocock/pulls/13/reviews']
+const LIST = ['api', '--paginate', '--jq', '.[] | {id, body, commit_id, login: .user.login}', 'repos/contract-hero/hero-pocock/pulls/13/reviews']
+const USER = ['api', 'user', '--jq', '.login']
+const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
+
+// One line of the review list, as `gh api --paginate --jq` prints it.
+function listed(...reviews: { id: number; body: string; commit_id?: string; login?: string }[]): string {
+  return reviews.map((r) => `${JSON.stringify({ commit_id: SHA, login: 'alilloig', ...r })}\n`).join('')
+}
 const POST = ['api', '-X', 'POST', 'repos/contract-hero/hero-pocock/pulls/13/reviews', '--input', '-']
 
 const PAYLOAD = {
@@ -35,7 +42,7 @@ type Setup = {
 // A temp dir with a config, a payload file, a fake gh and a state root.
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await tempDir(t)
-  const gh = await fakeGh(dir, options.responses ?? [])
+  const gh = await fakeGh(dir, [...(options.responses ?? []), ME])
   const configPath = join(dir, 'review.md')
   if (options.config !== null) await writeFile(configPath, options.config ?? CONFIG)
   const payloadPath = join(dir, 'review-payload.json')
@@ -71,7 +78,7 @@ test('a COMMENT review with inline suggestions posts once, as the user, and is r
   const s = await setup(t, {
     responses: [
       { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 555, state: 'COMMENTED' }) },
-      { match: '--paginate', stdout: `${JSON.stringify({ id: 1, body: 'an older human review' })}\n` },
+      { match: '--paginate', stdout: listed({ id: 1, body: 'an older human review', login: 'someone' }) },
     ],
   })
   const { code, stdout, stderr } = await s.post()
@@ -80,9 +87,9 @@ test('a COMMENT review with inline suggestions posts once, as the user, and is r
   assert.deepEqual(JSON.parse(stdout), { posted: true, id: 555, as: 'user', event: 'COMMENT', round: 1, kind: 'review' })
 
   const calls = await s.gh.calls()
-  assert.deepEqual(calls.map((c) => c.argv), [LIST, POST])
-  assert.deepEqual(calls.map((c) => c.gh_token), [null, null])
-  assert.deepEqual(JSON.parse(calls[1]!.stdin), {
+  assert.deepEqual(calls.map((c) => c.argv), [USER, LIST, POST])
+  assert.deepEqual(calls.map((c) => c.gh_token), [null, null, null])
+  assert.deepEqual(JSON.parse(calls[2]!.stdin), {
     ...PAYLOAD,
     body: `${PAYLOAD.body}\n\n${MARKER}`,
     commit_id: SHA,
@@ -90,31 +97,47 @@ test('a COMMENT review with inline suggestions posts once, as the user, and is r
   assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 555, commit: SHA, as: 'user' }])
 })
 
-test('a review already on the PR with the same marker is not posted again', async (t) => {
-  const s = await setup(t, {
-    responses: [{ match: '--paginate', stdout: `${JSON.stringify({ id: 777, body: `walkthrough\n\n${MARKER}` })}\n` }],
-  })
-  const first = await s.post()
-  assert.equal(first.code, 0)
-  assert.deepEqual(JSON.parse(first.stdout), { posted: false, duplicate: true, id: 777 })
-  const second = await s.post()
-  assert.equal(second.code, 0)
-
-  assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [LIST, LIST])
-  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 777, commit: SHA, as: 'user' }])
+test('a review the run state already records is not posted again, and gh is not called', async (t) => {
+  const s = await setup(t, { responses: [{ match: '--input', stdout: JSON.stringify({ id: 555 }) }] })
+  assert.equal((await s.post()).code, 0)
+  const again = await s.post()
+  assert.equal(again.code, 0)
+  assert.deepEqual(JSON.parse(again.stdout), { posted: false, duplicate: true, id: 555 })
+  assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER, LIST, POST])
+  assert.equal((await s.reviews()).length, 1)
 })
 
-test('a marker for another round does not count as a duplicate', async (t) => {
+test('when the run state lost the record, our own marked review on the same commit is found and recorded', async (t) => {
   const s = await setup(t, {
-    responses: [
-      { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 556 }) },
-      { match: '--paginate', stdout: `${JSON.stringify({ id: 9, body: MARKER.replace('round=1', 'round=11') })}\n` },
-    ],
+    responses: [{ match: '--paginate', stdout: listed({ id: 777, body: `walkthrough\n\n${MARKER}` }) }],
   })
   const { code, stdout } = await s.post()
   assert.equal(code, 0)
-  assert.equal(JSON.parse(stdout).posted, true)
+  assert.deepEqual(JSON.parse(stdout), { posted: false, duplicate: true, id: 777 })
+  assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER, LIST])
+  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 777, commit: SHA, as: 'user' }])
 })
+
+const NOT_OURS = [
+  ['a marker in a review by someone else', { login: 'mallory' }],
+  ['a marker in our own review on another commit', { commit_id: 'd'.repeat(40) }],
+  ['a marker for another round', { body: MARKER.replace('round=1', 'round=11') }],
+] as const
+
+for (const [name, change] of NOT_OURS) {
+  test(`${name} does not count as a duplicate`, async (t) => {
+    const s = await setup(t, {
+      responses: [
+        { match: '--input', stdout: JSON.stringify({ id: 556 }) },
+        { match: '--paginate', stdout: listed({ id: 9, body: `copied\n\n${MARKER}`, ...change }) },
+      ],
+    })
+    const { code, stdout } = await s.post()
+    assert.equal(code, 0)
+    assert.deepEqual(JSON.parse(stdout), { posted: true, id: 556, as: 'user', event: 'COMMENT', round: 1, kind: 'review' })
+    assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER, LIST, POST])
+  })
+}
 
 test('without a run state the review still posts, and no state is written', async (t) => {
   const s = await setup(t, { state: null, responses: [{ match: '--input', stdout: JSON.stringify({ id: 1 }) }] })
@@ -139,7 +162,15 @@ test('listing the existing reviews failing exits 1 and posts nothing', async (t)
   const { code, stderr } = await s.post()
   assert.equal(code, 1)
   assert.match(stderr, /cannot list the reviews of PR #13/)
-  assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [LIST])
+  assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER, LIST])
+})
+
+test('not knowing who the gh user is exits 1 and posts nothing', async (t) => {
+  const s = await setup(t, { responses: [{ match: 'api user', stderr: 'gh: not logged in\n', exit: 1 }] })
+  const { code, stderr } = await s.post()
+  assert.equal(code, 1)
+  assert.match(stderr, /cannot read the gh user: gh: not logged in/)
+  assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER])
 })
 
 const REFUSED = [

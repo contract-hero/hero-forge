@@ -3,9 +3,9 @@
 // Post one review payload (event, body, inline comments) to a PR through
 // `gh api`, at most once per PR, round and kind.
 //
-// The body gets a hidden marker. Before posting, the PR's reviews are listed:
-// a review that already carries the marker is reported as a duplicate and
-// not posted again, even when the run state lost the record of it.
+// Before posting it checks for this round's review twice: first in the run
+// state, then (in case the state lost the record) on GitHub, by a hidden
+// marker in the body of a review by the same poster on the same commit.
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
@@ -163,25 +163,60 @@ async function post(argv: string[]): Promise<string> {
     if (!(error instanceof Failure) || error.code !== 3) throw error
   }
 
+  // Primary resume check: the run state already records this round's review.
+  const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit)
+  if (recorded !== undefined) return `${JSON.stringify({ posted: false, duplicate: true, id: recorded.id })}\n`
+
+  const poster = await userIdentity()
   const marker = `<!-- hero-pocock:review-pipeline pr=${pr} round=${round} kind=${kind} -->`
   const reviewsPath = `repos/${repo}/pulls/${pr}/reviews`
-  const listed = await gh(['api', '--paginate', '--jq', '.[] | {id, body}', reviewsPath])
-  refuse(listed.code === 0, `cannot list the reviews of PR #${pr}: ${oneLine(listed.stderr)}`)
-  for (const line of listed.stdout.split('\n')) {
-    if (line.trim() === '') continue
-    const existing = json<{ id: number; body: string | null }>(line, 'list reviews')
-    if ((existing.body ?? '').includes(marker)) {
-      await record(state, { round, kind, id: existing.id, commit, as: 'user' })
-      return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id })}\n`
-    }
+  const existing = await findOwnReview(reviewsPath, pr, marker, poster.login, commit)
+  if (existing !== undefined) {
+    await record(state, { round, kind, id: existing, commit, as: poster.as })
+    return `${JSON.stringify({ posted: false, duplicate: true, id: existing })}\n`
   }
 
   const body = { ...payload, body: `${payload.body}\n\n${marker}`, commit_id: commit }
   const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(body))
   refuse(posted.code === 0, `GitHub rejected the review: ${oneLine(posted.stderr || posted.stdout)}`)
   const { id } = json<{ id: number }>(posted.stdout, 'post review')
-  await record(state, { round, kind, id, commit, as: 'user' })
-  return `${JSON.stringify({ posted: true, id, as: 'user', event: payload.event, round, kind })}\n`
+  await record(state, { round, kind, id, commit, as: poster.as })
+  return `${JSON.stringify({ posted: true, id, as: poster.as, event: payload.event, round, kind })}\n`
+}
+
+// Who posts: the login GitHub will show on the review, and the `as` value
+// recorded in run state. The App identity (a `<slug>[bot]` login) plugs in here.
+type Identity = { login: string; as: string }
+
+async function userIdentity(): Promise<Identity> {
+  const user = await gh(['api', 'user', '--jq', '.login'])
+  const login = user.stdout.trim()
+  refuse(user.code === 0 && login !== '', `cannot read the gh user: ${oneLine(user.stderr)}`)
+  return { login, as: 'user' }
+}
+
+// Fallback resume check, for a run state that lost its record: a review on
+// the PR that carries the marker, was posted by `login`, and is on `commit`.
+// A marker in anyone else's review, or on another commit, does not count, so
+// a third party cannot suppress the pipeline's review by copying the marker.
+async function findOwnReview(
+  reviewsPath: string,
+  pr: number,
+  marker: string,
+  login: string,
+  commit: string,
+): Promise<number | undefined> {
+  const listed = await gh(['api', '--paginate', '--jq', '.[] | {id, body, commit_id, login: .user.login}', reviewsPath])
+  refuse(listed.code === 0, `cannot list the reviews of PR #${pr}: ${oneLine(listed.stderr)}`)
+  for (const line of listed.stdout.split('\n')) {
+    if (line.trim() === '') continue
+    const review = json<{ id: number; body: string | null; commit_id: string | null; login: string | null }>(
+      line,
+      'list reviews',
+    )
+    if (review.login === login && review.commit_id === commit && (review.body ?? '').includes(marker)) return review.id
+  }
+  return undefined
 }
 
 export async function main(argv: string[]): Promise<number> {
