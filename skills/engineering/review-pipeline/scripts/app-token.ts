@@ -1,5 +1,4 @@
-// `review.ts app-token --repo O/R [--config <path>] --check | --login`
-// `review.ts app-token --copy-from <lfg env file> [--force]`
+// `review.ts app-token` (usage in the table in cli.ts).
 // Check that the reviewer GitHub App can mint an installation token for the
 // repo, from the credentials in ~/.config/hero-pocock/ (never in the repo),
 // or print its bot login. Or copy the credentials of the personal `/lfg`
@@ -24,8 +23,6 @@ import { dirname, join } from 'node:path'
 import { loadConfig } from './config.ts'
 import { Failure, parse, runMain, usageFor } from './cli.ts'
 
-const USAGE = `usage: review.ts app-token --repo O/R [--config <path>] --check | --login
-       review.ts app-token --copy-from <lfg env file> [--force]`
 const FIX = 'Fix the App credentials, or re-run /setup-review-pipeline'
 
 export const ID_KEY = 'HERO_POCOCK_REVIEWER_APP_ID'
@@ -217,7 +214,7 @@ async function copyFrom(source: string, force: boolean): Promise<string> {
   return `${JSON.stringify({ copied: true, env, key })}\n`
 }
 
-const usage = usageFor(USAGE)
+const usage = usageFor('app-token')
 
 async function appToken(argv: string[]): Promise<string> {
   const { values } = parse(

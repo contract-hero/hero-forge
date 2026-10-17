@@ -1,6 +1,4 @@
-// `review.ts post-review --repo O/R --pr N --commit <sha> --round R
-//   --kind review|recheck|verdict --payload <file> [--config <path>]
-//   [--ledger <findings.json> --recheck <recheck-rN.json>]`
+// `review.ts post-review` (usage in the table in cli.ts).
 // Post one review payload (event, body, inline comments) to a PR through
 // `gh api`, at most once per PR, round, kind and commit.
 //
@@ -48,10 +46,6 @@ import { refuseSecretsIn } from './secrets.ts'
 
 const SIDES = ['RIGHT', 'LEFT']
 
-const USAGE = `usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R
-                             --kind review|recheck|verdict --payload <file> [--config <path>]
-                             [--ledger <findings.json> --recheck <recheck-rN.json>]   (recheck, verdict)`
-
 type Comment = {
   path: string
   line: number
@@ -64,7 +58,7 @@ type Payload = { event: Event; body: string; comments: Comment[] }
 
 const isPositiveInt = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v > 0
 
-const usage = usageFor(USAGE)
+const usage = usageFor('post-review')
 
 const PAYLOAD_KEYS = ['event', 'body', 'comments']
 const COMMENT_KEYS = ['path', 'line', 'side', 'start_line', 'start_side', 'body']

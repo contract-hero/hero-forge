@@ -1,7 +1,89 @@
-// What every subcommand shares: the Failure that carries an exit code, the
-// guard that throws it, the argument parser, and the `main` wrapper that turns
-// a Failure into one stderr line and an exit code.
+// What every subcommand shares: the usage table, the Failure that carries an
+// exit code, the guard that throws it, the argument parser, and the `main`
+// wrapper that turns `--help` into the subcommand's entry and a Failure into
+// one stderr line and an exit code.
 import { parseArgs, type ParseArgsConfig } from 'node:util'
+
+// The run-state keys that `run-state set` may change. It lives here because
+// the run-state usage line lists them. reviewer_login is fixed at create: the
+// gates trust it only next to the login the App's own credentials give, but
+// nobody should move it mid-run.
+export const SETTABLE = ['round', 'head_sha', 'explainer']
+
+// The usage table: the one place that holds each subcommand's one-line
+// summary and usage text. The dispatcher, `--help` and every usage error read
+// from it.
+export const COMMANDS = {
+  config: {
+    summary: 'Read docs/agents/review.md, apply the defaults, and print the resolved config as JSON.',
+    usage: 'usage: review.ts config [--config <path>]',
+  },
+  'run-state': {
+    summary: 'Read or change the per-PR run state that lets an interrupted run resume.',
+    usage: `usage:
+  review.ts run-state path    --pr N
+  review.ts run-state create  --pr N --repo O/R --base <ref> --head <ref> --head-sha <sha>
+                              --runtime codex|claude --reviewer-login <slug[bot]|none>
+                              [--mode single|layer|stack-final] [--force]
+  review.ts run-state read    --pr N [<key>]
+  review.ts run-state advance --pr N <phase>
+  review.ts run-state set     --pr N <key> <value>    (key: ${SETTABLE.join(' | ')})
+  review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)`,
+  },
+  'app-token': {
+    summary: 'Check the reviewer GitHub App, print its bot login, or copy its credentials from /lfg.',
+    usage: `usage: review.ts app-token --repo O/R [--config <path>] --check | --login
+       review.ts app-token --copy-from <lfg env file> [--force]`,
+  },
+  'post-review': {
+    summary: 'Post one review payload to a PR, at most once per PR, round, kind and commit.',
+    usage: `usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R
+                             --kind review|recheck|verdict --payload <file> [--config <path>]
+                             [--ledger <findings.json> --recheck <recheck-rN.json>]   (recheck, verdict)`,
+  },
+  reply: {
+    summary: 'Post the Adjudication: one reply per inline finding and one PR comment with every answer.',
+    usage: `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
+                       [--recheck <recheck-r(R-1).json>]   (round 2 and later)`,
+  },
+  'codex-exec': {
+    summary: 'Run one Codex role read-only on a brief, and check its output against a schema.',
+    usage:
+      'usage: review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file> [--schema <file>] [--log <file>] [--config <path>]',
+  },
+  'codex-review': {
+    summary: 'Run one review round on runtime codex: the reviewers, the Orchestrator, then post-review.',
+    usage: 'usage: review.ts codex-review --pr N [--issue <n>]... [--config <path>]',
+  },
+  'merge-gate': {
+    summary: 'Read the PR once and print whether it is safe to squash-merge now.',
+    usage: 'usage: review.ts merge-gate --repo O/R --pr N [--config <path>]',
+  },
+  merge: {
+    summary: 'Run the merge gate again and, on go, squash-merge the re-checked head.',
+    usage: 'usage: review.ts merge --repo O/R --pr N [--config <path>]',
+  },
+  explainer: {
+    summary: 'Record the explainer path in the run state and link it from the PR in one comment.',
+    usage: 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>',
+  },
+  stack: {
+    summary: 'Plan a PR stack from a spec, restack a layer, or land one reviewed layer.',
+    usage: `usage:
+  review.ts stack order       --repo O/R --spec N
+  review.ts stack path        --spec N
+  review.ts stack restack     --from <parent pre-landing tip> --onto <ref>   (in the layer's worktree)
+  review.ts stack merge-layer --repo O/R --pr N --base <default branch> --stack-pr S [--config <path>]`,
+  },
+} as const satisfies Record<string, { summary: string; usage: string }>
+
+export type CommandName = keyof typeof COMMANDS
+
+// What `review.ts <name> --help` prints: the summary, then the usage text.
+export function helpText(name: CommandName): string {
+  const { summary, usage } = COMMANDS[name]
+  return `review.ts ${name}: ${summary}\n\n${usage}\n`
+}
 
 // A failure with its exit code (1 refused, 2 usage, 3 absent, 4 broken).
 export class Failure extends Error {
@@ -17,11 +99,11 @@ export function refuse(ok: boolean, message: string): void {
   if (!ok) throw new Failure(message, 1)
 }
 
-// A usage error (exit 2): the message, then the usage text.
+// A usage error (exit 2): the message, then the subcommand's usage text.
 export type Usage = (message: string) => Failure
 
-export function usageFor(usage: string): Usage {
-  return (message) => new Failure(`${message}\n${usage}`, 2)
+export function usageFor(name: CommandName): Usage {
+  return (message) => new Failure(`${message}\n${COMMANDS[name].usage}`, 2)
 }
 
 const REPO = /^[\w.-]+\/[\w.-]+$/
@@ -56,11 +138,18 @@ export function parse<T extends NonNullable<ParseArgsConfig['options']>>(
   }
 }
 
-// The subcommand entry point. `fn` returns the stdout text, or an exit code
-// when it wrote its own output. A Failure becomes one stderr line, prefixed
-// `review.ts <name>: `, and its exit code.
-export function runMain(name: string, fn: (argv: string[]) => Promise<string | number>): (argv: string[]) => Promise<number> {
+// The subcommand entry point. `--help` anywhere before a `--` prints the
+// subcommand's entry and exits 0, whatever the other arguments are. Else `fn`
+// returns the stdout text, or an exit code when it wrote its own output. A
+// Failure becomes one stderr line, prefixed `review.ts <name>: `, and its exit
+// code.
+export function runMain(name: CommandName, fn: (argv: string[]) => Promise<string | number>): (argv: string[]) => Promise<number> {
   return async (argv) => {
+    const end = argv.indexOf('--')
+    if ((end === -1 ? argv : argv.slice(0, end)).includes('--help')) {
+      process.stdout.write(helpText(name))
+      return 0
+    }
     try {
       const result = await fn(argv)
       if (typeof result === 'number') return result

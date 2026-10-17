@@ -1,5 +1,4 @@
-// `review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
-//   [--recheck <recheck-r(R-1).json>]`
+// `review.ts reply` (usage in the table in cli.ts).
 // Post the coding agent's Adjudication on the PR: one reply per inline
 // finding in its own thread (`ACCEPT: <reason>` or `REFUTE: <reason>`), and
 // one PR comment with every answered finding, walkthrough items included.
@@ -16,10 +15,7 @@ import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
 import { loadState } from './run-state.ts'
 import { refuseSecretsIn } from './secrets.ts'
 
-const USAGE = `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
-                       [--recheck <recheck-r(R-1).json>]   (round 2 and later)`
-
-const usage = usageFor(USAGE)
+const usage = usageFor('reply')
 
 const cell = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|')
 

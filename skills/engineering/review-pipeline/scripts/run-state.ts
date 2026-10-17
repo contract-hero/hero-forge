@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Failure, parse, positive, refuse, runMain, usageFor } from './cli.ts'
+import { Failure, parse, positive, refuse, runMain, SETTABLE, usageFor } from './cli.ts'
 
 export const PHASES = [
   'created',
@@ -36,9 +36,6 @@ export const RUNTIMES = ['codex', 'claude'] as const
 export type Runtime = (typeof RUNTIMES)[number]
 export const KINDS = ['review', 'recheck', 'verdict'] as const
 export type Kind = (typeof KINDS)[number]
-// reviewer_login is fixed at create: the gates trust it only next to the
-// login the App's own credentials give, but nobody should move it mid-run.
-const SETTABLE = ['round', 'head_sha', 'explainer']
 
 // `includes` for a const list, narrowing the value to the list's type.
 export function isOneOf<T extends string>(list: readonly T[], value: unknown): value is T {
@@ -270,17 +267,7 @@ async function update(pr: number, change: (state: State) => void): Promise<void>
   await saveState(state)
 }
 
-const USAGE = `usage:
-  review.ts run-state path    --pr N
-  review.ts run-state create  --pr N --repo O/R --base <ref> --head <ref> --head-sha <sha>
-                              --runtime codex|claude --reviewer-login <slug[bot]|none>
-                              [--mode single|layer|stack-final] [--force]
-  review.ts run-state read    --pr N [<key>]
-  review.ts run-state advance --pr N <phase>
-  review.ts run-state set     --pr N <key> <value>    (key: ${SETTABLE.join(' | ')})
-  review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)`
-
-const usage = usageFor(USAGE)
+const usage = usageFor('run-state')
 
 const OPTIONS = {
   pr: { type: 'string' },

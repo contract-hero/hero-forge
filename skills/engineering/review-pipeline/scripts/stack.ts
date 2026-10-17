@@ -19,13 +19,7 @@ import { configApp, squashMerge } from './finish.ts'
 import { gh, json, listLines, oneLine } from './github.ts'
 import { loadState, stateRoot } from './run-state.ts'
 
-const USAGE = `usage:
-  review.ts stack order       --repo O/R --spec N
-  review.ts stack path        --spec N
-  review.ts stack restack     --from <parent pre-landing tip> --onto <ref>   (in the layer's worktree)
-  review.ts stack merge-layer --repo O/R --pr N --base <default branch> --stack-pr S [--config <path>]`
-
-const usage = usageFor(USAGE)
+const usage = usageFor('stack')
 
 type Issue = { number: number; title: string; state: string }
 type Blocker = { number: number; state: string; repository_url: string }

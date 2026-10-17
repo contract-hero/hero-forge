@@ -187,19 +187,15 @@ async function stateFor(args: Args): Promise<State> {
   return state
 }
 
-const MERGE_GATE_USAGE = 'usage: review.ts merge-gate --repo O/R --pr N [--config <path>]'
-const MERGE_USAGE = 'usage: review.ts merge --repo O/R --pr N [--config <path>]'
-const EXPLAINER_USAGE = 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>'
-
 async function mergeGate(argv: string[]): Promise<string> {
-  const args = parse(argv, usageFor(MERGE_GATE_USAGE), false)
+  const args = parse(argv, usageFor('merge-gate'), false)
   const app = await configApp(args.config)
   const state = await stateFor(args)
   return `${JSON.stringify(await readGate(args.repo, args.pr, state, await appLogin(args.repo, app)))}\n`
 }
 
 async function merge(argv: string[]): Promise<string> {
-  const args = parse(argv, usageFor(MERGE_USAGE), false)
+  const args = parse(argv, usageFor('merge'), false)
   const app = await configApp(args.config)
   const state = await stateFor(args)
   refuse(
@@ -232,7 +228,7 @@ export async function squashMerge(repo: string, pr: number, state: State, app: b
 }
 
 async function explainer(argv: string[]): Promise<string> {
-  const usage = usageFor(EXPLAINER_USAGE)
+  const usage = usageFor('explainer')
   const args = parse(argv, usage, true)
   const file = args.file
   if (file === undefined || !isAbsolute(file)) throw usage('--file must be an absolute path')

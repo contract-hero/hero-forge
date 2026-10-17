@@ -1,4 +1,4 @@
-// `review.ts codex-review --pr N [--issue <n>]... [--config <path>]`
+// `review.ts codex-review` (usage in the table in cli.ts).
 // One review round on runtime codex. No agent gets write access, network or a
 // gh token, so this deterministic code does what needs them:
 //   1. fetch the spec issues into `<run dir>/spec.md`;
@@ -24,7 +24,6 @@ import { main as postReview } from './post-review.ts'
 import { loadState, runDir, type State } from './run-state.ts'
 import { schemaProblem } from './schema.ts'
 
-const USAGE = 'usage: review.ts codex-review --pr N [--issue <n>]... [--config <path>]'
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const CHECKLIST = ['documented standards', 'smells', 'bugs', 'silent failures', 'test gaps']
 const AXES = ['standards', 'spec'] as const
@@ -163,7 +162,7 @@ async function orchestratorTemplate(): Promise<string> {
 }
 
 async function review(argv: string[]): Promise<number> {
-  const usage = usageFor(USAGE)
+  const usage = usageFor('codex-review')
   const { values } = parse(
     argv,
     { pr: { type: 'string' }, issue: { type: 'string', multiple: true }, config: { type: 'string' } },

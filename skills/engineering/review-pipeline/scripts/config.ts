@@ -1,4 +1,4 @@
-// `review.ts config [--config <path>]`: read docs/agents/review.md, validate
+// `review.ts config` (usage in the table in cli.ts): read docs/agents/review.md, validate
 // its one YAML block, apply defaults, print the resolved config as JSON.
 //
 // The block is a small YAML subset, parsed by hand. This is the whole grammar:
@@ -224,7 +224,7 @@ export async function loadConfig(
 }
 
 async function config(argv: string[]): Promise<string> {
-  const { values } = parseOptions(argv, { config: { type: 'string' } }, usageFor('usage: review.ts config [--config <path>]'))
+  const { values } = parseOptions(argv, { config: { type: 'string' } }, usageFor('config'))
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
   return `${JSON.stringify(loaded.config, null, 2)}\n`

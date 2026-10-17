@@ -1,5 +1,4 @@
-// `review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file>
-//   [--schema <file>] [--log <file>] [--config <path>]`
+// `review.ts codex-exec` (usage in the table in cli.ts).
 // The one way the pipeline calls Codex. The model and effort always come from
 // the config, so no call can fall back to ~/.codex/config.toml. Every call is
 // read-only (no writes, no network) and gets an allowlisted environment with an
@@ -17,8 +16,6 @@ import { Failure, parse, runMain, usageFor } from './cli.ts'
 import { loadConfig, type ResolvedConfig } from './config.ts'
 import { schemaProblem } from './schema.ts'
 
-const USAGE =
-  'usage: review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file> [--schema <file>] [--log <file>] [--config <path>]'
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 export const SCHEMAS = {
   orchestrator: join(SKILL_DIR, 'review.schema.json'),
@@ -158,7 +155,7 @@ export async function execRole(config: ResolvedConfig, call: CodexCall): Promise
 }
 
 async function codexExec(argv: string[]): Promise<string> {
-  const usage = usageFor(USAGE)
+  const usage = usageFor('codex-exec')
   const { values } = parse(
     argv,
     {
