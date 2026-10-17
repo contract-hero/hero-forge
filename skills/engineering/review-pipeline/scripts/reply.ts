@@ -13,6 +13,7 @@ import { parseArgs } from 'node:util'
 import { gh, json, listInlineComments, listLines, oneLine, postedFindings, refuse, userIdentity } from './github.ts'
 import { CLOSED, DECISIONS, loadLedger, loadRecheck, type LedgerEntry } from './ledger.ts'
 import { Failure, loadState } from './run-state.ts'
+import { refuseSecrets } from './secrets.ts'
 
 const PREFIX = 'review.ts reply: '
 const USAGE = `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
@@ -77,6 +78,7 @@ async function reply(argv: string[]): Promise<string> {
     undecided.length === 0,
     `every finding needs a decision (ACCEPT or REFUTE) and a reason first: ${undecided.map((e) => e.id).join(', ')}`,
   )
+  refuseSecrets(JSON.stringify(targets), `ledger ${ledgerPath}`)
 
   const state = await loadState(pr)
   const me = await userIdentity()

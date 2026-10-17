@@ -2,13 +2,15 @@
 //   [--schema <file>] [--log <file>] [--config <path>]`
 // The one way the pipeline calls Codex. The model and effort always come from
 // the config, so no call can fall back to ~/.codex/config.toml. Every call is
-// read-only (no writes, no network) and never sees a gh token: the agents read
+// read-only (no writes, no network) and gets an allowlisted environment with an
+// empty HOME, so no gh token or other credential reaches it: the agents read
 // untrusted PR text, so only review.ts itself posts. The brief goes in on
 // stdin; Codex's final message goes to --out and must match --schema; its
 // output goes to --log (default: --out with its extension replaced by .log).
 import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, openSync } from 'node:fs'
+import { closeSync, mkdtempSync, openSync, rmSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -25,7 +27,9 @@ export const SCHEMAS = {
 }
 // The sandbox of every Codex call. Never danger-full-access or workspace-write.
 export const SANDBOX = 'read-only'
-const TOKEN_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']
+// The only caller variables Codex sees. HOME and XDG_CONFIG_HOME point at an
+// empty temp dir, so ~/.config/gh and the like are not found through them.
+const PASSED = /^(PATH|LANG|LC_[A-Z_]+|TMPDIR|TERM)$/
 
 export type Role = 'orchestrator' | 'reviewer'
 export type CodexCall = { role: Role; brief: string; out: string; schema?: string; log?: string }
@@ -43,33 +47,45 @@ function defaultLog(out: string): string {
   return `${ext === '' ? out : out.slice(0, -ext.length)}.log`
 }
 
-// The caller's environment minus every gh token.
-function codexEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env }
-  for (const name of TOKEN_VARS) delete env[name]
-  return env
+// Run `fn` with Codex's environment: the allowlisted caller variables,
+// CODEX_HOME (the caller's, else the real ~/.codex, so the Codex login still
+// works), and a fresh empty HOME that is removed afterwards.
+async function withCodexEnv<T>(fn: (env: NodeJS.ProcessEnv) => T | Promise<T>): Promise<T> {
+  const home = mkdtempSync(join(tmpdir(), 'review-pipeline-home-'))
+  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => PASSED.test(name)))
+  env.CODEX_HOME = process.env.CODEX_HOME ?? join(homedir(), '.codex')
+  env.HOME = home
+  env.XDG_CONFIG_HOME = home
+  try {
+    return await fn(env)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 }
 
 // `input` is the open brief; it becomes Codex's stdin and is closed after.
 function runCodex(args: string[], input: number, log: string): Promise<number | null> {
   const output = openSync(log, 'w')
-  return new Promise((done, reject) => {
-    const child = spawn('codex', args, { stdio: [input, output, output], env: codexEnv() })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      closeSync(input)
-      closeSync(output)
-      done(code)
-    })
-  })
+  return withCodexEnv(
+    (env) =>
+      new Promise((done, reject) => {
+        const child = spawn('codex', args, { stdio: [input, output, output], env })
+        child.on('error', reject)
+        child.on('close', (code) => {
+          closeSync(input)
+          closeSync(output)
+          done(code)
+        })
+      }),
+  )
 }
 
 // Exit 4 when the runtime is not codex or the Codex CLI is missing or broken.
-export function checkCodex(config: ResolvedConfig): { message: string; code: number } | undefined {
+export async function checkCodex(config: ResolvedConfig): Promise<{ message: string; code: number } | undefined> {
   if (config.runtime !== 'codex') {
     return { message: `${config.config_path}: runtime is ${config.runtime}, not codex. Do not call Codex on this runtime.`, code: 4 }
   }
-  const version = spawnSync('codex', ['--version'], { encoding: 'utf8', env: codexEnv() })
+  const version = await withCodexEnv((env) => spawnSync('codex', ['--version'], { encoding: 'utf8', env }))
   if (version.error !== undefined || version.status !== 0) {
     const why = version.error?.message ?? (version.stderr.trim() || `codex --version exited ${version.status}`)
     return {
@@ -158,7 +174,7 @@ export async function main(argv: string[]): Promise<number> {
 
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) return fail(loaded.message, loaded.code)
-  const broken = checkCodex(loaded.config)
+  const broken = await checkCodex(loaded.config)
   if (broken !== undefined) return fail(broken.message, broken.code)
 
   const result = await execRole(loaded.config, { role, brief, out, schema: values.schema, log: values.log })

@@ -165,6 +165,35 @@ test('listing the existing reviews failing exits 1 and posts nothing', async (t)
   assert.deepEqual((await s.gh.calls()).map((c) => c.argv), [USER, LIST])
 })
 
+for (const [kind, secret] of [
+  ['a GitHub token', `ghp_${'A1b2'.repeat(9)}`],
+  ['a GitHub fine-grained token', `github_pat_${'x9'.repeat(15)}`],
+  ['a private key', '-----BEGIN OPENSSH PRIVATE KEY-----'],
+  ['an API key (sk-)', `sk-proj-${'q'.repeat(24)}`],
+  ['a Slack token', 'xoxb-1234567890-abcdef'],
+]) {
+  test(`a payload that holds ${kind} is refused before any gh call`, async (t) => {
+    const comment = { ...PAYLOAD.comments[0], body: `**F1** leaked: ${secret}` }
+    const s = await setup(t, { payload: { ...PAYLOAD, comments: [comment, PAYLOAD.comments[1]] } })
+    const { code, stdout, stderr } = await s.post()
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.ok(stderr.includes(`contains what looks like ${kind}. Nothing was posted`), stderr)
+    assert.ok(!stderr.includes(secret), 'the secret is echoed')
+    assert.deepEqual(await s.gh.calls(), [])
+  })
+}
+
+test('a payload that only names a token prefix still posts', async (t) => {
+  const s = await setup(t, {
+    payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes', comments: [] },
+    responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 556 }) }],
+  })
+  const { code, stderr } = await s.post()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+})
+
 test('not knowing who the gh user is exits 1 and posts nothing', async (t) => {
   const s = await setup(t, { responses: [{ match: 'api user', stderr: 'gh: not logged in\n', exit: 1 }] })
   const { code, stderr } = await s.post()

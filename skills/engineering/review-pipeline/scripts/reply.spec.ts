@@ -196,6 +196,17 @@ test('a finding with no decision or no reason is refused before any gh call', as
   assert.deepEqual(await s.calls(), [])
 })
 
+test('a ledger reason that holds a token is refused before any gh call', async (t) => {
+  const token = `ghs_${'Z9'.repeat(18)}`
+  const s = await setup(t, { ledger: [LEDGER[0], { ...LEDGER[1], reason: `token ${token}` }, LEDGER[2]] })
+  const { code, stdout, stderr } = await s.reply(1)
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.ok(stderr.includes('contains what looks like a GitHub token. Nothing was posted'), stderr)
+  assert.ok(!stderr.includes(token))
+  assert.deepEqual(await s.calls(), [])
+})
+
 test('a posted finding the ledger lacks is refused before any reply posts', async (t) => {
   const s = await setup(t, { ledger: [LEDGER[0], LEDGER[2]] })
   const { code, stderr } = await s.reply(1)

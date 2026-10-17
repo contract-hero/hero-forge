@@ -3,6 +3,7 @@ import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import { baseEnv, fakeCodex, runCli, tempDir, type FakeCodexSpec } from './test-helpers.ts'
 
 const SKILL = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -43,13 +44,12 @@ test('a reviewer runs codex exec read-only with the configured model, effort and
     out,
     log,
   })
-  assert.deepEqual(await codex.calls(), [
-    { argv: ['--version'], stdin: '', tokens: [] },
+  assert.deepEqual((await codex.calls()).map(({ argv, stdin }) => ({ argv, stdin })), [
+    { argv: ['--version'], stdin: '' },
     {
       argv: ['exec', '-C', dir, '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=xhigh', '-s', 'read-only',
         '--output-schema', SCHEMA, '-o', out, '-'],
       stdin: 'You are the Standards reviewer of pair 1 of 2.\n',
-      tokens: [],
     },
   ])
   assert.equal(await readFile(out, 'utf8'), FINDINGS)
@@ -71,15 +71,44 @@ test('the orchestrator runs read-only, with its own model and effort, held to th
     '--output-schema', REVIEW_SCHEMA, '-o', out, '-'])
 })
 
-test('codex never sees a gh token, even when the caller has one', async (t) => {
+// What Codex may see. The shell that runs the fake adds PWD, SHLVL, OLDPWD and _;
+// macOS adds __CF_USER_TEXT_ENCODING to every process.
+const ALLOWED = /^(PATH|LANG|LC_[A-Z_]+|TMPDIR|TERM|CODEX_HOME|HOME|XDG_CONFIG_HOME|PWD|SHLVL|OLDPWD|_|__CF_USER_TEXT_ENCODING)$/
+
+test('codex sees only allowlisted variables: no gh token, an empty HOME, and the real CODEX_HOME', async (t) => {
   const { dir, codex, brief } = await setup(t, { spec: { exec: { out: FINDINGS } } })
+  const codexHome = join(dir, 'codex-home')
+  await mkdir(codexHome)
   const { code, stderr } = await runCli(
     ['codex-exec', '--config', join(dir, 'review.md'), '--role', 'reviewer', '--brief', brief, '--out', join(dir, 'r.json')],
-    { cwd: dir, env: { ...codex.env, GH_TOKEN: 'ghp_secret', GITHUB_TOKEN: 'ghs_secret', GH_ENTERPRISE_TOKEN: 'x' } },
+    { cwd: dir, env: { ...codex.env, GH_TOKEN: 'ghp_secret', GITHUB_TOKEN: 'ghs_secret', AWS_SECRET_ACCESS_KEY: 'x',
+      SOME_UNLISTED: '1', CODEX_HOME: codexHome, LC_ALL: 'C' } },
   )
   assert.equal(stderr, '')
   assert.equal(code, 0)
-  assert.deepEqual((await codex.calls()).map((c) => c.tokens), [[], []])
+  const calls = await codex.calls()
+  assert.equal(calls.length, 2)
+  for (const call of calls) {
+    assert.deepEqual(call.tokens, [])
+    assert.deepEqual(call.env_keys.filter((k) => !ALLOWED.test(k)), [])
+    assert.ok(call.env_keys.includes('LC_ALL'))
+    assert.equal(call.codex_home, codexHome)
+    assert.notEqual(call.home, process.env.HOME)
+    assert.equal(call.home_entries, 0)
+    assert.equal(call.xdg_config_home, call.home)
+  }
+})
+
+test('without CODEX_HOME, codex gets the real ~/.codex so its login still works', async (t) => {
+  const { dir, codex, brief } = await setup(t, { spec: { exec: { out: FINDINGS } } })
+  const env = { ...codex.env }
+  delete env.CODEX_HOME
+  const { code } = await runCli(
+    ['codex-exec', '--config', join(dir, 'review.md'), '--role', 'reviewer', '--brief', brief, '--out', join(dir, 'r.json')],
+    { cwd: dir, env },
+  )
+  assert.equal(code, 0)
+  assert.deepEqual((await codex.calls()).map((c) => c.codex_home), [join(homedir(), '.codex'), join(homedir(), '.codex')])
 })
 
 test('an output that is JSON but breaks the schema is a failed call', async (t) => {

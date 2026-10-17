@@ -114,21 +114,38 @@ export type FakeCodexSpec = {
   routes?: (FakeCodexExec & { match: string })[]
 }
 
-// `tokens` names the gh token variables the call could see.
-export type FakeCodexCall = { argv: string[]; stdin: string; tokens: string[] }
+// `tokens` names the gh token variables the call could see; `env_keys` all
+// the variables it could see. `home`, `xdg_config_home` and `codex_home` are
+// those variables, and `home_entries` counts the files in HOME.
+export type FakeCodexCall = {
+  argv: string[]
+  stdin: string
+  tokens: string[]
+  env_keys: string[]
+  home: string | null
+  xdg_config_home: string | null
+  codex_home: string | null
+  home_entries: number | null
+}
 
 export type FakeCodex = {
   env: Record<string, string | undefined>
   calls: () => Promise<FakeCodexCall[]>
 }
 
-const FAKE_CODEX = `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+// The log and spec paths are baked in, so the fake works whatever env the
+// code under test gives it.
+const fakeCodexScript = (log: string, specFile: string) => `import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 const argv = process.argv.slice(2)
 const exec = argv[0] === 'exec'
 const stdin = exec && !process.stdin.isTTY ? readFileSync(0, 'utf8') : ''
-const tokens = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'].filter((k) => process.env[k] !== undefined)
-appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ argv, stdin, tokens }) + '\\n')
-const spec = JSON.parse(readFileSync(process.env.FAKE_CODEX_SPEC, 'utf8'))
+const env = process.env
+const tokens = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'].filter((k) => env[k] !== undefined)
+let home_entries = null
+try { home_entries = readdirSync(env.HOME).length } catch {}
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, stdin, tokens, env_keys: Object.keys(env).sort(), home: env.HOME ?? null,
+  xdg_config_home: env.XDG_CONFIG_HOME ?? null, codex_home: env.CODEX_HOME ?? null, home_entries }) + '\\n')
+const spec = JSON.parse(readFileSync(${JSON.stringify(specFile)}, 'utf8'))
 const o = argv.indexOf('-o')
 const route = exec && o !== -1 ? (spec.routes ?? []).find((r) => argv[o + 1].includes(r.match)) : undefined
 const step = route ?? (exec ? spec.exec : spec.version) ?? {}
@@ -144,16 +161,17 @@ process.exitCode = step.exit ?? 0
 export async function fakeCodex(dir: string, spec: FakeCodexSpec = {}): Promise<FakeCodex> {
   const bin = join(dir, 'codex-bin')
   await mkdir(bin, { recursive: true })
-  await writeFile(join(bin, 'fake-codex.mjs'), FAKE_CODEX)
-  const shim = join(bin, 'codex')
-  await writeFile(shim, `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/fake-codex.mjs" "$@"\n`)
-  await chmod(shim, 0o755)
   const log = join(dir, 'codex-calls.jsonl')
   const specFile = join(dir, 'codex-spec.json')
+  const script = join(bin, 'fake-codex.mjs')
+  await writeFile(script, fakeCodexScript(log, specFile))
+  const shim = join(bin, 'codex')
+  await writeFile(shim, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  await chmod(shim, 0o755)
   await writeFile(log, '')
   await writeFile(specFile, JSON.stringify(spec))
   return {
-    env: { ...baseEnv(), PATH: `${bin}:${process.env.PATH ?? ''}`, FAKE_CODEX_LOG: log, FAKE_CODEX_SPEC: specFile },
+    env: { ...baseEnv(), PATH: `${bin}:${process.env.PATH ?? ''}` },
     calls: async () =>
       (await readFile(log, 'utf8'))
         .split('\n')

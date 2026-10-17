@@ -16,6 +16,7 @@ import { loadConfig } from './config.ts'
 import { gh, json, listInlineComments, listLines, oneLine, postedFindings, refuse, userIdentity } from './github.ts'
 import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
 import { Failure, loadState, saveState, type State } from './run-state.ts'
+import { refuseSecrets } from './secrets.ts'
 
 const PREFIX = 'review.ts post-review: '
 const EVENTS = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES']
@@ -135,6 +136,7 @@ async function post(argv: string[]): Promise<string> {
     throw new Failure(`payload ${payloadPath} is not valid JSON`, 1)
   }
   const payload = checkPayload(parsed)
+  refuseSecrets(JSON.stringify(payload), `payload ${payloadPath}`)
   if (kind === 'verdict') refuse(payload.event !== 'COMMENT', '--kind verdict posts APPROVE or REQUEST_CHANGES only')
   else refuse(payload.event === 'COMMENT', `--kind ${kind} posts COMMENT only`)
 
