@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "review-pipeline Orchestrator output (runtime codex)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["payload", "ledger", "report"],
+  "properties": {
+    "payload": {
+      "type": "object",
+      "description": "The review to post. review.ts writes it to review-payload.json and posts it.",
+      "additionalProperties": false,
+      "required": ["event", "body", "comments"],
+      "properties": {
+        "event": { "type": "string", "enum": ["COMMENT"] },
+        "body": { "type": "string", "description": "The walkthrough." },
+        "comments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "line", "side", "start_line", "start_side", "body"],
+            "properties": {
+              "path": { "type": "string" },
+              "line": { "type": "integer" },
+              "side": { "type": "string", "enum": ["RIGHT"] },
+              "start_line": { "type": ["integer", "null"], "description": "First line of a multi-line anchor, or null." },
+              "start_side": { "type": ["string", "null"], "description": "RIGHT for a multi-line anchor, or null." },
+              "body": { "type": "string", "description": "Starts with **F<n>** and its labels." }
+            }
+          }
+        }
+      }
+    },
+    "ledger": {
+      "type": "array",
+      "description": "One entry per kept finding. review.ts writes it to findings.json.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "where", "axis", "severity", "pairs", "finding", "decision", "reason"],
+        "properties": {
+          "id": { "type": "string", "description": "F1, F2, ..." },
+          "where": { "type": "string", "description": "path:line" },
+          "axis": { "type": "string", "enum": ["standards", "spec"] },
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+          "pairs": { "type": "string", "description": "k/N pairs that raised it, e.g. 2/2" },
+          "finding": { "type": "string", "description": "One line." },
+          "decision": { "type": "string", "enum": [""] },
+          "reason": { "type": "string", "enum": [""] }
+        }
+      }
+    },
+    "report": { "type": "string", "description": "Kept and dropped counts with reasons, and the failed reviewers." }
+  }
+}

@@ -1,3 +1,5 @@
+> **Archived.** This skill was removed from the plugin in hero-pocock v0.2.0. It still lives in the repo under `skills/misc/` and takes upstream changes, but the plugin no longer ships it. Use [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) instead: it builds one ticket, opens a draft pull request, and hands the PR to [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md). The page stays up for reference.
+
 ## What it does
 
 `implement` builds work that has already been decided. You point it at a [ticket](https://www.aihero.dev/ai-coding-dictionary/ticket), a [spec](https://www.aihero.dev/ai-coding-dictionary/spec), or the plan you just agreed in the conversation, and it writes the code, drives [tdd](https://aihero.dev/skills-tdd) at the seams, typechecks as it goes, runs [code-review](https://aihero.dev/skills-code-review) at the end, and commits to the current branch.

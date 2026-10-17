@@ -1,0 +1,3 @@
+interface:
+  display_name: "Review Pipeline"
+  short_description: "Orchestrated PR review posted on GitHub"
