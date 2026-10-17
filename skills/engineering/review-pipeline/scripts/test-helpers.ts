@@ -100,3 +100,54 @@ export async function fakeGh(dir: string, responses: FakeGhResponse[] = []): Pro
     respond: (next) => writeFile(responsesFile, JSON.stringify(next)),
   }
 }
+
+export type FakeCodexStep = { exit?: number; stdout?: string; stderr?: string }
+
+// `version` answers `codex --version`. `exec` answers `codex exec ...`; its
+// `out` is written to the file named after `-o` (null: write nothing).
+export type FakeCodexSpec = { version?: FakeCodexStep; exec?: FakeCodexStep & { out?: string | null } }
+
+export type FakeCodexCall = { argv: string[]; stdin: string }
+
+export type FakeCodex = {
+  env: Record<string, string | undefined>
+  calls: () => Promise<FakeCodexCall[]>
+}
+
+const FAKE_CODEX = `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+const argv = process.argv.slice(2)
+const exec = argv[0] === 'exec'
+const stdin = exec && !process.stdin.isTTY ? readFileSync(0, 'utf8') : ''
+appendFileSync(process.env.FAKE_CODEX_LOG, JSON.stringify({ argv, stdin }) + '\\n')
+const spec = JSON.parse(readFileSync(process.env.FAKE_CODEX_SPEC, 'utf8'))
+const step = (exec ? spec.exec : spec.version) ?? {}
+const o = argv.indexOf('-o')
+if (exec && o !== -1 && step.out !== null) writeFileSync(argv[o + 1], step.out ?? '{}')
+if (step.stdout !== undefined) process.stdout.write(step.stdout)
+else if (!exec) process.stdout.write('codex-cli 0.163.0\\n')
+if (step.stderr) process.stderr.write(step.stderr)
+process.exitCode = step.exit ?? 0
+`
+
+// Put a fake `codex` first on PATH. Each call is logged as one JSON line
+// (argv, plus stdin for `exec`) and answered from `spec`.
+export async function fakeCodex(dir: string, spec: FakeCodexSpec = {}): Promise<FakeCodex> {
+  const bin = join(dir, 'codex-bin')
+  await mkdir(bin, { recursive: true })
+  await writeFile(join(bin, 'fake-codex.mjs'), FAKE_CODEX)
+  const shim = join(bin, 'codex')
+  await writeFile(shim, `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/fake-codex.mjs" "$@"\n`)
+  await chmod(shim, 0o755)
+  const log = join(dir, 'codex-calls.jsonl')
+  const specFile = join(dir, 'codex-spec.json')
+  await writeFile(log, '')
+  await writeFile(specFile, JSON.stringify(spec))
+  return {
+    env: { ...baseEnv(), PATH: `${bin}:${process.env.PATH ?? ''}`, FAKE_CODEX_LOG: log, FAKE_CODEX_SPEC: specFile },
+    calls: async () =>
+      (await readFile(log, 'utf8'))
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as FakeCodexCall),
+  }
+}

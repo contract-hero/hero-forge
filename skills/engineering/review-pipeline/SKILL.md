@@ -31,6 +31,7 @@ The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.
 | `config` | prints the resolved review config as JSON |
 | `run-state path\|create\|read\|advance\|set --pr N ...` | the per-PR checkpoint in `<git common dir>/hero-pocock/pr-<N>/` |
 | `post-review --repo O/R --pr N --commit <sha> --round R --kind review --payload <file>` | posts one review, at most once per PR, round and kind |
+| `codex-exec --role orchestrator\|reviewer --brief <file> --out <file>` | runs one `codex exec` with the role's model and effort from the config (`runtime: codex` only) |
 
 Every subcommand uses the same exit codes:
 
@@ -48,7 +49,7 @@ Run `review.ts config`. Exit 3 (no `docs/agents/review.md`) or exit 4 (invalid f
 
 Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with `model`, `effort`, and `agent_model`, the sub-agent model family), `max_rounds`, `app`.
 
-- `runtime: codex`: see **Codex runtime**.
+- `runtime: codex`: run `codex --version` now. If it fails, stop before **Resume** as **Codex runtime** says for a missing or broken Codex. Then see **Codex runtime**.
 - `app: true`: see **App identity**.
 
 ## Resume
@@ -87,7 +88,7 @@ For a new run: `review.ts run-state create --pr N --repo O/R --base <baseRefName
 
 You write one brief and launch one agent: the Orchestrator. The Orchestrator does everything else in this section.
 
-**You:** fill the template [orchestrator-brief.md](./orchestrator-brief.md) and save it to `<run dir>/orchestrator-brief.md`. For the spec line, use the issues the PR closes (`gh pr view N --json closingIssuesReferences,body`, then `Closes #N` or `Fixes #N` in the body and commit messages). Then `review.ts run-state advance --pr N review-dispatched`, and launch the Orchestrator as one fresh sub-agent with model `<orchestrator.agent_model>` and effort `<orchestrator.effort>`, giving it the brief's contents. Wait for it in the foreground.
+**You:** fill the template [orchestrator-brief.md](./orchestrator-brief.md) and save it to `<run dir>/orchestrator-brief.md`. For the spec line, use the issues the PR closes (`gh pr view N --json closingIssuesReferences,body`, then `Closes #N` or `Fixes #N` in the body and commit messages). Then `review.ts run-state advance --pr N review-dispatched`, and launch the Orchestrator as one fresh sub-agent with model `<orchestrator.agent_model>` and effort `<orchestrator.effort>`, giving it the brief's contents. Wait for it in the foreground. With `runtime: codex`, launch it as **Codex runtime** says instead.
 
 **The Orchestrator:**
 
@@ -97,7 +98,7 @@ You write one brief and launch one agent: the Orchestrator. The Orchestrator doe
    - Spec: the spec contents and the Spec brief from the same `code-review` section. No spec: no Spec reviewers; the walkthrough says "no spec available".
    - Both: the JSON output contract of [findings.schema.json](./findings.schema.json), which replaces the "Under 400 words" prose report.
 3. **Pair diversity.** The briefs of all pairs are the same except the focus order. With F changed files, pair k (1 to N) gets the file list rotated left by `floor((k-1) * F / N)`, the Standards checklist (documented standards, smells, bugs, silent failures, test gaps) rotated left by k-1, and the spec's acceptance criteria rotated left by k-1. Every reviewer still sees the whole diff.
-4. **Dispatch.** All 2N reviewers in parallel, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. Each one's final message is the findings JSON; write it verbatim to `<run dir>/reviewer-p<k>-<axis>.json`.
+4. **Dispatch.** All 2N reviewers in parallel, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. Each one's final message is the findings JSON; write it verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. With `runtime: codex`, dispatch them as **Codex runtime** says.
 
 ## Consolidation
 
@@ -156,4 +157,25 @@ Not built yet: the pipeline does not rewrite the PR body, flip the PR to ready, 
 
 ## Codex runtime
 
-Not built yet: with `runtime: codex`, stop before **Fixed point** and tell the user that this version runs only `runtime: claude` (re-run `/setup-review-pipeline` to switch).
+With `runtime: codex`, the Orchestrator and every reviewer are `codex exec` sessions. The steps, the files in the run dir, and the posted review are the same as with `runtime: claude`; only the launch changes. This path needs a shell and the files in this skill folder, and no sub-agent tool.
+
+- **One way to call Codex.** Every Codex call goes through `review.ts codex-exec`. It reads the role's model and effort from the config and passes both on the call (`-m <model> -c model_reasoning_effort=<effort>`), so no call falls back to `~/.codex/config.toml`. Never run `codex exec` by hand, and never use a Codex plugin's review command: it drops the effort.
+- **Codex missing or broken.** `codex-exec` runs `codex --version` first. Exit 4 with "the Codex CLI is missing or broken": stop, show the message, and tell the user to install or repair Codex, or to re-run `/setup-review-pipeline` and pick `runtime: claude`. Never switch the runtime yourself.
+- **Effort rejected.** Exit 1 with "Codex rejected <role>.effort": that model does not support that effort. Stop and tell the user to fix the effort in `docs/agents/review.md` or re-run `/setup-review-pipeline`.
+- **Sub-agent models.** `agent_model` is `null` on this runtime. Where a brief names `<reviewer.agent_model>`, write `<reviewer.model>`.
+
+**You, in Review round:** after `advance review-dispatched`, launch the Orchestrator from the repo root:
+
+```sh
+review.ts codex-exec --role orchestrator --brief <run dir>/orchestrator-brief.md --out <run dir>/orchestrator-final.md
+```
+
+It runs with full access, because it starts the reviewers and calls `gh`; the brief's hard limits keep it inside the run dir. A round can take 30 minutes or more, longer than most shell time limits, so run the command in the background and wait until it exits. Codex's output goes to `<run dir>/orchestrator-final.log`. Then continue with **Posting** ("You, after the Orchestrator returns"). Exit 1 or no review: read the log and `<run dir>/orchestrator-report.md`, then apply **Who does what**.
+
+**The Orchestrator, in Dispatch:** start all 2N reviewers in parallel from the repo root, each with:
+
+```sh
+review.ts codex-exec --role reviewer --brief <run dir>/reviewer-p<k>-<axis>.md --out <run dir>/reviewer-p<k>-<axis>.json
+```
+
+Start them in one shell command (each one with `&`, then `wait`) and give that command a time limit long enough for all of them. Each reviewer runs read-only, and Codex holds its final message to [findings.schema.json](./findings.schema.json), so `codex-exec` writes the findings JSON to `--out` itself: do not copy it again. Exit 0: the output is JSON. Exit 1: a failed reviewer; its log is `<run dir>/reviewer-p<k>-<axis>.log`. On a relaunch, keep each `reviewer-p<k>-<axis>.json` that parses and dispatch only the others.

@@ -15,15 +15,15 @@ You are the Orchestrator for PR #<pr> of <owner>/<repo>, review round <round>. Y
 - Review-pipeline skill folder: `<skill dir>`
 - code-review's SKILL.md: `<skill dir>/../code-review/SKILL.md`
 - Helper CLI: `node "<skill dir>/scripts/review.ts"`
-- Config: runtime `<runtime>`, <N> Reviewer pairs, reviewers on model `<reviewer.agent_model>` at `<reviewer.effort>` effort
+- Config: runtime `<runtime>`, <N> Reviewer pairs, reviewers on model `<reviewer.agent_model>` (on runtime codex: `<reviewer.model>`) at `<reviewer.effort>` effort
 - Spec: <issue numbers, a spec path, or "none found">
 
 ## Steps
 
-Read the sections **Review round**, **Consolidation** and **Posting** of `<skill dir>/SKILL.md` first. They hold the rules for each step below.
+Read the sections **Review round**, **Consolidation** and **Posting** of `<skill dir>/SKILL.md` first, and on runtime codex also **Codex runtime**. They hold the rules for each step below.
 
 1. **Prepare.** Gather the changed files, the standards sources and the spec. Write the 2N reviewer briefs from `<skill dir>/reviewer-brief.md` to `<run dir>/reviewer-p<k>-<standards|spec>.md`, each with its own focus order.
-2. **Dispatch.** Start all 2N reviewers in parallel, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. Give each one its brief file's contents. Wait for all of them. If you cannot start sub-agents at all, stop here: write `<run dir>/orchestrator-report.md` saying so, and post nothing.
+2. **Dispatch.** Start all 2N reviewers in parallel, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. Give each one its brief file's contents. Wait for all of them. On runtime codex, start each one with the helper CLI's `codex-exec --role reviewer` instead, as **Codex runtime** says; it writes the reviewer's JSON to the run dir itself. If you cannot start sub-agents at all, stop here: write `<run dir>/orchestrator-report.md` saying so, and post nothing.
 3. **Collect.** Write each reviewer's final message verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. A missing or unparseable output is a failed reviewer: name it, never invent its findings. If every reviewer failed, post nothing.
 4. **Consolidate.** Group, verify against the code at `<head_sha>`, split, and score the findings. Drop what you cannot verify. Write the ledger to `<run dir>/findings.json`.
 5. **Post.** Write the payload to `<run dir>/review-payload.json` and post it once with `post-review --kind review --round <round>`. On a 422, fix the anchor GitHub names (move that finding into the walkthrough) and post once more.

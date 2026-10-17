@@ -2,9 +2,9 @@
 
 `review-pipeline` gives one open pull request an independent review on GitHub. An **Orchestrator** pins the PR head commit, runs N **Reviewer pairs** on it, checks every finding against the code, merges the duplicates, and posts one review with inline ```` ```suggestion ```` blocks and a walkthrough.
 
-The agent that wrote the code never reviews it. The coding [agent](https://www.aihero.dev/ai-coding-dictionary/agent) only prepares the inputs and launches the Orchestrator, a fresh [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) that dispatches the reviewers, verifies what they found, and posts. A finding the Orchestrator cannot verify against the code is dropped, not posted.
+The agent that wrote the code never reviews it. The coding [agent](https://www.aihero.dev/ai-coding-dictionary/agent) only prepares the inputs and launches the Orchestrator, a fresh [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) or Codex session that dispatches the reviewers, verifies what they found, and posts. A finding the Orchestrator cannot verify against the code is dropped, not posted.
 
-This version stops after the review is posted. Adjudication, the re-check, the reviewer App identity, the merge and the Codex runtime arrive in later steps of the [spec](https://github.com/contract-hero/hero-pocock/issues/2).
+This version stops after the review is posted. Adjudication, the re-check, the reviewer App identity and the merge arrive in later steps of the [spec](https://github.com/contract-hero/hero-pocock/issues/2).
 
 ## When to reach for it
 
@@ -17,7 +17,7 @@ Reach for it when a pull request is open and needs a review that lands on the PR
 | It needs | Why |
 | --- | --- |
 | `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md) | it holds the runtime, the number of pairs, and the model and effort of each role; without it the pipeline stops and points you to setup |
-| `runtime: claude` in that file | this version runs the Orchestrator and the reviewers as Claude subagents only |
+| the Codex CLI, installed and logged in, for `runtime: codex` | the Orchestrator and the reviewers run as `codex exec` sessions; if `codex` is missing or broken, the pipeline stops and points you to setup |
 | Node 22.18 or newer, and `gh` logged in | the helper CLI that posts the review and keeps the run state is TypeScript run by Node, and it posts through `gh api` |
 
 It keeps its working files outside the repo, in `hero-pocock/pr-<N>/` inside the git common dir, so nothing is committed.
@@ -32,6 +32,17 @@ Each pair is two fresh reviewers looking at the same fixed point:
 | Spec | the issue or spec the PR closes | `code-review`'s Spec prompt |
 
 Every pair gets the same prompt and a different focus order (a rotated file list and checklist), so more pairs find more for little extra cost. The Orchestrator groups findings that land on the same lines across pairs. Agreement raises a finding's confidence, shown as `2/2 pairs`. Findings stay labelled by axis and are never merged across axes.
+
+## Runtimes
+
+One runtime runs both the Orchestrator and the reviewers, set by `runtime` in the config:
+
+| Runtime | Orchestrator | Reviewers |
+| --- | --- | --- |
+| `codex` | one `codex exec` session with full access, so it can start the reviewers and post | 2N read-only `codex exec` sessions, each held to the findings JSON schema |
+| `claude` | one Claude subagent | 2N read-only Claude subagents |
+
+The steps, the run dir and the posted review are the same on both. Only the launch changes.
 
 ## Common questions
 
@@ -49,7 +60,11 @@ Not yet. This version posts from your own `gh` account as a COMMENT review. A CO
 
 **Can it run on Codex?**
 
-Not in this version. With `runtime: codex` in the config, it stops before the review and tells you so.
+Yes. With `runtime: codex`, every Codex call goes through the helper CLI, which passes the model and the effort from your config on each call. It does not use a Codex plugin's review command, because that command drops the effort and Codex then falls back to `~/.codex/config.toml`. If a model rejects the configured effort (for example, `gpt-6.1-sol` rejects `minimal`), the pipeline stops and tells you to fix the effort in the config.
+
+**Does the Codex runtime need Claude Code?**
+
+No. The coding agent needs a shell, `git`, `node`, `gh` and `codex`, and nothing else. A Codex session can run the whole pipeline.
 
 ## It's working if
 
@@ -57,6 +72,7 @@ Not in this version. With `runtime: codex` in the config, it stops before the re
 - The walkthrough names the runtime, the models, the number of pairs and the commit it reviewed, and lists the findings it dropped with a reason.
 - Running it again on the same PR and commit posts nothing new.
 - A repo with no `docs/agents/review.md` gets a pointer to `/setup-review-pipeline`, not a guessed review.
+- On `runtime: codex`, each Codex log in the run dir shows the model and the reasoning effort from your config, not your `~/.codex/config.toml` defaults.
 
 ## Where it fits
 
