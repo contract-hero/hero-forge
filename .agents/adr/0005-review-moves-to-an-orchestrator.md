@@ -20,3 +20,4 @@ Upstream `code-review` runs in the coding agent's own session and reports to cha
 
 - When upstream changes `implement` or `implement-spec`, compare the change against the fork skills by hand. The merge does not carry it over.
 - Without the reviewer GitHub App, the review posts from the user's account as a COMMENT review, and the re-checker's verdict is the merge gate.
+- The review pipeline's skills reach across skill folders by path, an exception to the Skill-tool rule in `.agents/invocation.md`: they run the helper CLI at `review-pipeline/scripts/review.ts` from a sibling folder, and `review-pipeline` reads `code-review`'s Standards and Spec prompts from `../code-review/SKILL.md` by heading, because a Codex `codex exec` Orchestrator has no Skill tool and copying the prompts would drift from upstream.

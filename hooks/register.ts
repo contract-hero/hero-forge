@@ -25,6 +25,7 @@ const SKILLS = new Set([
   'domain-modeling',
   'codebase-design',
   'code-review',
+  'review-pipeline',
   'pr',
   'retro',
   'wizard',
