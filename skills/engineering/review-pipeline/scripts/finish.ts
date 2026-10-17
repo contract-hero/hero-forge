@@ -71,6 +71,20 @@ function judge(view: PrView, state: State): Gate {
     stop.push(`the head moved since the re-check: the PR is at ${view.headRefOid}, the re-check graded ${state.head_sha}`)
   }
   if (view.isDraft) stop.push('the PR is still a draft: flip it to ready first')
+  // With the reviewer App, its APPROVE verdict on the re-checked head is part
+  // of the gate. post-review records a verdict only after it posts, refuses an
+  // APPROVE on a failing gate, and posts REQUEST_CHANGES only when the run
+  // stops, so a recorded verdict at this head by the App is its approval.
+  if (state.reviewer_login !== 'none') {
+    const approved = state.reviews.some(
+      (r) => r.kind === 'verdict' && r.commit === state.head_sha && r.as === state.reviewer_login,
+    )
+    if (!approved) {
+      stop.push(
+        `the reviewer App ${state.reviewer_login} has not approved the re-checked head ${state.head_sha}: post its APPROVE verdict first`,
+      )
+    }
+  }
   if (ci === 'red') stop.push(`CI failed: ${checks.failed.join(', ')}`)
   if (ci === 'pending') wait.push(`CI is still running: ${checks.pending.join(', ')}`)
   if (view.mergeable === 'CONFLICTING') stop.push('the PR has a merge conflict with its base')

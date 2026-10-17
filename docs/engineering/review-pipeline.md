@@ -6,7 +6,9 @@ The agent that wrote the code never reviews it. The coding [agent](https://www.a
 
 Then the coding agent does **Adjudication**: it accepts or refutes every finding, answers each one on the PR (a reply in each inline thread, plus one comment per round with every answer), and lands all accepted fixes of the round in one commit. A fresh re-checker, which is neither the coding agent nor the Orchestrator, then checks every finding against the new code: fixed, validly refuted, or still open. A deterministic gate in the helper CLI reads that result, and the pipeline posts it as a re-check comment. Without the reviewer App, that gate is the merge gate.
 
-When the re-check passes, the pipeline finishes the PR. It rewrites the PR body with [pr](https://aihero.dev/skills-pr) so the body matches the final code, flips the PR from draft to ready, and builds an explainer page that pitches the change to reviewers and stakeholders. Then it squash-merges the PR, but only when CI is green and GitHub reports the PR mergeable. Red CI or a merge conflict stops the pipeline and asks you: it never merges around them. The reviewer App identity arrives in a later step of the [spec](https://github.com/contract-hero/hero-pocock/issues/2).
+When the re-check passes, the pipeline finishes the PR. It rewrites the PR body with [pr](https://aihero.dev/skills-pr) so the body matches the final code, flips the PR from draft to ready, and builds an explainer page that pitches the change to reviewers and stakeholders. Then it squash-merges the PR, but only when CI is green and GitHub reports the PR mergeable. Red CI or a merge conflict stops the pipeline and asks you: it never merges around them.
+
+With a reviewer GitHub App configured, the App's bot posts the review, the re-checks and the verdict, so the review is clearly not from you. A passing re-check gets the App's approval on the re-checked commit before the PR goes ready, and the merge waits for that approval. When the rounds run out, the App requests changes. Without the App, everything posts from your own account as COMMENT reviews.
 
 ## When to reach for it
 
@@ -21,6 +23,7 @@ Reach for it when a pull request is open and needs a review that lands on the PR
 | `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md) | it holds the runtime, the number of pairs, and the model and effort of each role; without it the pipeline stops and points you to setup |
 | the Codex CLI, installed and logged in, for `runtime: codex` | the Orchestrator and the reviewers run as `codex exec` sessions; if `codex` is missing or broken, the pipeline stops and points you to setup |
 | Node 22.18 or newer, and `gh` logged in | the helper CLI that posts the review and keeps the run state is TypeScript run by Node, and it posts through `gh api` |
+| the reviewer App's credentials in `~/.config/hero-pocock/`, for `app: enabled` (optional) | the helper CLI mints a short-lived App token from them for each post; setup writes them, or copies them from `/lfg` |
 
 It keeps its working files outside the repo, in `hero-pocock/pr-<N>/` inside the git common dir, so nothing is committed.
 
@@ -82,7 +85,11 @@ Run it again on the same PR. The run state records the last completed step and t
 
 **Does it post as a bot?**
 
-Not yet. This version posts from your own `gh` account as a COMMENT review. A COMMENT review never approves or blocks the PR.
+Only with a reviewer GitHub App. Run `/setup-review-pipeline` and choose the App: the config then has `app: enabled`, and every review, re-check and verdict shows the App's `<slug>[bot]` name. The helper CLI mints the App's token itself for each post, so no agent sees it. Without the App, the reviews post from your own `gh` account as COMMENT reviews, which never approve or block the PR, and the re-check gate decides the merge.
+
+**What if the App is set up but broken?**
+
+The pipeline stops and tells you why: the credentials are missing, the key is wrong, or the App is not installed on the repo. It never posts as you instead, because that would quietly turn the approval gate off. Fix the App, or re-run `/setup-review-pipeline` without it.
 
 **Can it run on Codex?**
 
@@ -94,12 +101,13 @@ No. The coding agent needs a shell, `git`, `node`, `gh` and `codex`, and nothing
 
 ## It's working if
 
-- The PR gets exactly one review per run, from your account, with inline suggestions you can apply in the GitHub UI. Each round adds only a re-check comment.
+- The PR gets exactly one review per run, from the App's bot or from your account, with inline suggestions you can apply in the GitHub UI. Each round adds only a re-check comment.
 - The walkthrough names the runtime, the models, the number of pairs and the commit it reviewed, and lists the findings it dropped with a reason.
 - Running it again on the same PR and commit posts nothing new.
 - Every inline finding gets an `ACCEPT:` or `REFUTE:` reply in its thread, and each round gets one adjudication comment that also covers the walkthrough items.
 - Each round with accepted fixes adds exactly one `apply review round <R>` commit.
 - Each round ends with a re-check comment that lists every finding as fixed, refutation accepted, or open.
+- With the App, a passing re-check is followed by one App approval on the re-checked commit, and a run that runs out of rounds ends with one App request for changes.
 - After a passing re-check, the PR body shows the `pr` template for the final code and still closes its issues, the PR is ready for review, and it carries one "Explainer (local, not published)" comment.
 - The PR lands as one squash commit only after its checks pass. A red check or a conflict gets a question from the agent, not a merge.
 - A repo with no `docs/agents/review.md` gets a pointer to `/setup-review-pipeline`, not a guessed review.

@@ -13,7 +13,18 @@
 import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { loadConfig } from './config.ts'
-import { gh, json, listInlineComments, listLines, oneLine, postedFindings, refuse, userIdentity } from './github.ts'
+import {
+  appIdentity,
+  gh,
+  json,
+  listInlineComments,
+  listLines,
+  oneLine,
+  postedFindings,
+  refuse,
+  userIdentity,
+  type Identity,
+} from './github.ts'
 import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
 import { Failure, loadState, saveState, type State } from './run-state.ts'
 import { refuseSecretsIn } from './secrets.ts'
@@ -129,9 +140,7 @@ async function post(argv: string[]): Promise<string> {
   // The pipeline never gets here without a valid config, so any problem is broken (4).
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, 4)
-  if (loaded.config.app) {
-    throw new Failure('App identity is not built yet: remove "app: enabled" from the config to post as the user', 4)
-  }
+  const app = loaded.config.app
 
   let raw: string
   try {
@@ -182,23 +191,25 @@ async function post(argv: string[]): Promise<string> {
       `the gate fails, so the PR cannot be approved: ${problems.join('; ')}`,
     )
   }
-  if (kind === 'verdict') {
-    throw new Failure('APPROVE/REQUEST_CHANGES need the reviewer App: the PR author cannot approve their own PR', 1)
-  }
+  // Without the App the review posts as the PR author, who cannot approve or
+  // request changes on their own PR.
+  refuse(app || kind !== 'verdict', 'APPROVE/REQUEST_CHANGES need the reviewer App: the PR author cannot approve their own PR')
 
   // Primary resume check: the run state already records this round's review.
   const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit)
   if (recorded !== undefined) return `${JSON.stringify({ posted: false, duplicate: true, id: recorded.id, ...gate })}\n`
 
-  const poster = await userIdentity()
+  // With the App, a token that cannot be minted stops here (exit 4), before
+  // any gh call: never post as the user instead.
+  const poster = app ? await appIdentity(repo) : await userIdentity()
   const reviewsPath = `repos/${repo}/pulls/${pr}/reviews`
-  const existing = await findOwnReview(reviewsPath, pr, marker, poster.login, commit)
+  const existing = await findOwnReview(reviewsPath, pr, marker, poster, commit)
   if (existing !== undefined) {
     await record(state, { round, kind, id: existing, commit, as: poster.as })
     return `${JSON.stringify({ posted: false, duplicate: true, id: existing, ...gate })}\n`
   }
 
-  const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(outgoing))
+  const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(outgoing), poster.token)
   refuse(posted.code === 0, `GitHub rejected the review: ${oneLine(posted.stderr || posted.stdout)}`)
   const { id } = json<{ id: number }>(posted.stdout, 'post review')
   await record(state, { round, kind, id, commit, as: poster.as })
@@ -206,21 +217,23 @@ async function post(argv: string[]): Promise<string> {
 }
 
 // Fallback resume check, for a run state that lost its record: a review on
-// the PR that carries the marker, was posted by `login`, and is on `commit`.
-// A marker in anyone else's review, or on another commit, does not count, so
-// a third party cannot suppress the pipeline's review by copying the marker.
+// the PR that carries the marker, was posted by the poster's login (the
+// App's `<slug>[bot]` when it posts as the App), and is on `commit`. A marker
+// in anyone else's review, or on another commit, does not count, so a third
+// party cannot suppress the pipeline's review by copying the marker.
 async function findOwnReview(
   reviewsPath: string,
   pr: number,
   marker: string,
-  login: string,
+  poster: Identity,
   commit: string,
 ): Promise<number | undefined> {
   const reviews = await listLines<{ id: number; body: string | null; commit_id: string | null; login: string | null }>(
     ['api', '--paginate', '--jq', '.[] | {id, body, commit_id, login: .user.login}', reviewsPath],
     `the reviews of PR #${pr}`,
+    poster.token,
   )
-  return reviews.find((r) => r.login === login && r.commit_id === commit && (r.body ?? '').includes(marker))?.id
+  return reviews.find((r) => r.login === poster.login && r.commit_id === commit && (r.body ?? '').includes(marker))?.id
 }
 
 export async function main(argv: string[]): Promise<number> {

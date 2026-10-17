@@ -2,7 +2,16 @@ import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { fakeGh, runCli, tempDir, type FakeGhResponse } from './test-helpers.ts'
+import {
+  appKey,
+  fakeGh,
+  fakeGitHubApi,
+  runCli,
+  tempDir,
+  type FakeApiRoute,
+  type FakeGhResponse,
+  type FakeGitHubApi,
+} from './test-helpers.ts'
 
 const SHA = 'c'.repeat(40)
 const MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=review -->'
@@ -31,26 +40,48 @@ const PAYLOAD = {
 }
 
 const CONFIG = '# Review pipeline\n\n```yaml\nruntime: claude\n```\n'
+const APP_CONFIG = '# Review pipeline\n\n```yaml\nruntime: claude\napp: enabled\n```\n'
+const TOKEN = 'ghs_faketoken0123456789'
+const BOT = 'hero-reviewer[bot]'
+
+// GitHub's answers for a working reviewer App installed on the repo.
+const APP_ROUTES: Record<string, FakeApiRoute> = {
+  'GET /repos/contract-hero/hero-pocock/installation': { status: 200, body: { id: 4242 } },
+  'POST /app/installations/4242/access_tokens': { status: 201, body: { token: TOKEN } },
+  'GET /app': { status: 200, body: { slug: 'hero-reviewer' } },
+}
 
 type Setup = {
   responses?: FakeGhResponse[]
   payload?: unknown
   config?: string | null
   state?: Record<string, unknown> | string | null
+  // A reviewer App (config `app: enabled`, credentials, a fake GitHub API).
+  app?: { routes?: Record<string, FakeApiRoute> }
 }
 
-// A temp dir with a config, a payload file, a fake gh and a state root.
+// A temp dir with a config, a payload file, a fake gh and a state root, and
+// with `app`, App credentials and a fake GitHub API that trusts their key.
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await tempDir(t)
   const gh = await fakeGh(dir, [...(options.responses ?? []), ME])
   const configPath = join(dir, 'review.md')
-  if (options.config !== null) await writeFile(configPath, options.config ?? CONFIG)
+  if (options.config !== null) await writeFile(configPath, options.config ?? (options.app ? APP_CONFIG : CONFIG))
   const payloadPath = join(dir, 'review-payload.json')
   const payload = options.payload ?? PAYLOAD
   await writeFile(payloadPath, typeof payload === 'string' ? payload : JSON.stringify(payload))
   const root = join(dir, 'state')
   const stateFile = join(root, 'pr-13', 'state.json')
-  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: root }
+  const env: Record<string, string | undefined> = { ...gh.env, HERO_POCOCK_STATE_DIR: root }
+  let api: FakeGitHubApi | undefined
+  if (options.app !== undefined) {
+    const key = await appKey(dir)
+    api = await fakeGitHubApi(t, key.publicKey, options.app.routes ?? APP_ROUTES)
+    const envFile = join(dir, 'reviewer-app.env')
+    await writeFile(envFile, `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
+    env.HERO_POCOCK_REVIEWER_APP_ENV = envFile
+    env.HERO_POCOCK_GITHUB_API_URL = api.url
+  }
   if (options.state !== null) {
     if (typeof options.state === 'string') {
       await mkdir(join(root, 'pr-13'), { recursive: true })
@@ -71,7 +102,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
       { env },
     )
   const reviews = async () => JSON.parse(await readFile(stateFile, 'utf8')).reviews
-  return { gh, post, reviews, stateFile, env, configPath, dir }
+  return { gh, post, reviews, stateFile, env, configPath, dir, api }
 }
 
 test('a COMMENT review with inline suggestions posts once, as the user, and is recorded', async (t) => {
@@ -184,13 +215,13 @@ for (const [kind, secret] of [
   })
 }
 
-const TOKEN = `ghp_${'A1b2'.repeat(9)}`
+const LEAK = `ghp_${'A1b2'.repeat(9)}`
 for (const [name, text] of [
-  ['after a newline', `Found it:\n${TOKEN}`],
-  ['inside an HTML comment', `ok <!--${TOKEN}-->`],
+  ['after a newline', `Found it:\n${LEAK}`],
+  ['inside an HTML comment', `ok <!--${LEAK}-->`],
   ['split by an HTML comment', `ghp<!-- hidden -->_${'A1b2'.repeat(9)}`],
   ['with a zero-width character in its prefix', `gh\u200Bp_${'A1b2'.repeat(9)}`],
-  ['in a suggestion block', '**F1** fix\n\n```suggestion\nconst t = "' + TOKEN + '"\n```'],
+  ['in a suggestion block', '**F1** fix\n\n```suggestion\nconst t = "' + LEAK + '"\n```'],
 ]) {
   test(`a GitHub token ${name} is refused before any gh call`, async (t) => {
     const comment = { ...PAYLOAD.comments[0], body: text }
@@ -282,7 +313,6 @@ for (const [name, extra, payload, message] of REFUSED) {
 const BROKEN = [
   ['a missing config', null, /no review config/],
   ['an invalid config', '```yaml\nruntime: gemini\n```\n', /unknown runtime "gemini"/],
-  ['an App identity (not built yet)', '```yaml\nruntime: claude\napp: enabled\n```\n', /App identity is not built yet/],
 ] as const
 
 for (const [name, config, message] of BROKEN) {
@@ -366,7 +396,14 @@ const RECHECK = {
 }
 const TABLE = { event: 'COMMENT', body: '## Re-check: round 1', comments: [] }
 
-type GateSetup = { ledger?: unknown; recheck?: unknown; posted?: string; noState?: boolean }
+type GateSetup = {
+  ledger?: unknown
+  recheck?: unknown
+  posted?: string
+  noState?: boolean
+  app?: boolean
+  verdict?: 'APPROVE' | 'REQUEST_CHANGES'
+}
 
 // A PR whose round 1 review (id 555) is posted and recorded, the ledger, and
 // the re-check. `gated(kind)` posts that kind at the fix commit.
@@ -374,6 +411,7 @@ async function gateSetup(t: Parameters<typeof tempDir>[0], options: GateSetup = 
   const s = await setup(t, {
     state: options.noState === true ? null : undefined,
     responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 555 }) }],
+    app: options.app ? {} : undefined,
   })
   if (options.noState !== true) assert.equal((await s.post()).code, 0)
   const write = async (name: string, value: unknown) => {
@@ -384,7 +422,7 @@ async function gateSetup(t: Parameters<typeof tempDir>[0], options: GateSetup = 
   const ledger = await write('findings.json', options.ledger ?? LEDGER)
   const recheck = await write('recheck-r1.json', options.recheck ?? RECHECK)
   const table = await write('recheck-payload.json', TABLE)
-  const verdict = await write('verdict-payload.json', { ...TABLE, event: 'APPROVE' })
+  const verdict = await write('verdict-payload.json', { ...TABLE, event: options.verdict ?? 'APPROVE' })
   await s.gh.respond([
     { match: 'pulls/13/comments', stdout: options.posted ?? POSTED },
     { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
@@ -469,11 +507,11 @@ test('an APPROVE verdict on a failing gate exits 1 and posts nothing', async (t)
   assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
 })
 
-test('an APPROVE verdict on a passing gate still needs the reviewer App', async (t) => {
+test('without the reviewer App, a verdict is refused: the PR author cannot approve their own PR', async (t) => {
   const s = await gateSetup(t)
   const { code, stderr } = await s.gated('verdict')
   assert.equal(code, 1)
-  assert.match(stderr, /APPROVE\/REQUEST_CHANGES need the reviewer App/)
+  assert.match(stderr, /APPROVE\/REQUEST_CHANGES need the reviewer App: the PR author cannot approve their own PR/)
   assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
 })
 
@@ -501,4 +539,103 @@ test('the gate needs the run state: without one it exits 3 and posts nothing', a
   assert.equal(code, 3)
   assert.match(stderr, /no run state for PR #13/)
   assert.deepEqual(await s.calls(), [])
+})
+
+// The reviewer App: with `app: enabled`, post-review mints an installation
+// token itself and gives it to gh as GH_TOKEN, so the review shows the bot.
+
+test('with the App, the review posts with the minted token as GH_TOKEN and records the bot', async (t) => {
+  const s = await setup(t, {
+    app: {},
+    responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 555, state: 'COMMENTED' }) }],
+  })
+  const { code, stdout, stderr } = await s.post()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { posted: true, id: 555, as: BOT, event: 'COMMENT', round: 1, kind: 'review' })
+
+  const calls = await s.gh.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [LIST, POST])
+  assert.deepEqual(calls.map((c) => c.gh_token), [TOKEN, TOKEN])
+  assert.deepEqual(JSON.parse(calls[1]!.stdin), { ...PAYLOAD, body: `${PAYLOAD.body}\n\n${MARKER}`, commit_id: SHA })
+  assert.deepEqual(await s.reviews(), [{ round: 1, kind: 'review', id: 555, commit: SHA, as: BOT }])
+  assert.doesNotMatch(stdout, new RegExp(TOKEN))
+})
+
+test('with the App, the duplicate check counts only the bot reviews', async (t) => {
+  const s = await setup(t, {
+    app: {},
+    state: null,
+    responses: [
+      { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 556 }) },
+      { match: '--paginate', stdout: listed({ id: 9, body: `walkthrough\n\n${MARKER}` }) },
+    ],
+  })
+  // The user's own marked review is not the App's review: post.
+  assert.deepEqual(JSON.parse((await s.post()).stdout).posted, true)
+
+  await s.gh.respond([{ match: '--paginate', stdout: listed({ id: 556, body: `walkthrough\n\n${MARKER}`, login: BOT }) }])
+  const again = await s.post()
+  assert.equal(again.code, 0)
+  assert.deepEqual(JSON.parse(again.stdout), { posted: false, duplicate: true, id: 556 })
+  assert.equal((await s.gh.calls()).filter((c) => c.argv.includes('POST')).length, 1)
+})
+
+test('a broken App exits 4, posts nothing, and never falls back to the user', async (t) => {
+  const s = await setup(t, {
+    app: { routes: { ...APP_ROUTES, 'GET /repos/contract-hero/hero-pocock/installation': { status: 404, body: { message: 'Not Found' } } } },
+  })
+  const { code, stdout, stderr } = await s.post()
+  assert.equal(code, 4)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts post-review: the reviewer App is not installed on contract-hero\/hero-pocock \(HTTP 404\)/)
+  assert.deepEqual(await s.gh.calls(), [])
+  assert.deepEqual(await s.reviews(), [])
+})
+
+test('with the App, a passing gate posts the APPROVE verdict as the bot at the fix commit', async (t) => {
+  const s = await gateSetup(t, { app: true })
+  const { code, stdout, stderr } = await s.gated('verdict')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), {
+    posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
+  })
+  const calls = await s.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [COMMENTS, LIST, POST])
+  assert.equal(calls[2]!.gh_token, TOKEN)
+  assert.deepEqual(JSON.parse(calls[2]!.stdin), {
+    ...TABLE,
+    event: 'APPROVE',
+    body: `${TABLE.body}\n\n<!-- hero-pocock:review-pipeline pr=13 round=1 kind=verdict -->`,
+    commit_id: FIXED,
+  })
+  assert.deepEqual(
+    (await s.reviews()).map((r: { kind: string; id: number; as: string; commit: string }) => [r.kind, r.id, r.as, r.commit]),
+    [['review', 555, BOT, SHA], ['verdict', 666, BOT, FIXED]],
+  )
+})
+
+test('with the App, a failing gate after the last round posts REQUEST_CHANGES as the bot', async (t) => {
+  const s = await gateSetup(t, {
+    app: true,
+    verdict: 'REQUEST_CHANGES',
+    recheck: { items: [RECHECK.items[0], { id: 'F2', status: 'open', reason: 'still crashes' }, RECHECK.items[2]] },
+  })
+  const { code, stdout, stderr } = await s.gated('verdict')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const out = JSON.parse(stdout)
+  assert.deepEqual([out.posted, out.as, out.event, out.gate, out.problems], [true, BOT, 'REQUEST_CHANGES', 'fail', ['F2 is open: still crashes']])
+  assert.equal((await s.calls()).at(-1)!.gh_token, TOKEN)
+})
+
+test('with the App, an APPROVE on a failing gate is still refused before any token is minted', async (t) => {
+  const s = await gateSetup(t, { app: true, recheck: { items: [RECHECK.items[0], RECHECK.items[1]] } })
+  const minted = s.api!.requests.length
+  const { code, stderr } = await s.gated('verdict')
+  assert.equal(code, 1)
+  assert.match(stderr, /the gate fails, so the PR cannot be approved/)
+  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
+  assert.equal(s.api!.requests.length, minted)
 })

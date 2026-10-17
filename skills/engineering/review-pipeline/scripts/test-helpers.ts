@@ -1,7 +1,10 @@
 // Shared harness for the helper CLI tests. Every test drives `review.ts`
 // through its command line in a child process, never by importing a module.
 import { spawn } from 'node:child_process'
+import { generateKeyPairSync, verify, type KeyObject } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,11 +15,16 @@ export type RunResult = { code: number | null; stdout: string; stderr: string }
 
 export type RunOptions = { cwd?: string; env?: Record<string, string | undefined>; stdin?: string }
 
-// The machine may export a real token. A test must never inherit it.
+// The machine may export a real token, or hold real reviewer App credentials
+// in ~/.config/hero-pocock/. A test must never inherit or reach either: the App
+// env file points at a path that does not exist, and the GitHub API at a port
+// nothing listens on, until a test sets its own.
 export function baseEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env }
   delete env.GH_TOKEN
   delete env.GITHUB_TOKEN
+  env.HERO_POCOCK_REVIEWER_APP_ENV = join(tmpdir(), 'review-pipeline-no-such-dir', 'reviewer-app.env')
+  env.HERO_POCOCK_GITHUB_API_URL = 'http://127.0.0.1:9'
   return env
 }
 
@@ -178,4 +186,90 @@ export async function fakeCodex(dir: string, spec: FakeCodexSpec = {}): Promise<
         .filter((line) => line !== '')
         .map((line) => JSON.parse(line) as FakeCodexCall),
   }
+}
+
+// A reviewer App key pair made for one test. The private key is written as a
+// PKCS#1 PEM (the format of GitHub's download); the public key stays here, so
+// the fake API can check the JWT signature.
+export async function appKey(dir: string, name = 'reviewer-app.pem'): Promise<{ pem: string; publicKey: KeyObject }> {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const pem = join(dir, name)
+  await writeFile(pem, privateKey.export({ type: 'pkcs1', format: 'pem' }), { mode: 0o600 })
+  return { pem, publicKey }
+}
+
+export type FakeApiRoute = { status: number; body: unknown }
+
+export type FakeApiRequest = {
+  method: string
+  path: string
+  // The JWT's `iss` (null unless the Bearer value is a JWT the test's key signed).
+  iss: string | null
+  jwt_ok: boolean
+  accept: string | null
+  api_version: string | null
+  body: unknown
+}
+
+export type FakeGitHubApi = { url: string; requests: FakeApiRequest[] }
+
+function checkJwt(auth: string | undefined, publicKey: KeyObject): { ok: boolean; iss: string | null } {
+  const parts = /^Bearer (.+)$/.exec(auth ?? '')?.[1].split('.') ?? []
+  if (parts.length !== 3) return { ok: false, iss: null }
+  const [header, payload, signature] = parts
+  const signed = verify('RSA-SHA256', Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, 'base64url'))
+  if (!signed) return { ok: false, iss: null }
+  const head = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'))
+  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+  const now = Math.floor(Date.now() / 1000)
+  // GitHub refuses a JWT that is not yet valid, expired, or valid for over 10 minutes.
+  const fresh = claims.iat <= now && claims.exp > now && claims.exp - claims.iat <= 600
+  return { ok: head.alg === 'RS256' && head.typ === 'JWT' && fresh, iss: String(claims.iss) }
+}
+
+// A local stand-in for api.github.com. `routes` maps "METHOD /path" to a
+// response; any other request gets a 404. A request whose Bearer JWT does not
+// verify with `publicKey` gets a 401, as GitHub answers a wrong key. Every
+// request is recorded. The server runs in the test process, so spawn the CLI
+// with the async `run`/`runCli`, never with spawnSync.
+export async function fakeGitHubApi(
+  t: { after: (fn: () => Promise<void>) => void },
+  publicKey: KeyObject,
+  routes: Record<string, FakeApiRoute>,
+): Promise<FakeGitHubApi> {
+  const requests: FakeApiRequest[] = []
+  const server = createServer((req, res) => {
+    let raw = ''
+    req.on('data', (chunk) => (raw += chunk))
+    req.on('end', () => {
+      const jwt = checkJwt(req.headers.authorization, publicKey)
+      const method = req.method ?? 'GET'
+      const path = req.url ?? '/'
+      let body: unknown = null
+      try {
+        body = raw === '' ? null : JSON.parse(raw)
+      } catch {
+        body = raw
+      }
+      const version = req.headers['x-github-api-version']
+      requests.push({
+        method,
+        path,
+        iss: jwt.iss,
+        jwt_ok: jwt.ok,
+        accept: req.headers.accept ?? null,
+        api_version: typeof version === 'string' ? version : null,
+        body,
+      })
+      const route: FakeApiRoute = !jwt.ok
+        ? { status: 401, body: { message: 'A JSON web token could not be decoded' } }
+        : (routes[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } })
+      res.writeHead(route.status, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(route.body))
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())))
+  const { port } = server.address() as AddressInfo
+  return { url: `http://127.0.0.1:${port}`, requests }
 }
