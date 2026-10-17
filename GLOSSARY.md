@@ -22,7 +22,7 @@ A canonical state-machine label applied to an **Issue** during triage (e.g. `nee
 The path a pull request takes from draft to merge: review, adjudication, re-check, and merge. A repo configures it once, at setup.
 
 **Orchestrator**:
-The agent that owns one review round: it dispatches the **Reviewer pairs**, verifies and consolidates their findings, and posts one review on the pull request. It is never the agent that wrote the code.
+The agent that owns one review round: it verifies and consolidates the findings of the **Reviewer pairs** into the one review that the round posts on the pull request. It is never the **Implementer**.
 _Avoid_: lead, coordinator
 
 **Reviewer pair**:
@@ -34,11 +34,15 @@ The reviewer that judges the change against the repo's own standards, a code-sme
 **Spec** (reviewer):
 The reviewer that judges the change against the **Issue** or spec it came from.
 
+**Implementer**:
+The agent that builds a ticket into a pull request and answers the reviews of that pull request (**Adjudication**). On a pull request a human wrote, the human is the **Implementer**.
+_Avoid_: coding agent, writer, author
+
 **Adjudication**:
-The coding agent's answer to a posted review: it accepts or refutes each finding, and lands the accepted fixes.
+The **Implementer**'s answer to a posted review: it accepts or refutes each finding, and lands the accepted fixes.
 
 **Re-checker**:
-A fresh, read-only agent that checks an **Adjudication** against the code: each finding is fixed, validly refuted, or still open. It is never the coding agent or that round's **Orchestrator**.
+A fresh, read-only agent that checks an **Adjudication** against the code: each finding is fixed, validly refuted, or still open. It is never the **Implementer** or that round's **Orchestrator**.
 
 ## Relationships
 
@@ -47,7 +51,7 @@ A fresh, read-only agent that checks an **Adjudication** against the code: each 
 - A **Decision ticket** is an **Issue** (a child of a `wayfinder:map`)
 - An **Orchestrator** runs one or more **Reviewer pairs** per review round
 - Each **Reviewer pair** is one **Standards** reviewer plus one **Spec** reviewer
-- Every posted review is followed by **Adjudication**
+- Every posted review is followed by **Adjudication** by the pull request's **Implementer**
 - Round 1 is the posted review, its **Adjudication**, and one check by a **Re-checker**; each later round is an **Adjudication** of the findings still open plus a new check, with no new review, up to the repo's round limit
 
 ## Flagged ambiguities
