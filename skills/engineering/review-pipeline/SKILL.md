@@ -30,7 +30,8 @@ The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.
 | --- | --- |
 | `config` | prints the resolved review config as JSON |
 | `run-state path\|create\|read\|advance\|set\|next-round --pr N ...` | the per-PR checkpoint in `<git common dir>/hero-pocock/pr-<N>/` |
-| `post-review --repo O/R --pr N --commit <sha> --round R --kind review\|recheck --payload <file> [--ledger <file> --recheck <file>]` | posts one review, at most once per PR, round and kind; `--kind recheck` also runs the gate |
+| `app-token --repo O/R --check\|--login` | checks that the reviewer App can post on the repo; `--login` prints its `<slug>[bot]` login |
+| `post-review --repo O/R --pr N --commit <sha> --round R --kind review\|recheck\|verdict --payload <file> [--ledger <file> --recheck <file>]` | posts one review, at most once per PR, round and kind, as the App when the config enables it; `--kind recheck` and `verdict` also run the gate |
 | `reply --repo O/R --pr N --round R --ledger <file> [--recheck <file>]` | posts the Adjudication: a reply per inline finding and one PR comment, each at most once |
 | `codex-exec --role orchestrator\|reviewer --brief <file> --out <file>` | runs one `codex exec` with the role's model and effort from the config (`runtime: codex` only) |
 | `explainer --repo O/R --pr N --file <abs path>` | records the explainer in the run state and links it from the PR in one comment, posted at most once |
@@ -44,8 +45,8 @@ Every subcommand uses the same exit codes:
 | 0 | success | continue |
 | 1 | the step failed (gh failed, GitHub refused, a guard refused, a run in flight) | report the message, stop that step |
 | 2 | usage error | fix the call |
-| 3 | absent: no config, or no run state | the documented fallback for that step |
-| 4 | broken: invalid config, corrupt run state | stop the pipeline and report; never fall back |
+| 3 | absent: no config, no reviewer App, or no run state | the documented fallback for that step |
+| 4 | broken: invalid config, a reviewer App that is enabled but fails, corrupt run state | stop the pipeline and report; never fall back |
 
 ## Config
 
@@ -54,7 +55,7 @@ Run `review.ts config`. Exit 3 (no `docs/agents/review.md`) or exit 4 (invalid f
 Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with `model`, `effort`, and `agent_model`, the sub-agent model family), `max_rounds`, `app`.
 
 - `runtime: codex`: run `codex --version` now. If it fails, stop before **Resume** as **Codex runtime** says for a missing or broken Codex. Then see **Codex runtime**.
-- `app: true`: see **App identity**.
+- `app: true`: run the check in **App identity** now, before **Resume**.
 
 ## Resume
 
@@ -89,7 +90,7 @@ gh pr view N --json number,url,isDraft,state,headRefOid,headRefName,baseRefName
 - Below, `<base>` means `origin/<baseRefName>`. Diff: `git diff <base>...<head_sha>` (three dots). Commits: `git log <base>..<head_sha> --oneline`.
 - An empty diff stops the run: there is nothing to review.
 
-For a new run: `review.ts run-state create --pr N --repo O/R --base <baseRefName> --head <headRefName> --head-sha <head_sha> --runtime <runtime> --reviewer-login none`. The run dir is `review.ts run-state path --pr N`.
+For a new run: `review.ts run-state create --pr N --repo O/R --base <baseRefName> --head <headRefName> --head-sha <head_sha> --runtime <runtime> --reviewer-login <login>`, where `<login>` is the App's login from **App identity**, or `none` without the App. The run dir is `review.ts run-state path --pr N`.
 
 ## Review round
 
@@ -184,14 +185,29 @@ review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind r
 ```
 
    The output's `gate` is `pass` or `fail`, and `problems` lists why it failed. The gate passes only when every ledger entry has a decision, every inline finding has exactly one ledger entry, the re-check covers exactly the ledger's ids, and every item is `fixed` or `refutation_accepted`. Without the reviewer App, this gate is the merge gate. Then `review.ts run-state advance --pr N rechecked`.
-5. **Pass:** go to **Finish**.
+5. **Pass:** with the App, post its APPROVE verdict first (**App identity**). Then go to **Finish**.
 6. **Fail:** `review.ts run-state next-round --pr N --max-rounds <max_rounds>`. It prints the new `round` and `phase`:
    - `review-posted`: round R+1 starts. Go to **Adjudication** and answer the open items and the gate's `problems`.
-   - `stopped`: `max_rounds` rounds failed. The PR stays in draft. Stop and ask the user, with the open items and the gate's `problems`. Offer two ways on: fix the PR by hand and run `/review-pipeline N` again (a new run, with a fresh review of the new head), or leave the PR in draft for a human reviewer. Do not start another round yourself.
+   - `stopped`: `max_rounds` rounds failed. With the App, post its REQUEST_CHANGES verdict (**App identity**). The PR stays in draft. Stop and ask the user, with the open items and the gate's `problems`. Offer two ways on: fix the PR by hand and run `/review-pipeline N` again (a new run, with a fresh review of the new head), or leave the PR in draft for a human reviewer. Do not start another round yourself.
 
 ## App identity
 
-Not built yet: every review posts from the user's own `gh` account as a COMMENT review. If the config has `app: true`, `post-review` exits 4: stop and tell the user to remove `app: enabled` from `docs/agents/review.md` until App identity ships.
+The config's `app` decides who posts. With `app: true`, the reviewer GitHub App posts every review, re-check and verdict, so the review is clearly not from the PR author, and the App approves or requests changes at the end of the loop. Without the App, everything posts from the user's own `gh` account as COMMENT reviews, and the re-check gate is the merge gate.
+
+The App's credentials are in `~/.config/hero-pocock/` (an env file and a private key), never in the repo. `post-review` reads them and mints a short-lived token itself for each post, so no agent ever sees the token. Never run `review.ts app-token` without `--check` or `--login`: that form prints a token.
+
+1. **Check at the start.** With `app: true`, run `review.ts app-token --repo O/R --login` in **Config**, before **Resume**. Exit 0 prints the App's login, `<slug>[bot]`: keep it for `run-state create --reviewer-login` in **Fixed point**. Exit 4 means the App is enabled but broken (credentials missing, a bad key, the App not installed on the repo, or a GitHub error). Stop the run, show the message, and tell the user to fix the App or to re-run `/setup-review-pipeline`. Never continue as the user: that quietly turns the approval gate off.
+2. **Every post.** `post-review` posts as the App with no extra flag. If the App breaks in the middle of a run, `post-review` exits 4 and posts nothing: stop as in step 1. `reply` always posts as the user, because the PR author answers the review.
+3. **Verdict.** At the end of the loop the App approves or requests changes. Write `<run dir>/verdict-r<R>.json`: `{"event": "APPROVE", "body": "<summary>", "comments": []}` after a passing re-check (**Re-check** step 5), or `"event": "REQUEST_CHANGES"` when `next-round` prints `stopped` (step 6). The body: `## Verdict: round <R>`, the re-checked commit `<head_sha7>`, and for REQUEST_CHANGES the open items and the gate's `problems`. Then:
+
+```sh
+review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind verdict \
+  --payload <run dir>/verdict-r<R>.json --ledger <run dir>/findings.json --recheck <run dir>/recheck-r<R>.json
+```
+
+   It runs the gate again and refuses an APPROVE on a failing gate. It posts at most one verdict per round, so a resumed run can run it again safely. The APPROVE goes on the re-checked head, before **Finish**: the body rewrite and the ready flip add no commits, so the approval stays valid. With the App, **Finish**'s `merge-gate` stops until the run state records this APPROVE at `head_sha`.
+
+Without the App, skip step 3: `--kind verdict` exits 1, because the PR author cannot approve their own PR.
 
 ## Finish
 
