@@ -25,6 +25,9 @@ function usage(message: string): Failure {
 
 const cell = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|')
 
+// The answer posted in a finding's thread.
+const replyBody = (entry: LedgerEntry, marker: string) => `${entry.decision}: ${entry.reason}\n\n${marker}`
+
 function summary(round: number, targets: LedgerEntry[], marker: string): string {
   return [
     `## Adjudication: round ${round}`,
@@ -78,7 +81,10 @@ async function reply(argv: string[]): Promise<string> {
     undecided.length === 0,
     `every finding needs a decision (ACCEPT or REFUTE) and a reason first: ${undecided.map((e) => e.id).join(', ')}`,
   )
-  refuseSecrets(JSON.stringify(targets), `ledger ${ledgerPath}`)
+  refuseSecrets(
+    [...targets.flatMap((e) => [replyBody(e, ''), e.id, String(e.where ?? ''), e.reason]), summary(round, targets, '')],
+    `ledger ${ledgerPath}`,
+  )
 
   const state = await loadState(pr)
   const me = await userIdentity()
@@ -108,7 +114,7 @@ async function reply(argv: string[]): Promise<string> {
     for (const thread of threads) {
       const done = comments.some((c) => c.in_reply_to_id === thread && c.login === me.login && (c.body ?? '').includes(marker))
       if (done) continue
-      const body = `${entry.decision}: ${entry.reason}\n\n${marker}`
+      const body = replyBody(entry, marker)
       const result = await gh(
         ['api', '-X', 'POST', `repos/${repo}/pulls/${pr}/comments/${thread}/replies`, '--input', '-'],
         JSON.stringify({ body }),

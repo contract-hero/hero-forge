@@ -184,6 +184,25 @@ for (const [kind, secret] of [
   })
 }
 
+const TOKEN = `ghp_${'A1b2'.repeat(9)}`
+for (const [name, text] of [
+  ['after a newline', `Found it:\n${TOKEN}`],
+  ['inside an HTML comment', `ok <!--${TOKEN}-->`],
+  ['split by an HTML comment', `ghp<!-- hidden -->_${'A1b2'.repeat(9)}`],
+  ['with a zero-width character in its prefix', `gh\u200Bp_${'A1b2'.repeat(9)}`],
+  ['in a suggestion block', '**F1** fix\n\n```suggestion\nconst t = "' + TOKEN + '"\n```'],
+]) {
+  test(`a GitHub token ${name} is refused before any gh call`, async (t) => {
+    const comment = { ...PAYLOAD.comments[0], body: text }
+    const s = await setup(t, { payload: { ...PAYLOAD, body: name === 'after a newline' ? text : PAYLOAD.body, comments: [comment] } })
+    const { code, stdout, stderr } = await s.post()
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.ok(stderr.includes('contains what looks like a GitHub token. Nothing was posted'), stderr)
+    assert.deepEqual(await s.gh.calls(), [])
+  })
+}
+
 test('a payload that only names a token prefix still posts', async (t) => {
   const s = await setup(t, {
     payload: { ...PAYLOAD, body: 'Scan for ghp_ and sk- prefixes', comments: [] },

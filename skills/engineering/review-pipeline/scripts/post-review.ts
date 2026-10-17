@@ -136,7 +136,7 @@ async function post(argv: string[]): Promise<string> {
     throw new Failure(`payload ${payloadPath} is not valid JSON`, 1)
   }
   const payload = checkPayload(parsed)
-  refuseSecrets(JSON.stringify(payload), `payload ${payloadPath}`)
+  refuseSecrets([payload.body, ...payload.comments.flatMap((c) => [c.body, c.path])], `payload ${payloadPath}`)
   if (kind === 'verdict') refuse(payload.event !== 'COMMENT', '--kind verdict posts APPROVE or REQUEST_CHANGES only')
   else refuse(payload.event === 'COMMENT', `--kind ${kind} posts COMMENT only`)
 
