@@ -3,7 +3,7 @@
 //   node --test scripts/link-skills.spec.ts
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,8 +23,9 @@ function skillDirs() {
   ).sort()
 }
 
-function runWithHome() {
+function runWithHome(seed: (home: string) => void = () => {}) {
   const home = mkdtempSync(join(tmpdir(), 'link-skills-'))
+  seed(home)
   execFileSync('bash', [join(REPO, 'scripts', 'link-skills.sh')], {
     env: { ...process.env, HOME: home },
     stdio: 'pipe',
@@ -54,5 +55,28 @@ test('link-skills.sh links every skill into ~/.claude/skills, and nothing else',
     assert.deepEqual(targets, skillDirs())
   } finally {
     rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('link-skills.sh removes its own links to skills that are gone, and keeps every other entry', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'link-skills-outside-'))
+  const home = runWithHome((home) => {
+    const dest = join(home, '.claude', 'skills')
+    mkdirSync(dest, { recursive: true })
+    // A link this script made before a skill was renamed: it points into this repo's skills/.
+    symlinkSync(join(REPO, 'skills', 'engineering', 'renamed-away'), join(dest, 'renamed-away'))
+    // The user's own entries: a link outside the repo (live and dangling) and a real folder.
+    symlinkSync(outside, join(dest, 'user-link'))
+    symlinkSync(join(outside, 'gone'), join(dest, 'user-dangling'))
+    mkdirSync(join(dest, 'user-folder'))
+  })
+  try {
+    const dest = join(home, '.claude', 'skills')
+    const entries = readdirSync(dest)
+    assert.ok(!entries.includes('renamed-away'), 'the stale link into this repo is still there')
+    for (const name of ['user-link', 'user-dangling', 'user-folder']) assert.ok(entries.includes(name), `${name} was removed`)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
   }
 })
