@@ -83,7 +83,7 @@ After an interrupted session, keep `<stack dir>/order.json` and read where each 
 | You find | Next step |
 | --- | --- |
 | a layer with no PR (`gh pr list --head <branch> --state all --json number,state`) | step 4 for it, when its parent is complete |
-| a layer PR whose run is not `complete` | step 5: `review-pipeline` with `<PR> --mode layer` resumes the run |
+| a layer PR whose run is not `complete` | step 5: `review-pipeline` with `<PR> --mode layer --spec <N>` resumes the run |
 | every layer `complete`, and no stack PR | step 6 |
 | a stack PR whose run is not `complete` | step 6: `review-pipeline` with `<stack PR> --mode stack-final` resumes it |
 | a merged layer PR | step 7.7 for each child whose PR still targets the merged layer's branch, using `<stack dir>/tip-<ticket>`; then the next layer |

@@ -15,6 +15,7 @@
 // review-dispatched and before this round's review is posted, so a re-run
 // never replaces the ledger of a review that is already on the PR.
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,7 +88,11 @@ function anchorable(diff: string): Record<Side, Map<string, Set<number>>> {
   return sides
 }
 
-type Issue = { number: number; title: string; body: string | null; comments?: { body: string }[] }
+type Issue = { number: number; title: string; body: string | null; comments?: { body: string; authorAssociation?: string }[] }
+
+// Who may write a triage Agent Brief that the reviewers grade against: anyone
+// else could steer them with a comment on a public issue.
+const BRIEF_AUTHORS = ['OWNER', 'MEMBER', 'COLLABORATOR']
 
 async function viewIssue(repo: string, n: string): Promise<Issue> {
   const viewed = await gh(['issue', 'view', n, '--repo', repo, '--json', 'number,title,body,comments'])
@@ -96,25 +101,33 @@ async function viewIssue(repo: string, n: string): Promise<Issue> {
 }
 
 // The body of a ticket's "What to build": the `## What to build` section of
-// the issue template, or the `**What to build:**` paragraph of the local one.
+// the issue template, up to the next heading of the same or a higher level,
+// or the `**What to build:**` paragraph of the local one, up to its next
+// field (`**Blocked by:**`, `**Status:**`), its checklist, or a heading.
 export function whatToBuild(body: string): string | undefined {
   const lines = body.split('\n')
-  const heading = /^#{2,3}\s+What to build\s*$/i
+  const heading = /^(#{1,6})\s+What to build\s*$/i
   const label = /^\*\*What to build:?\*\*:?\s*/i
   const start = lines.findIndex((l) => heading.test(l.trim()) || label.test(l.trim()))
   if (start === -1) return undefined
   const first = (lines[start] as string).trim()
-  const section = [heading.test(first) ? '' : first.replace(label, '')]
+  const level = heading.exec(first)?.[1]?.length
+  const end =
+    level === undefined
+      ? (l: string) => /^#{1,6}\s/.test(l) || /^\*\*(Blocked by|Status):?\*\*/i.test(l.trim()) || /^- \[[ xX]\]/.test(l.trim())
+      : (l: string) => new RegExp(`^#{1,${level}}\\s`).test(l)
+  const section = [level === undefined ? first.replace(label, '') : '']
   for (const line of lines.slice(start + 1)) {
-    if (/^#{1,3}\s/.test(line) || /^\*\*[^*]+:\*\*/.test(line.trim())) break
+    if (end(line)) break
     section.push(line)
   }
   return section.join('\n').trim() || undefined
 }
 
 // `<run dir>/spec.md`: each spec issue's title and body, and its triage Agent
-// Brief comment when it has one (the brief holds the decisions, the
-// acceptance criteria and the out-of-scope list the reviewers grade against).
+// Brief comment by a repo owner, member or collaborator when it has one (the
+// brief holds the decisions, the acceptance criteria and the out-of-scope list
+// the reviewers grade against).
 // A layer run with the spec number also gets the parent spec and the "What
 // to build" of each other ticket in the stack, so a reviewer or the
 // re-checker can check a claim that cites them, with no network.
@@ -124,7 +137,7 @@ async function fetchSpec(repo: string, issues: string[], parent: string | undefi
     const issue = await viewIssue(repo, n)
     parts.push(`# #${issue.number}: ${issue.title}\n\n${(issue.body ?? '').trim()}\n`)
     for (const c of issue.comments ?? []) {
-      if (/^## Agent Brief\s*$/m.test(c.body)) parts.push(`## Agent Brief of #${issue.number} (triage comment)\n\n${c.body.trim()}\n`)
+      if (BRIEF_AUTHORS.includes(c.authorAssociation ?? '') && /^## Agent Brief\s*$/m.test(c.body)) parts.push(`## Agent Brief of #${issue.number} (triage comment)\n\n${c.body.trim()}\n`)
     }
   }
   if (parent !== undefined) {
@@ -166,6 +179,7 @@ type Coordinates = {
   spec: string | undefined
   parent: string | undefined
   own: string
+  specHash: string | undefined
   pairs: number
   prompts: Record<Axis, string>
 }
@@ -199,6 +213,8 @@ function reviewerBrief(c: Coordinates, k: number, axis: Axis): string {
       ? [`- Acceptance criteria, in your focus order: the spec's acceptance criteria in their own order, starting at criterion number ((${k} - 1) mod C) + 1, where C is their count, and wrapping around to the first.`]
       : []),
     ...(axis === 'spec' ? [`- Spec: the issues in \`${spec}\`. Read that file: it is the spec contents.`] : []),
+    // The spec's fingerprint ties a reused Spec output to the spec it graded.
+    ...(axis === 'spec' && c.specHash !== undefined ? [`- Spec file sha256: ${c.specHash}`] : []),
     ...(axis === 'spec' && state.mode !== 'single' ? [`- Review mode: ${state.mode} (${MODE_NAMES[state.mode]})`] : []),
     ...(axis === 'spec' && c.parent !== undefined
       ? [`- The spec file also holds the parent spec and the other tickets' What to build, as context: grade this PR against the acceptance criteria of ${c.own} only. Work the file gives to another ticket is not missing here.`]
@@ -300,7 +316,8 @@ async function review(argv: string[]): Promise<number> {
 
   // No spec, no Spec reviewers: they would have nothing to judge.
   const own = issues.map((n) => `#${n}`).join(', ')
-  const c: Coordinates = { state, base, files, dir, spec, parent, own, pairs: config.pairs, prompts: await prompts() }
+  const specHash = spec === undefined ? undefined : createHash('sha256').update(await readFile(spec)).digest('hex')
+  const c: Coordinates = { state, base, files, dir, spec, parent, own, specHash, pairs: config.pairs, prompts: await prompts() }
   const expected = expectedReviewers(config.pairs, spec !== undefined)
   const reviewers = await Promise.all(expected.map((e) => reviewer(config, c, e)))
 
