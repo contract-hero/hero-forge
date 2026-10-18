@@ -57,3 +57,13 @@ test('every SKILL.md has a quoted, one-line description', () => {
   })
   assert.deepEqual(hits, [])
 })
+
+// A skill that builds or lands work names the hand-over that starts it, and
+// says that a passing mention does not (.agents/invocation.md).
+for (const skill of ['engineering/implement-pr', 'engineering/implement-spec-stack']) {
+  test(`${skill} starts on a hand-over for building, not on a mention`, () => {
+    const description = /^description: "(.+)"$/m.exec(frontmatter(skill))?.[1] ?? ''
+    assert.match(description, /handed over for building/)
+    assert.match(description, /Do not start it because .* mentioned/)
+  })
+}
