@@ -15,7 +15,7 @@ Dependencies are expressed as an explicit instruction to **call the Skill tool**
 
 One recorded exception: the review pipeline's skills reach the helper CLI and `code-review`'s prompts by path. See the Consequences of [ADR 0005](./adr/0005-review-moves-to-an-orchestrator.md).
 
-This is about **operative** instructions: a skill's own steps telling the agent to go run another skill right now. Router prose that just names skills for a human to pick from (`ask-matt`, bucket `README.md`s) isn't invoking anything, so it keeps `/skill`-style names as plain labels.
+This is about **operative** instructions: a skill's own steps telling the agent to go run another skill right now. Router prose that just names skills for a human to pick from (`ask-forge`, bucket `README.md`s) isn't invoking anything, so it keeps `/skill`-style names as plain labels.
 
 The Skill tool takes one skill per call. A step that needs two skills is two calls, not one call with two names: say so (`Call the Skill tool twice, for "grilling" and "domain-modeling"`), not "call it with X and Y," which reads as a single call taking both.
 

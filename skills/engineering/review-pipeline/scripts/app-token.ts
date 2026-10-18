@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { loadConfig } from './config.ts'
 import { Failure, parse, runMain, usageFor } from './cli.ts'
 
-const FIX = 'Fix the App credentials, or re-run /setup-review-pipeline'
+const FIX = 'Fix the App credentials, or re-run /setup-forge'
 
 export const ID_KEY = 'HERO_FORGE_REVIEWER_APP_ID'
 export const KEY_KEY = 'HERO_FORGE_REVIEWER_APP_KEY'

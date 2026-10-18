@@ -5,7 +5,7 @@ description: "Implement a spec as a stack of pull requests, one per ticket along
 
 You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.
 
-The issue tracker should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`. This skill reads the tickets as GitHub sub-issues of the spec, and their order from GitHub's native `blocked_by` dependencies (`docs/agents/issue-tracker.md`, **Blocking**). On any other tracker, tell the user that this skill needs GitHub Issues, and stop.
+The issue tracker should have been provided to you. If not, tell the user to run `/setup-forge`. This skill reads the tickets as GitHub sub-issues of the spec, and their order from GitHub's native `blocked_by` dependencies (`docs/agents/issue-tracker.md`, **Blocking**). On any other tracker, tell the user that this skill needs GitHub Issues, and stop.
 
 The goal is every ticket of the spec on the default branch, each through its own reviewed pull request, after one final review of the whole stack against the spec.
 
@@ -34,7 +34,7 @@ The plan follows two rules. A ticket with more than one open blocker branches fr
 
 ## Steps
 
-1. **Check the review config.** Run `review.ts config`. Exit 3 or 4: show the message, tell the user to run `/setup-review-pipeline`, and stop. Read the default branch (`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`) and `O/R`.
+1. **Check the review config.** Run `review.ts config`. Exit 3 or 4: show the message, tell the user to run `/setup-forge`, and stop. Read the default branch (`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`) and `O/R`.
 
 2. **Plan the stack.** Create the stack dir (`mkdir -p "$(review.ts stack path --spec <N>)"`). If `<stack dir>/order.json` exists, this is a resume: keep it and go to **Resume**. Do not plan again, because a landed ticket closes and would drop out of a new plan. Otherwise run `review.ts stack order --repo O/R --spec <N>` and save its output to `<stack dir>/order.json`.
    - Exit 1 on a cycle: show the message, which names the tickets in the cycle, and stop. Build nothing.
