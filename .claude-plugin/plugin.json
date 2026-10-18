@@ -1,6 +1,6 @@
 {
   "name": "hero-pocock",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Álvaro Lillo's version of Matt Pocock's skills, tuned for the Contract Hero work-stream: grilling, spec/ticket flows, TDD, code review, domain modelling and more, with every question asked as an AskUserQuestion dialog in Claude Code.",
   "author": {
     "name": "Álvaro Lillo",

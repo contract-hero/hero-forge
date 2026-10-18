@@ -240,7 +240,7 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
   refuse(
     mustGit(['merge-base', from, 'HEAD'], `--from ${from} shares no history with ${branch.out}`) !==
       mustGit(['merge-base', onto, 'HEAD'], `--onto ${onto} shares no history with ${branch.out}`),
-    `--from ${from} cuts no deeper into ${branch.out} than --onto ${onto}: pass the parent layer's pre-landing tip`,
+    `--from ${from} cuts no deeper into ${branch.out} than --onto ${onto}: pass the parent layer's pre-landing tip, the commit in <stack dir>/tip-<parent ticket> (review.ts stack path --spec <N> prints the stack dir)`,
   )
 
   const rebased = git(['rebase', '--onto', onto, from])

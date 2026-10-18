@@ -349,7 +349,7 @@ test('restack refuses a --from that cuts no deeper into the layer than --onto', 
   assert.equal(code, 1)
   assert.equal(
     stderr,
-    `review.ts stack: --from ${mainTip} cuts no deeper into child than --onto main: pass the parent layer's pre-landing tip\n`,
+    `review.ts stack: --from ${mainTip} cuts no deeper into child than --onto main: pass the parent layer's pre-landing tip, the commit in <stack dir>/tip-<parent ticket> (review.ts stack path --spec <N> prints the stack dir)\n`,
   )
 })
 
