@@ -13,7 +13,7 @@ Every `SKILL.md` in this repo is a skill, and every skill is **model-invoked**: 
 
 Dependencies are expressed as an explicit instruction to **call the Skill tool** with the named skill (`Call the Skill tool with "grilling"`), not deep `../other-skill/FILE.md` cross-references, and not a bare `/skill`-style mention left for the model to interpret. Naming the tool is what gets it fired: spelling that out gets a higher hit rate than dropping a `/name` into prose and hoping it's read as a command. Shared reference docs live inside the skill that owns them; other skills reach that material by calling the Skill tool with it, not by linking across folders.
 
-One recorded exception: the review pipeline's skills reach the helper CLI and `code-review`'s prompts by path. See the Consequences of [ADR 0005](./adr/0005-review-moves-to-an-orchestrator.md).
+One recorded exception: the review pipeline's skills reach the helper CLI at `review-pipeline/scripts/review.ts` by path. See the Consequences of [ADR 0005](./adr/0005-review-moves-to-an-orchestrator.md). ADR 0005 also let `review-pipeline` read `code-review`'s prompts by path. [ADR 0007](./adr/0007-hero-forge-is-a-hard-fork.md) lifts that limit: `review-pipeline` now owns its own copy of the Standards and Spec prompts, and `code-review` keeps its own.
 
 This is about **operative** instructions: a skill's own steps telling the agent to go run another skill right now. Router prose that just names skills for a human to pick from (`ask-forge`, bucket `README.md`s) isn't invoking anything, so it keeps `/skill`-style names as plain labels.
 
