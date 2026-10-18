@@ -14,11 +14,15 @@
 // and the config and the run state must agree on the reviewer App.
 //
 // `recheck` and `verdict` posts also run the gate (ledger.ts), record its
-// result at the commit, and print it, on a duplicate too. A verdict needs
+// result at the commit, and print it, on a duplicate too. So does a `review`
+// post of a zero-finding round (the run dir's ledger is empty): no re-checker
+// runs, so the review's post records the pass, once every reviewer's output
+// is there and valid. A verdict needs
 // the App. An APPROVE needs a passing gate and a PR that is ready for review
 // (lfg order: the ready flip first, then the approval); a REQUEST_CHANGES
 // goes on a stopped run.
-import { readFile } from 'node:fs/promises'
+import { access, readdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { loadConfig } from './config.ts'
 import {
@@ -40,6 +44,7 @@ import {
   KINDS,
   loadRestack,
   loadState,
+  runDir,
   saveState,
   usesApp,
   type Event,
@@ -48,6 +53,7 @@ import {
   type ReviewRecord,
   type State,
 } from './run-state.ts'
+import { expectedReviewers, invalidOutputs } from './reviewer-outputs.ts'
 import { refuseSecretsIn } from './secrets.ts'
 
 const SIDES = ['RIGHT', 'LEFT']
@@ -120,6 +126,85 @@ async function record(state: State | undefined, entry: ReviewRecord | undefined,
   if (!changed) return
   fresh.updated_at = new Date().toISOString()
   await saveState(fresh)
+}
+
+// Whether this review closes a zero-finding round: the ledger the Orchestrator
+// wrote to the run dir is empty. Such a round passes only when the payload
+// holds no inline finding and every reviewer's output is there and valid;
+// otherwise nothing is posted and no pass is recorded. The round has Spec
+// reviewers when `<run dir>/spec.md` exists (codex-review, the Implementer or
+// the Orchestrator writes it for the round, never an agent's payload), or
+// when any Spec reviewer wrote an output: then every pair's Spec output must
+// be valid.
+async function zeroFindings(state: State, payload: Payload, pairs: number): Promise<boolean> {
+  const dir = runDir(state.pr)
+  const path = join(dir, 'findings.json')
+  if (!(await access(path).then(() => true, () => false))) return false
+  if ((await loadLedger(path)).length > 0) return false
+  refuse(
+    payload.comments.length === 0,
+    `the ledger ${path} is empty, but the payload has ${payload.comments.length} inline comment(s): every posted finding needs a ledger entry`,
+  )
+  const rows = findingRows(payload.body)
+  refuse(
+    rows === 0,
+    `the ledger ${path} is empty, but the walkthrough's findings table has ${rows} row(s): every finding in the table needs a ledger entry, so nothing was posted and no pass is recorded`,
+  )
+  const files = await readdir(dir)
+  const withSpec = files.includes('spec.md') || files.some((f) => /^reviewer-p\d+-spec\.json$/.test(f))
+  const failed = await invalidOutputs(dir, expectedReviewers(pairs, withSpec))
+  refuse(
+    failed.length === 0,
+    `a round with zero findings passes only when every reviewer's output is valid, so nothing was posted and no pass is recorded: no valid output from ${failed.map((f) => f.name).join(', ')} (${failed.map((f) => f.problem).join('; ')}). Run those reviewers again`,
+  )
+  return true
+}
+
+// A findings table starts with a header row whose first cell is ID, with or
+// without outer pipes. A header with no leading pipe counts only when a
+// separator row follows it, as Markdown needs.
+const HEADER = /^\s*\|?\s*ID\s*\|/i
+const SEPARATOR = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+function startsTable(lines: string[], i: number): boolean {
+  const line = lines[i] as string
+  if (!HEADER.test(line)) return false
+  return /^\s*\|/.test(line) || SEPARATOR.test(lines[i + 1] ?? '')
+}
+
+// The finding rows of the walkthrough's findings tables: each row after the
+// header (and its separator row) that holds a pipe.
+function findingRows(body: string): number {
+  const lines = body.split('\n')
+  let rows = 0
+  for (let i = 0; i < lines.length; i++) {
+    if (!startsTable(lines, i)) continue
+    if (SEPARATOR.test(lines[i + 1] ?? '')) i++
+    while (i + 1 < lines.length && (lines[i + 1] as string).includes('|')) {
+      i++
+      rows++
+    }
+  }
+  return rows
+}
+
+// A zero-finding walkthrough shows no findings table: each findings table
+// (only a header and its separator row, because zeroFindings refuses a table
+// with a finding row) becomes the line "No findings.". A walkthrough with no
+// table and no such line gets it at the end.
+function withoutFindingsTable(body: string): string {
+  const lines = body.split('\n')
+  const out: string[] = []
+  let found = false
+  for (let i = 0; i < lines.length; i++) {
+    if (startsTable(lines, i)) {
+      while (i + 1 < lines.length && (lines[i + 1] as string).includes('|')) i++
+      out.push('No findings.')
+      found = true
+    } else out.push(lines[i] as string)
+  }
+  if (found) return out.join('\n')
+  return /no findings/i.test(body) ? body : `${body.trimEnd()}\n\nNo findings.`
 }
 
 // The phases a verdict may post at. An APPROVE goes on a PR that is out of
@@ -232,10 +317,30 @@ async function post(argv: string[]): Promise<string> {
     }
   }
 
+  // A zero-finding round runs no re-checker: the review records the pass. Its
+  // re-check file lists no items, so the verdict and a stack landing gate the
+  // head the same way as after a re-check.
+  const zero = kind === 'review' && state !== undefined && (await zeroFindings(state, payload, loaded.config.pairs))
+  // Taking the table out removes text only, so the secret scan above still holds.
+  if (zero) outgoing.body = withMarker(withoutFindingsTable(payload.body), mark)
+
   let gate: { gate: 'pass' | 'fail'; problems: string[] } | undefined
-  if (gated) {
-    const reviewIds = (state as State).reviews.filter((r) => r.kind === 'review').map((r) => r.id)
-    const posted = postedFindings(await listInlineComments(repo, pr), reviewIds)
+  const reviewIds = (state?.reviews ?? []).filter((r) => r.kind === 'review').map((r) => r.id)
+  // The PR's inline comments, read for the gate. A zero-finding round passes
+  // only while no review of the run holds an inline finding on GitHub.
+  const inline = zero || gated ? await listInlineComments(repo, pr) : []
+  const zeroGate = (ids: number[]) => {
+    const problems = gateProblems([], [], postedFindings(inline, ids))
+    refuse(
+      problems.length === 0,
+      `the ledger is empty, but GitHub shows inline findings in this run's review, so no pass is recorded: ${problems.join('; ')}`,
+    )
+  }
+  if (zero) {
+    zeroGate(reviewIds)
+    gate = { gate: 'pass', problems: [] }
+  } else if (gated) {
+    const posted = postedFindings(inline, reviewIds)
     const problems = gateProblems(ledger, recheck, posted)
     gate = { gate: problems.length === 0 ? 'pass' : 'fail', problems }
     refuse(
@@ -244,11 +349,15 @@ async function post(argv: string[]): Promise<string> {
     )
   }
   const gateRecord: GateRecord | undefined = gate === undefined ? undefined : { round, commit, result: gate.gate }
+  const save = async (entry: ReviewRecord | undefined) => {
+    await record(state, entry, gateRecord)
+    if (zero) await writeEmptyRecheck(join(runDir(pr), `recheck-r${round}.json`))
+  }
 
   // Primary resume check: the run state already records this round's review.
   const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit)
   if (recorded !== undefined) {
-    await record(state, undefined, gateRecord)
+    await save(undefined)
     return `${JSON.stringify({ posted: false, duplicate: true, id: recorded.id, ...gate })}\n`
   }
 
@@ -274,12 +383,15 @@ async function post(argv: string[]): Promise<string> {
     const earlier = state?.reviews
       .filter((r) => r.id === existing.id && r.round === round && r.kind === kind && r.commit !== commit)
       .at(-1)
+    // Our review is already on GitHub: a zero-finding pass also needs it to
+    // hold no inline finding.
+    if (zero) zeroGate([...reviewIds, existing.id])
     if (earlier === undefined) {
-      await record(state, entry(existing.id), gateRecord)
+      await save(entry(existing.id))
       return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id, ...gate })}\n`
     }
     if (await carries(pr, earlier.commit, commit, existing, reviews, poster, kind, payload.event)) {
-      await record(state, entry(existing.id), gateRecord)
+      await save(entry(existing.id))
       return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id, carried_from: earlier.commit, ...gate })}\n`
     }
   }
@@ -287,8 +399,25 @@ async function post(argv: string[]): Promise<string> {
   const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(outgoing), poster.token)
   refuse(posted.code === 0, `GitHub rejected the review: ${oneLine(posted.stderr || posted.stdout)}`)
   const { id } = json<{ id: number }>(posted.stdout, 'post review')
-  await record(state, entry(id), gateRecord)
+  await save(entry(id))
   return `${JSON.stringify({ posted: true, id, as: poster.as, event: payload.event, round, kind, ...gate })}\n`
+}
+
+// The re-check file of a zero-finding round: no items. An existing empty one
+// stays as it is, so a resume changes nothing. Any other existing file (items,
+// or not a re-check) comes from another run, because this round has nothing
+// to re-check: it is replaced.
+async function writeEmptyRecheck(path: string): Promise<void> {
+  const old = await readFile(path, 'utf8').catch(() => undefined)
+  if (old !== undefined) {
+    try {
+      const value = JSON.parse(old) as { items?: unknown }
+      if (Array.isArray(value.items) && value.items.length === 0) return
+    } catch {
+      // Not JSON: replace it below.
+    }
+  }
+  await writeFile(path, `${JSON.stringify({ items: [] }, null, 2)}\n`)
 }
 
 type GitHubReview = { id: number; state: string; body: string | null; commit_id: string | null; login: string | null }

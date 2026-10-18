@@ -393,3 +393,75 @@ test('bad arguments are a usage error, before any codex call', async (t) => {
   assert.equal((await runCli(['codex-review'], { cwd: s.repo })).code, 2)
   assert.deepEqual(await s.execs(), [])
 })
+
+// A zero-finding round: the Orchestrator keeps no finding.
+const ZERO_OUTPUT = {
+  payload: {
+    event: 'COMMENT',
+    body: '## Review pipeline: round 1\n\n| ID | Where | Axis | Severity | Pairs | Finding |\n| --- | --- | --- | --- | --- | --- |\n\nDropped: 0.',
+    comments: [],
+  },
+  ledger: [],
+  report: 'kept 0, dropped 0',
+}
+
+for (const issue of [[], ['--issue', '2']]) {
+  test(`a zero-finding round ${issue.length === 0 ? 'with no spec' : 'with a spec'} posts no table, starts no re-checker, and records a gate pass at head`, async (t) => {
+    const s = await setup(t, { codex: withOrchestrator(JSON.stringify(ZERO_OUTPUT)) })
+    const { code, stdout, stderr } = await s.review(...issue)
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    const out = JSON.parse(stdout)
+    assert.deepEqual([out.posted, out.gate, out.problems], [true, 'pass', []])
+
+    const posts = await s.posts()
+    assert.equal(posts.length, 1)
+    const sent = JSON.parse(posts[0]!.stdin)
+    assert.deepEqual(sent.comments, [])
+    assert.doesNotMatch(sent.body, /\| ID \|/)
+    assert.match(sent.body, /\nNo findings\.\n\nDropped: 0\./)
+
+    const state = JSON.parse((await s.runState('read', '--pr', '13')).stdout)
+    assert.deepEqual(state.gates, [{ round: 1, commit: s.sha, result: 'pass' }])
+    for (const phase of ['review-posted', 'adjudicated', 'rechecked', 'body-rewritten']) {
+      const advanced = await s.runState('advance', '--pr', '13', phase)
+      assert.equal(advanced.code, 0, `${phase}: ${advanced.stderr}`)
+    }
+    const roles = (await s.execs()).map((c) => flag(c, '-o').split('/').pop())
+    assert.ok(roles.every((o) => o === 'orchestrator-output.json' || /^reviewer-p\d-(standards|spec)\.json$/.test(o ?? '')), roles.join(', '))
+    assert.ok(!roles.some((o) => o?.startsWith('recheck')))
+    assert.equal((await s.posts()).length, 1)
+  })
+}
+
+// An empty ledger with an inline comment, in the diff or out of it, is an
+// inconsistent Orchestrator output: checked before the anchor move.
+for (const [where, comment] of [['in the diff', COMMENT], ['out of the diff', { ...COMMENT, line: 12 }]] as const) {
+  test(`an empty ledger with an inline comment ${where} is refused: nothing is posted and no pass is recorded`, async (t) => {
+    const s = await setup(t, { codex: withOrchestrator(JSON.stringify({ ...ZERO_OUTPUT, payload: { ...ZERO_OUTPUT.payload, comments: [comment] } })) })
+    const { code, stdout, stderr } = await s.review()
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.equal(stderr, 'review.ts codex-review: the Orchestrator returned an empty ledger but 1 inline comment(s): every posted finding needs a ledger entry, so nothing was posted\n')
+    assert.deepEqual(await s.posts(), [])
+    await assert.rejects(access(join(s.runDir, 'review-payload.json')))
+    await assert.rejects(access(join(s.runDir, 'findings.json')))
+    assert.deepEqual(JSON.parse((await s.runState('read', '--pr', '13')).stdout).gates, [])
+  })
+}
+
+// A spec-backed attempt that stopped (one Spec output valid, one missing)
+// leaves Spec files behind. A spec-less retry removes them, so post-review
+// expects only the Standards reviewers the retry starts.
+test('a spec-less run removes the spec.md and Spec reviewer files an earlier attempt left, so post-review expects no Spec reviewers', async (t) => {
+  const s = await setup(t, { codex: withOrchestrator(JSON.stringify(ZERO_OUTPUT)) })
+  const stale = ['spec.md', 'reviewer-p1-spec.json', 'reviewer-p1-spec.md', 'reviewer-p1-spec.log', 'reviewer-p2-spec.md']
+  await writeFile(join(s.runDir, 'spec.md'), '# #2: Spec\n')
+  await writeFile(join(s.runDir, 'reviewer-p1-spec.json'), '{"axis":"spec","pair":1,"findings":[],"notes":""}')
+  for (const f of ['reviewer-p1-spec.md', 'reviewer-p1-spec.log', 'reviewer-p2-spec.md']) await writeFile(join(s.runDir, f), 'old\n')
+  const { code, stdout, stderr } = await s.review()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.equal(JSON.parse(stdout).gate, 'pass')
+  for (const f of stale) await assert.rejects(access(join(s.runDir, f)), f)
+})

@@ -63,6 +63,10 @@ Then no Spec reviewers run, and only the Standards reviewers review the PR. The 
 
 A round is one Adjudication plus one re-check. When the re-check leaves findings open, the next round answers only those open findings and runs a new re-check. It does not start a new full review, so the goalposts do not move between rounds.
 
+**What if the review finds nothing?**
+
+Then the round ends at the review. The walkthrough says "No findings." and has no empty table, and no high-effort re-checker runs to grade zero items. The helper CLI first checks that every reviewer's output is there and valid, because a reviewer whose brief stopped early also returns nothing. Only then does it post the review and record the round's pass at the reviewed commit, which the merge gate needs. If an output is missing or broken, it posts nothing and names the reviewer, so you can run the round again.
+
 **What happens when the rounds run out?**
 
 `max_rounds` in `docs/agents/review.md` sets how many failed rounds the pipeline accepts (2 by default). When the last one fails, the pipeline stops, the PR stays in draft, and the agent asks you what to do, with the open findings listed. It never starts an extra round by itself.
@@ -126,7 +130,7 @@ Run `review.ts help` for the list of every subcommand with its one-line summary.
 - Running it again on the same PR and commit posts nothing new.
 - Every inline finding gets an `ACCEPT:` or `REFUTE:` reply in its thread, and each round gets one adjudication comment that also covers the walkthrough items.
 - Each round with accepted fixes adds exactly one `apply review round <R>` commit.
-- Each round ends with a re-check comment that lists every finding as fixed, refutation accepted, or open.
+- Each round ends with a re-check comment that lists every finding as fixed, refutation accepted, or open. A round with zero findings ends at its review, which says "No findings.", and gets no re-check comment.
 - With the App, the PR goes ready first and then gets one App approval on the re-checked commit, and a run that runs out of rounds ends with one App request for changes.
 - After a passing re-check, the PR body shows the `pr` template for the final code and still closes its issues, the PR is ready for review, and it carries one "Explainer (local, not published)" comment.
 - The PR lands as one squash commit only after its checks pass. A red check or a conflict gets a question from the agent, not a merge.

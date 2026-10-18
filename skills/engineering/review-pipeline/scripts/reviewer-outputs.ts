@@ -36,3 +36,13 @@ export async function outputProblem(dir: string, name: string): Promise<string |
   const problem = schemaProblem(JSON.parse(await readFile(SCHEMAS.reviewer, 'utf8')), parsed.value)
   return problem === undefined ? undefined : `${path} does not match findings.schema.json: ${problem}`
 }
+
+// The expected reviewers whose output is missing or invalid, each with why.
+export async function invalidOutputs(dir: string, expected: Expected[]): Promise<{ name: string; problem: string }[]> {
+  const failed: { name: string; problem: string }[] = []
+  for (const { name } of expected) {
+    const problem = await outputProblem(dir, name)
+    if (problem !== undefined) failed.push({ name, problem })
+  }
+  return failed
+}
