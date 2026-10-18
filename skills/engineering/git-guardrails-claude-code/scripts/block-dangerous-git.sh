@@ -16,20 +16,15 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/nul
 # joined (-C/tmp), separate, or quoted.
 VALUE="(\"[^\"]*\"|'[^']*'|[^ ]+)"
 GLOBAL="-[Cc] ?$VALUE|--(git-dir|work-tree|namespace|super-prefix|exec-path|config-env) $VALUE|--[a-z-]+(=$VALUE)?|-p|-P"
-ONE_LINE=$(printf '%s' "$COMMAND" | tr '\t\n' '  ' | tr -s ' ')
+# The shell joins a line that ends in a backslash with the next one.
+CONTINUATION=$'\\\n'
+ONE_LINE=$(printf '%s' "${COMMAND//"$CONTINUATION"/}" | tr '\t\n' '  ' | tr -s ' ')
 
 # The shell drops quotes and backslashes before git reads its arguments.
 unquote() { tr -d "\"'\\\\" | tr -s ' '; }
 
 # `[^;&|]*` keeps a match inside one command of a `&&` or `;` chain.
 ARGS="( [^;&|]*)?"
-
-# An alias defined inline (`git -c alias.p=push p`), or loaded by an include,
-# can run any blocked command under a name no pattern knows. Git config
-# section names ignore case.
-if printf '%s' "$ONE_LINE" | unquote | grep -qiE "git$ARGS (-c ?|--config-env[ =])(alias|include|includeif)\."; then
-  block "'$COMMAND' defines a git alias or include inline."
-fi
 
 # Git takes a long option by any unique prefix, so `--fo` is `--force` and
 # `--del` is `--delete`. A prefix git finds ambiguous fails in git anyway.
@@ -48,38 +43,38 @@ NORMALIZED=$(printf '%s' "$ONE_LINE" | sed -E "s/git( ($GLOBAL))+ /git /g" | exp
 
 # The word view splits the command the way the shell does: quotes group a
 # word, a backslash escapes the next character, and ; & | ( ) end a word, so
-# `git "reset" \--hard` is `git reset --hard`. A space inside a word becomes
-# \001: a quoted option value (`git "-C" "/tmp/a b" push`) stays one word when
-# the global options go, and a quoted message never reads as a command.
+# `git "reset" \--hard` is `git reset --hard`. A space or ; & | inside a word
+# becomes \001: a quoted option value (`git "-C" "/tmp/a b" push`) stays one
+# word when the global options go, and a quoted message never reads as a
+# command. awk keeps this fast on a long command.
 shell_words() {
-  local s=$1 out='' word='' quote='' c i
-  for ((i = 0; i < ${#s}; i++)); do
-    c=${s:i:1}
-    if [[ -n $quote && $c == "$quote" ]]; then
-      quote=''
-    elif [[ $quote != "'" && $c == '\' ]]; then
-      i=$((i + 1))
-      c=${s:i:1}
-      word+=${c/ /$'\001'}
-    elif [[ -n $quote ]]; then
-      word+=${c/ /$'\001'}
-    elif [[ $c == "'" || $c == '"' ]]; then
-      quote=$c
-    elif [[ $c == ' ' ]]; then
-      out+=" $word"
-      word=''
-    elif [[ $c == [\;\&\|\(\)] ]]; then
-      out+=" $word $c"
-      word=''
-    else
-      word+=$c
-    fi
-  done
-  printf '%s' "$out $word" | tr -s ' ' | sed -E 's/^ //; s/ $//'
+  printf '%s\n' "$1" | awk -v SQ="'" -v SEP=$'\001' '{
+    out = ""; word = ""; quote = ""
+    for (i = 1; i <= length($0); i++) {
+      c = substr($0, i, 1)
+      if (quote != "" && c == quote) quote = ""
+      else if (quote != SQ && c == "\\") { i++; c = substr($0, i, 1); word = word (c ~ /[ ;&|]/ ? SEP : c) }
+      else if (quote != "") word = word (c ~ /[ ;&|]/ ? SEP : c)
+      else if (c == SQ || c == "\"") quote = c
+      else if (c == " ") { out = out " " word; word = "" }
+      else if (c ~ /[;&|()]/) { out = out " " word " " c; word = "" }
+      else word = word c
+    }
+    print out " " word
+  }' | tr -s ' ' | sed -E 's/^ //; s/ $//'
 }
+RAW_WORDS=$(shell_words "$ONE_LINE")
+
+# An alias defined inline (`git -c alias.p=push p`), or loaded by an include,
+# can run any blocked command under a name no pattern knows. Git config
+# section names ignore case. The word view keeps a quoted `;` inside its word
+# (`git -c core.editor="a;b" -c alias.p=push p`).
+if printf '%s\n%s' "$(printf '%s' "$ONE_LINE" | unquote)" "$RAW_WORDS" | grep -qiE "git$ARGS (-c ?|--config-env[ =])(alias|include|includeif)\."; then
+  block "'$COMMAND' defines a git alias or include inline."
+fi
 
 WORD_GLOBAL="-[Cc] ?[^ ]+|--(git-dir|work-tree|namespace|super-prefix|exec-path|config-env) [^ ]+|--[a-z-]+(=[^ ]+)?|-p|-P"
-WORDS=$(shell_words "$ONE_LINE" | sed -E "s/git( ($WORD_GLOBAL))+ /git /g" | expand_prefixes)
+WORDS=$(printf '%s' "$RAW_WORDS" | sed -E "s/git( ($WORD_GLOBAL))+ /git /g" | expand_prefixes)
 
 DANGEROUS_PATTERNS=(
   "git push"

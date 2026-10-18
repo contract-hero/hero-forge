@@ -98,6 +98,10 @@ const BLOCKED = [
   'git -c Alias.p=push p',
   'git -c include.path=/tmp/aliases p',
   'git -c includeIf.onbranch:main.path=/tmp/aliases p',
+  'git -c core.editor="foo;bar" -c alias.p=push p',
+  // The shell joins a line that ends in a backslash with the next one.
+  'git pu\\\nsh',
+  'git \\\npush',
 ]
 
 const ALLOWED = [
@@ -134,6 +138,13 @@ for (const command of ALLOWED) {
     assert.equal(code, 0, stderr)
   })
 }
+
+test('checks a long command quickly', () => {
+  const started = Date.now()
+  const { code, stderr } = hook(bash(`echo ${'a "b" '.repeat(5000)}`))
+  assert.equal(code, 0, stderr)
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`)
+})
 
 test('blocks when the event is not valid JSON', () => {
   const { code, stderr } = hook('not json')
