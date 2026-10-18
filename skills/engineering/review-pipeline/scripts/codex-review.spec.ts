@@ -18,7 +18,7 @@ const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
 const POSTED: FakeGhResponse = { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 555 }) }
 const FORBIDDEN = ['danger-full-access', 'workspace-write', 'network_access', '--full-auto', '--dangerously-bypass-approvals-and-sandbox']
 
-type Setup = { codex?: FakeCodexSpec; gh?: FakeGhResponse[] }
+type Setup = { codex?: FakeCodexSpec; gh?: FakeGhResponse[]; mode?: string }
 
 const git = async (cwd: string, ...args: string[]) => {
   const r = await run('git', args, { cwd })
@@ -56,7 +56,8 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const configPath = join(dir, 'review.md')
   await writeFile(configPath, CONFIG)
   const created = await runCli(['run-state', 'create', '--pr', '13', '--repo', 'contract-hero/hero-pocock', '--base', 'main',
-    '--head', 'feature/x', '--head-sha', sha, '--runtime', 'codex', '--reviewer-login', 'none'], { cwd: repo, env })
+    '--head', 'feature/x', '--head-sha', sha, '--runtime', 'codex', '--reviewer-login', 'none',
+    ...(options.mode === undefined ? [] : ['--mode', options.mode])], { cwd: repo, env })
   assert.equal(created.code, 0, created.stderr)
   const dispatched = await runCli(['run-state', 'advance', '--pr', '13', 'review-dispatched'], { cwd: repo, env })
   assert.equal(dispatched.code, 0, dispatched.stderr)
@@ -240,6 +241,18 @@ test('without --issue no spec is fetched, and the Spec reviewers look for the sp
   const spec = (await s.execs()).find((c) => flag(c, '-o').endsWith('reviewer-p1-spec.json'))
   assert.match(spec!.stdin, /no spec issue was given/)
   await assert.rejects(access(join(s.runDir, 'spec.md')))
+})
+
+test('a layer-mode run tells its Spec reviewers the review mode, and a single-mode run does not', async (t) => {
+  const specBrief = async (mode?: string) => {
+    const s = await setup(t, { mode })
+    const { code, stderr } = await s.review('--issue', '2')
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    return readFile(join(s.runDir, 'reviewer-p1-spec.md'), 'utf8')
+  }
+  assert.match(await specBrief('layer'), /^- Review mode: layer \(one layer of a stack\)$/m)
+  assert.doesNotMatch(await specBrief(), /Review mode/)
 })
 
 test('a relaunch after a failed Orchestrator reuses each reviewer output for the same brief and runs only the failed ones', async (t) => {

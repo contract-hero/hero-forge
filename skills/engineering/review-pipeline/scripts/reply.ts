@@ -1,5 +1,5 @@
 // `review.ts reply` (usage in the table in cli.ts).
-// Post the coding agent's Adjudication on the PR: one reply per inline
+// Post the Implementer's Adjudication on the PR: one reply per inline
 // finding in its own thread (`ACCEPT: <reason>` or `REFUTE: <reason>`), and
 // one PR comment with every answered finding, walkthrough items included.
 //

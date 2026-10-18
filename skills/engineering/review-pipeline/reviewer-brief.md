@@ -45,6 +45,10 @@ Acceptance criteria, in your focus order: <rotated list of the spec's acceptance
 
 Use these categories: `spec-missing` (asked for, missing or partial), `spec-creep` (not asked for), `spec-wrong` (implemented, but wrong). Quote the spec line in `citation`.
 
+Review mode: <the run's mode, `layer` or `stack-final`; leave this line out in `single` mode>.
+
+Stack version rule: in a stack, only the top layer bumps the plugin or package version, with one bump for the whole stack. In `layer` mode, do not flag a missing version bump: the `stack-final` review checks the top layer's bump.
+
 If there is no spec, return no findings and put `no spec available` in `notes`.
 
 ## Output

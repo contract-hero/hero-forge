@@ -47,6 +47,10 @@ An inline review comment must anchor in its PR's own diff. The top layer's PR di
 
 The skill puts the branch back where it was, pushes nothing, and asks you. The same happens on a rebase conflict. A landing that needs a human never guesses.
 
+**Which layer bumps the plugin version?**
+
+Only the top layer: the last layer of the stack plan, which lands last. It carries one bump for the whole stack, and no other layer bumps the version. The Spec reviewer of a layer review does not flag a missing bump, and the final review checks the top layer's bump.
+
 **Can a layer merge early?**
 
 No. A layer run ends at ready, and the skill lands nothing until the final review passes: `stack merge-layer` refuses to merge while the run of the stack PR is not complete. The pipeline's own `merge` refuses a layer.

@@ -2,9 +2,9 @@
 
 `review-pipeline` gives one open pull request an independent review on GitHub. An **Orchestrator** pins the PR head commit, runs N **Reviewer pairs** on it, checks every finding against the code, merges the duplicates, and posts one review with inline ```` ```suggestion ```` blocks and a walkthrough.
 
-The agent that wrote the code never reviews it. The coding [agent](https://www.aihero.dev/ai-coding-dictionary/agent) only pins the PR head, prepares the inputs and launches the Orchestrator. On Claude, the Orchestrator is a fresh [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) that dispatches the reviewers, verifies what they found, and posts. On Codex, it is a read-only session that verifies and consolidates, and the helper CLI starts the reviewers and posts the result. A finding the Orchestrator cannot verify against the code is dropped, not posted.
+The **Implementer**, the [agent](https://www.aihero.dev/ai-coding-dictionary/agent) that wrote the code, never reviews it. It only pins the PR head, prepares the inputs and launches the Orchestrator. On Claude, the Orchestrator is a fresh [subagent](https://www.aihero.dev/ai-coding-dictionary/subagent) that dispatches the reviewers, verifies what they found, and posts. On Codex, it is a read-only session that verifies and consolidates, and the helper CLI starts the reviewers and posts the result. A finding the Orchestrator cannot verify against the code is dropped, not posted.
 
-Then the coding agent does **Adjudication**: it accepts or refutes every finding, answers each one on the PR (a reply in each inline thread, plus one comment per round with every answer), and lands all accepted fixes of the round in one commit. A fresh re-checker, which is neither the coding agent nor the Orchestrator, then checks every finding against the new code: fixed, validly refuted, or still open. A deterministic gate in the helper CLI reads that result, records it at the re-checked commit, and the pipeline posts it as a re-check comment. With or without the reviewer App, the merge needs a passing gate recorded at the PR's head.
+Then the Implementer does **Adjudication**: it accepts or refutes every finding, answers each one on the PR (a reply in each inline thread, plus one comment per round with every answer), and lands all accepted fixes of the round in one commit. A fresh re-checker, which is neither the Implementer nor the Orchestrator, then checks every finding against the new code: fixed, validly refuted, or still open. A deterministic gate in the helper CLI reads that result, records it at the re-checked commit, and the pipeline posts it as a re-check comment. With or without the reviewer App, the merge needs a passing gate recorded at the PR's head.
 
 When the re-check passes, the pipeline finishes the PR. It rewrites the PR body with [pr](https://aihero.dev/skills-pr) so the body matches the final code, flips the PR from draft to ready, gets the reviewer App's approval when you use one, and builds an explainer page that pitches the change to reviewers and stakeholders. Then it squash-merges the PR, but only when CI is green (or the repo has no PR checks at all) and GitHub reports the PR mergeable. Red CI or a merge conflict stops the pipeline and asks you: it never merges around them.
 
@@ -79,9 +79,9 @@ It stays on your machine, in the run dir (`hero-pocock/pr-<N>/explainer.html` in
 
 A plain `/review-pipeline <PR>` merges at the end. [implement-spec-stack](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-spec-stack.md) starts the run with `--mode layer` or `--mode stack-final`, which stop earlier: a stack layer stops once the PR is ready, and the whole-stack PR stops after the explainer, because the stack lands its layers itself. Those modes are for the stack; a plain run has no "do not merge" switch yet. To keep the PR open, tell the agent so before it reaches the merge.
 
-**Can the coding agent mark its own fixes as done?**
+**Can the Implementer mark its own fixes as done?**
 
-No. The coding agent writes the fixes and the refutations, so a fresh re-checker grades them, and the gate is a fixed check, not a judgment: every finding has a decision, every posted finding is in the ledger, the re-check covers exactly the ledger, and nothing is open.
+No. The Implementer writes the fixes and the refutations, so a fresh re-checker grades them, and the gate is a fixed check, not a judgment: every finding has a decision, every posted finding is in the ledger, the re-check covers exactly the ledger, and nothing is open.
 
 **What if the session dies halfway through?**
 
@@ -101,7 +101,7 @@ Yes. With `runtime: codex`, every Codex call goes through the helper CLI, which 
 
 **Does the Codex runtime need Claude Code?**
 
-No. The coding agent needs a shell, `git`, `node`, `gh` and `codex`, and nothing else. A Codex session can run the whole pipeline.
+No. The Implementer needs a shell, `git`, `node`, `gh` and `codex`, and nothing else. A Codex session can run the whole pipeline.
 
 **How do I see what a helper CLI subcommand takes?**
 

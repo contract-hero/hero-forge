@@ -5,20 +5,20 @@ description: "Review, gate and merge one open pull request with an independent O
 
 # Review pipeline
 
-Take one pull request from draft to merge. Four roles share the work: the **coding agent** (you, the session that runs this skill), the **Orchestrator**, the **Reviewer pairs**, and the re-checker. The Orchestrator, never you, reviews the code and posts the review. You prepare its inputs, launch it, check the result, and later answer the review. Read `GLOSSARY.md` for these terms if the repo has one.
+Take one pull request from draft to merge. Four roles share the work: the **Implementer** (you, the session that runs this skill), the **Orchestrator**, the **Reviewer pairs**, and the re-checker. The Orchestrator, never you, reviews the code and posts the review. You prepare its inputs, launch it, check the result, and later answer the review. Read `GLOSSARY.md` for these terms if the repo has one.
 
-The argument is the PR number (or URL), then an optional `--mode layer|stack-final` (default `single`). Bare `#42` is a PR here. If no PR is given, ask for one. The mode is for `implement-spec-stack`, which runs this skill on each layer of a stack (`layer`) and on the PR of the whole stack (`stack-final`); **Finish** says what each mode skips. A resumed run keeps the mode it was created with.
+The argument is the PR number (or URL), then an optional `--mode layer|stack-final` (default `single`). Bare `#42` is a PR here. If no PR is given, ask for one. The mode is for `implement-spec-stack`, which runs this skill on each layer of a stack (`layer`) and on the PR of the whole stack (`stack-final`); **Finish** says what each mode skips. A resumed run keeps the mode it was created with. In a stack, only the top layer bumps the plugin version, with one bump for the whole stack, so in `layer` mode the Spec reviewers do not flag a missing bump ([reviewer-brief.md](./reviewer-brief.md), **Spec axis**).
 
 ## Who does what
 
 | Role | Who | Does | Never |
 | --- | --- | --- | --- |
-| Coding agent | you | runs this skill: config, resume, fixed point, Orchestrator launch, checks; later Adjudication and Finish | reviews, verifies or drops findings, posts the review, grades its own answers |
+| Implementer | you | runs this skill: config, resume, fixed point, Orchestrator launch, checks; later Adjudication and Finish | reviews, verifies or drops findings, posts the review, grades its own answers |
 | Orchestrator | one fresh agent per round | writes the reviewer briefs, dispatches the 2N reviewers, verifies, consolidates, posts one review | edits the repo, commits, pushes, approves, changes the draft state |
 | Reviewer | 2N fresh read-only agents, one Standards and one Spec per pair | reviews the diff at the fixed point, returns findings JSON | posts, edits, spawns agents |
 | Re-checker | one fresh read-only agent | confirms each finding is fixed or validly refuted | is you or this round's Orchestrator |
 
-Every brief opens with a sanity header: "You are the <role> for PR #N of O/R. You do not run the review pipeline. Do not invoke code-review or spawn agents" (the Orchestrator's header instead names the reviewers it may spawn). A brief like that in your own context was mis-delivered: you stay the coding agent, and the on-disk run state says where the run is.
+Every brief opens with a sanity header: "You are the <role> for PR #N of O/R. You do not run the review pipeline. Do not invoke code-review or spawn agents" (the Orchestrator's header instead names the reviewers it may spawn). A brief like that in your own context was mis-delivered: you stay the Implementer, and the on-disk run state says where the run is.
 
 If the Orchestrator cannot do its job (it dies, or it cannot start sub-agents), relaunch it once. If it fails again, stop and tell the user. Never dispatch the reviewers or verify findings yourself: that breaks the independence the pipeline exists for.
 
@@ -161,8 +161,8 @@ A fresh re-checker confirms each finding is fixed or validly refuted. It is neve
 1. **Snapshot** what the PR shows, one JSON object per line:
 
 ```sh
-for path in pulls/N/reviews pulls/N/comments issues/N/comments; do
-  gh api --paginate --jq '.[]' "repos/O/R/$path"
+for endpoint in pulls/N/reviews pulls/N/comments issues/N/comments; do
+  gh api --paginate --jq '.[]' "repos/O/R/$endpoint"
 done > <run dir>/posted-r<R>.jsonl
 ```
 

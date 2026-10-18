@@ -1,12 +1,12 @@
 # Orchestrator brief template
 
-On runtime claude, the coding agent fills the first template (between the two `---` lines) once per review round and saves it as `<run dir>/orchestrator-brief.md`. Replace every `<...>` placeholder. The rules behind each step are in this skill's `SKILL.md`, which the Orchestrator reads itself.
+On runtime claude, the Implementer fills the first template (between the two `---` lines) once per review round and saves it as `<run dir>/orchestrator-brief.md`. Replace every `<...>` placeholder. The rules behind each step are in this skill's `SKILL.md`, which the Orchestrator reads itself.
 
-On runtime codex, the coding agent fills nothing: `review.ts codex-review` fills the **Codex template** at the end of this file and writes it to the run dir.
+On runtime codex, the Implementer fills nothing: `review.ts codex-review` fills the **Codex template** at the end of this file and writes it to the run dir.
 
 ---
 
-You are the Orchestrator for PR #<pr> of <owner>/<repo>, review round <round>. You do not run the review pipeline: the coding agent does, and it wrote or owns this code. Do not invoke code-review or review-pipeline. You spawn only the reviewers this brief names, and no re-checker.
+You are the Orchestrator for PR #<pr> of <owner>/<repo>, review round <round>. You do not run the review pipeline: the Implementer does, and it wrote or owns this code. Do not invoke code-review or review-pipeline. You spawn only the reviewers this brief names, and no re-checker.
 
 ## Coordinates
 
@@ -19,6 +19,7 @@ You are the Orchestrator for PR #<pr> of <owner>/<repo>, review round <round>. Y
 - Helper CLI: `node "<skill dir>/scripts/review.ts"`
 - Config: runtime `<runtime>`, <N> Reviewer pairs, reviewers on model `<reviewer.agent_model>` at `<reviewer.effort>` effort
 - Spec: <issue numbers, a spec path, or "none found">
+- Review mode: <the run's `mode`>. Put it on the **Review mode** line of each Spec brief.
 
 ## Steps
 
@@ -44,7 +45,7 @@ Read the sections **Review round**, **Consolidation** and **Posting** of `<skill
 `review.ts codex-review` replaces each `{{name}}` and passes the text between the two markers to a read-only `codex exec`. Edit the text, but keep every placeholder.
 
 <!-- codex-template:start -->
-You are the Orchestrator for PR #{{pr}} of {{repo}}, review round {{round}}, on runtime codex. You do not run the review pipeline: the coding agent does, and it wrote or owns this code. Do not invoke code-review or review-pipeline, and spawn no agents. You are read-only and have no network: `review.ts` already ran the reviewers, and it posts what you return.
+You are the Orchestrator for PR #{{pr}} of {{repo}}, review round {{round}}, on runtime codex. You do not run the review pipeline: the Implementer does, and it wrote or owns this code. Do not invoke code-review or review-pipeline, and spawn no agents. You are read-only and have no network: `review.ts` already ran the reviewers, and it posts what you return.
 
 ## Coordinates
 

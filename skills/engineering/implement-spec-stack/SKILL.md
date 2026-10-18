@@ -13,6 +13,8 @@ The tickets are not a list of steps. They are a **task graph** with blocking rel
 
 Each ticket becomes one **layer**: a branch and a draft PR. A layer branches from its **parent layer** (the ticket it waits on) and its PR targets the parent layer's branch, so the review of each layer sees only that ticket's diff. A ticket with no parent layer branches from the default branch. Layers do not merge until the final review of the whole stack passes.
 
+**Stack version rule.** When the repo bumps a version for each change (for example `version` in `.claude-plugin/plugin.json`), only the **top layer** bumps it: the last layer in `order.json`, which lands last. It carries one bump for the whole stack, and no other layer bumps the version. In `layer` mode the Spec reviewer does not flag a missing bump; the `stack-final` review checks the top layer's bump.
+
 Communication to and from subagents should be sparse. Communicate primarily through **context pointers**: to the spec, tickets, the stack plan, research notes, and previous commits. Don't duplicate information already available via pointers.
 
 **Implementer subagents** should be run in the background where possible for maximum concurrency.
@@ -44,7 +46,7 @@ The plan follows two rules. A ticket with more than one open blocker branches fr
 4. **Build the frontier.** A layer is ready when it has no parent, or when its parent layer's review is complete (step 5). Use **implementer subagents** to build every ready layer, each in its own worktree on its own branch. Give each one pointers to the spec, its ticket, and its entry in `order.json`. Each **implementer subagent**:
    - runs `review.ts config` and stops with the message on a non-zero exit;
    - fetches its base, `origin/<parent layer branch>` (the default branch for a layer with no parent), and creates the layer's `branch` from it. It confirms the worktree is based on it (`git merge-base --is-ancestor origin/<base> HEAD`), and resets onto it if not. An open PR on the branch is a re-run: it builds only what is missing and reuses that PR;
-   - calls the Skill tool with `tdd` to build the ticket, runs the typecheck and the tests, commits, and pushes (`git push -u origin <branch>`);
+   - calls the Skill tool with `tdd` to build the ticket, runs the typecheck and the tests, commits, and pushes (`git push -u origin <branch>`). It bumps the version only on the top layer (**Stack version rule**);
    - calls the Skill tool with `pr` to write the body for `git diff origin/<base>...HEAD`, ending with `Closes #<ticket>` on its own line, saves it to a file outside the repo, and opens the draft PR: `gh pr create --draft --base <base> --head <branch> --title "<ticket title>" --body-file <file>`;
    - never calls `review-pipeline`, merges, or rebases. It reports the branch, the worktree path, the PR number, and the head SHA.
 
