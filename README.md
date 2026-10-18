@@ -183,6 +183,8 @@ Skills I use daily for code work.
 - **[implement-spec-stack](./skills/engineering/implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket along the `blocked_by` graph. Each layer goes through `/review-pipeline` against its parent layer, then one final review of the whole stack runs against the spec, and the stack lands bottom-up by squash merge. Needs `/setup-review-pipeline` first. Runs only when asked for by name, by you or by an agent.
 - **[pr](./skills/engineering/pr/SKILL.md)**: The shape a pull request body should take: a summary as the smallest visual that makes the change clear, before/after evidence that it works, and a merge-danger call (one-way or two-way door, plus blast radius).
 - **[wizard](./skills/engineering/wizard/SKILL.md)**: Generate an interactive bash wizard that walks a human through steps only they can perform: provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover.
+- **[git-guardrails-claude-code](./skills/engineering/git-guardrails-claude-code/SKILL.md)**: Set up Claude Code hooks to block dangerous git commands (push, reset --hard, clean, branch -D, and more) before they execute.
+- **[scaffold-exercises](./skills/engineering/scaffold-exercises/SKILL.md)**: Create exercise directory structures with sections, problems, solutions, and explainers that pass linting.
 
 ### Productivity
 
@@ -195,6 +197,7 @@ General workflow tools, not code-specific.
 - **[teach](./skills/productivity/teach/SKILL.md)**: Teach the user a new skill or concept over multiple sessions, using the current directory as a stateful teaching workspace.
 - **[to-questionnaire](./skills/productivity/to-questionnaire/SKILL.md)**: Turn a decision you can't answer alone into a Markdown questionnaire for the one person who can, filled in async, or together over a meeting. It grills you about the send (who it's for, what you need back), not the subject.
 - **[wait-what](./skills/productivity/wait-what/SKILL.md)**: Fire this the moment a message doesn't land. The agent re-pitches it with the context you're missing, in plain English, using your `GLOSSARY.md` vocabulary.
+- **[loop-me](./skills/productivity/loop-me/SKILL.md)**: Grill yourself into implementable workflow specs over multiple sessions, using the current directory as a stateful workspace.
 
 **Model-invoked**
 

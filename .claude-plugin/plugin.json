@@ -44,12 +44,15 @@
     "./skills/engineering/pr",
     "./skills/engineering/retro",
     "./skills/engineering/wizard",
+    "./skills/engineering/git-guardrails-claude-code",
+    "./skills/engineering/scaffold-exercises",
     "./skills/productivity/grill-me",
     "./skills/productivity/grilling",
     "./skills/productivity/handoff",
     "./skills/productivity/teach",
     "./skills/productivity/to-questionnaire",
     "./skills/productivity/wait-what",
-    "./skills/productivity/writing-for-agents"
+    "./skills/productivity/writing-for-agents",
+    "./skills/productivity/loop-me"
   ]
 }

@@ -13,15 +13,13 @@ Size is irrelevant: a one-word fix and a rewrite face the same bar. Reactions an
 
 ## By bucket
 
-- **`engineering/`, `productivity/`, `in-progress/`**: the bar above.
-- **`misc/`**: frozen and unmaintained. Every issue is closed. See [`frozen-misc-skills.md`](./.out-of-scope/frozen-misc-skills.md).
+- **`engineering/`, `productivity/`**: the bar above.
 - **New skills**: proposals and contributions are closed. If the behaviour composes from existing skills, it does not get a new one. See [`new-skills.md`](./.out-of-scope/new-skills.md).
 
 ## Already decided
 
 Each file in [`.out-of-scope/`](./.out-of-scope/) records one rejected concept and why. Read them before filing:
 
-- [`frozen-misc-skills.md`](./.out-of-scope/frozen-misc-skills.md)
 - [`harness-name-collisions.md`](./.out-of-scope/harness-name-collisions.md)
 - [`mainstream-issue-trackers-only.md`](./.out-of-scope/mainstream-issue-trackers-only.md)
 - [`native-question-tool.md`](./.out-of-scope/native-question-tool.md)

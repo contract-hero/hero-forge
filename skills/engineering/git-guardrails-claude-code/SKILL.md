@@ -34,6 +34,8 @@ Copy it to the target location based on scope:
 
 Make it executable with `chmod +x`.
 
+The script reads the command with `jq`, and it blocks every command when `jq` is missing or the input does not parse. Check `command -v jq` first; if it fails, ask the user to install `jq` before you add the hook.
+
 ### 3. Add hook to settings
 
 Add to the appropriate settings file:
