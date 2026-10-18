@@ -1,7 +1,6 @@
 ---
 name: setup-review-pipeline
-description: "Configure how this repo reviews pull requests: the runtime, the number of reviewer pairs, the model and effort of each role, the round limit, and whether a reviewer GitHub App posts the reviews. Run once before the first review-pipeline run."
-disable-model-invocation: true
+description: "Configure how this repo reviews pull requests: the runtime, the number of reviewer pairs, the model and effort of each role, the round limit, and whether a reviewer GitHub App posts the reviews. Run once before the first review-pipeline run. Use only on an explicit request for this skill by name: the user runs /setup-review-pipeline, or an agent or router asks for setup-review-pipeline through the Skill tool. Do not start it because the review config is missing or mentioned."
 ---
 
 # Setup Review Pipeline

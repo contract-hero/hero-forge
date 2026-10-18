@@ -1,7 +1,6 @@
 ---
 name: implement-spec-stack
-description: "Implement a spec as a stack of pull requests, one per ticket along the blocked_by graph: review each layer, review the whole stack once, then land it bottom-up."
-disable-model-invocation: true
+description: "Implement a spec as a stack of pull requests, one per ticket along the blocked_by graph: review each layer, review the whole stack once, then land it bottom-up. Use only on an explicit request for this skill by name: the user runs /implement-spec-stack with a spec, or an agent or router asks for implement-spec-stack through the Skill tool. Do not start it because a spec or its tickets are mentioned."
 ---
 
 You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.

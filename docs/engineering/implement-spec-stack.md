@@ -6,7 +6,7 @@ Nothing merges until the whole stack has passed its final review. Upstream `impl
 
 ## When to reach for it
 
-You invoke this by typing `/implement-spec-stack <spec>`, and the agent won't reach for it on its own.
+Type `/implement-spec-stack <spec>`, or an agent or router asks for `implement-spec-stack` by name through the Skill tool. It does not fire on a passing mention of a spec or its tickets.
 
 | Your situation | Reach for |
 | --- | --- |
@@ -53,6 +53,7 @@ No. A layer run ends at ready, and the skill lands nothing until the final revie
 
 ## It's working if
 
+- An agent that calls the Skill tool with `implement-spec-stack` and a spec starts the same run as `/implement-spec-stack`.
 - The run shows the stack as a tree before it builds, with any re-stacked edge and any left-out ticket named.
 - Each layer PR targets its parent layer's branch, and its review comments touch only that ticket's files.
 - No layer merges before the stack PR's final review passes, and only the stack PR gets an explainer comment.

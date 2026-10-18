@@ -11,11 +11,8 @@ Reachable only when you type them (Claude Code: `disable-model-invocation: true`
 - **[triage](./triage/SKILL.md)**: Move issues through a state machine of triage roles.
 - **[improve-codebase-architecture](./improve-codebase-architecture/SKILL.md)**: Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
 - **[setup-matt-pocock-skills](./setup-matt-pocock-skills/SKILL.md)**: Configure this repo for the engineering skills (issue tracker, triage labels, domain doc layout). Run once per repo.
-- **[setup-review-pipeline](./setup-review-pipeline/SKILL.md)**: Configure how this repo reviews pull requests (runtime, reviewer pairs, model and effort per role, round limit, reviewer App). Run once per repo.
 - **[to-spec](./to-spec/SKILL.md)**: Turn the current conversation into a spec and publish it to the issue tracker.
 - **[to-tickets](./to-tickets/SKILL.md)**: Break any plan, spec, or conversation into a set of tracer-bullet tickets, each declaring its blocking edges, whether as text in a local file or as native blocking links on a real tracker.
-- **[implement-pr](./implement-pr/SKILL.md)**: Build one ticket with `/tdd`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge.
-- **[implement-spec-stack](./implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket, reviewed layer by layer and then as a whole, and landed bottom-up.
 - **[wayfinder](./wayfinder/SKILL.md)**: Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on the issue tracker, resolved one at a time until the way to the destination is clear.
 - **[retro](./retro/SKILL.md)**: Suggest improvements to the coding agent's environment (navigation, automated checks, coding standards, steering files, tooling) after a session, most severe first.
 
@@ -32,5 +29,8 @@ Model- or user-reachable (rich trigger phrasing so the model can reach for them)
 - **[codebase-design](./codebase-design/SKILL.md)**: Shared discipline and vocabulary for designing deep modules: small interfaces, clean seams, testable through the interface.
 - **[code-review](./code-review/SKILL.md)**: Two-axis review of the diff since a fixed point: **Standards** (does it follow the repo's coding standards, plus a Fowler smell baseline?) and **Spec** (does it faithfully implement the originating issue/spec?), run as parallel sub-agents.
 - **[review-pipeline](./review-pipeline/SKILL.md)**: Take one pull request through an independent review: an Orchestrator runs Reviewer pairs, verifies and consolidates their findings, and posts one GitHub review with inline suggestions.
+- **[setup-review-pipeline](./setup-review-pipeline/SKILL.md)**: Configure how this repo reviews pull requests (runtime, reviewer pairs, model and effort per role, round limit, reviewer App). Run once per repo. Runs only when asked for by name, by you or by an agent.
+- **[implement-pr](./implement-pr/SKILL.md)**: Build one ticket with `/tdd`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge. Runs only when asked for by name, by you or by an agent.
+- **[implement-spec-stack](./implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket, reviewed layer by layer and then as a whole, and landed bottom-up. Runs only when asked for by name, by you or by an agent.
 - **[pr](./pr/SKILL.md)**: The shape a pull request body should take: a summary as the smallest visual that makes the change clear, before/after evidence that it works, and a merge-danger call (one-way or two-way door, plus blast radius).
 - **[wizard](./wizard/SKILL.md)**: Generate an interactive bash wizard that walks a human through steps only they can perform: provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover.

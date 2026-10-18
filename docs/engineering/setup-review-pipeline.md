@@ -6,7 +6,7 @@ One runtime runs every role. The Orchestrator and its reviewers are all Codex (`
 
 ## When to reach for it
 
-You invoke this by typing `/setup-review-pipeline`, and the [agent](https://www.aihero.dev/ai-coding-dictionary/agent) won't reach for it on its own.
+Type `/setup-review-pipeline`, or an [agent](https://www.aihero.dev/ai-coding-dictionary/agent) or router asks for `setup-review-pipeline` by name through the Skill tool, so setup can run as part of an orchestrated flow. It does not fire only because the config is missing.
 
 Reach for it once per repo, before the first pull request goes through [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md). If `review-pipeline` stops and tells you to run setup, the repo has no `docs/agents/review.md` yet, or the file is broken. For the issue tracker, triage labels and domain docs instead, use [setup-matt-pocock-skills](https://aihero.dev/skills-setup-matt-pocock-skills).
 
@@ -63,6 +63,7 @@ A later `setup-matt-pocock-skills` run rewrites the `## Agent skills` block from
 
 ## It's working if
 
+- An agent that calls the Skill tool with `setup-review-pipeline` starts the same setup as `/setup-review-pipeline`.
 - `docs/agents/review.md` exists, and its YAML block names one runtime and states every field.
 - The `## Agent skills` block has one `### Review` entry, and a second setup run leaves it as one.
 - The last thing setup shows you is a JSON summary of the config, with the models and efforts you chose, and with the App, its `<slug>[bot]` login.

@@ -6,7 +6,7 @@ The [agent](https://www.aihero.dev/ai-coding-dictionary/agent) that writes the c
 
 ## When to reach for it
 
-You invoke this by typing `/implement-pr <ticket>`, and the agent won't reach for it on its own.
+Type `/implement-pr <ticket>`, or an agent or router asks for `implement-pr` by name through the Skill tool, so an orchestrated or [AFK](https://www.aihero.dev/ai-coding-dictionary/afk) run can build a ticket. It does not fire on a passing mention of a ticket.
 
 | The work is... | Reach for |
 | --- | --- |
@@ -55,6 +55,7 @@ Only when the review passes and CI is green. The pipeline stops and asks you whe
 
 ## It's working if
 
+- An agent that calls the Skill tool with `implement-pr` and a ticket starts the same run as `/implement-pr`.
 - The run states the ticket's title before it builds, and you can see a `tdd` Skill tool call in the trace.
 - The work never lands on the default branch: a run started there creates a `ticket/<number>-<slug>` branch first.
 - The PR opens as a draft, with Summary, Evidence and Merge Danger sections, and GitHub lists the ticket under the PR's linked issues.

@@ -1,7 +1,6 @@
 ---
 name: implement-pr
-description: "Build one ticket test-first, open a draft pull request that closes it, and hand the PR to the review pipeline."
-disable-model-invocation: true
+description: "Build one ticket test-first, open a draft pull request that closes it, and hand the PR to the review pipeline. Use only on an explicit request for this skill by name: the user runs /implement-pr with a ticket, or an agent or router asks for implement-pr through the Skill tool. Do not start it because a ticket is mentioned or a task looks ready to build."
 ---
 
 # Implement PR
