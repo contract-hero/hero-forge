@@ -635,29 +635,38 @@ async function appLanding(t: Parameters<typeof tempDir>[0], mainChange: Record<n
   return { ...s, gh, env, root, config, restack, carriedTo, verdict, cli }
 }
 
-test('restack --pr records a restack with no content change, so post-review records the approval GitHub carried, and the gate says go', async (t) => {
+test('after a restack with no content change, the run dir is unchanged, the old approval GitHub shows on the new head does not count, a fresh APPROVE posts, and the gate says go', async (t) => {
   const s = await appLanding(t)
+  const before = await readdir(join(s.root, 'pr-13'))
   const restacked = await s.restack()
   assert.equal(restacked.stderr, '')
   assert.equal(restacked.code, 0)
-  const head = JSON.parse(restacked.stdout).new_tip
-  assert.equal(JSON.parse(restacked.stdout).recorded, true)
+  const out = JSON.parse(restacked.stdout)
+  assert.deepEqual(Object.keys(out).sort(), ['branch', 'commits', 'from', 'new_tip', 'old_tip', 'onto', 'same'])
+  assert.equal(out.old_tip, s.childTip)
+  assert.deepEqual(await readdir(join(s.root, 'pr-13')), before)
+  const head = out.new_tip
   assert.equal((await s.cli('run-state', 'set', '--pr', '13', 'head_sha', head)).code, 0)
 
   await s.carriedTo(head)
   const posted = await s.verdict(head)
   assert.equal(posted.stderr, '')
   assert.equal(posted.code, 0)
-  assert.deepEqual(JSON.parse(posted.stdout), { posted: false, duplicate: true, id: 600, carried_from: s.childTip, gate: 'pass', problems: [] })
-  assert.ok((await s.gh.calls()).every((c) => !c.argv.includes('POST')))
+  assert.deepEqual(JSON.parse(posted.stdout), {
+    posted: true, id: 880, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
+  })
 
-  // No hand edit of the run state: the merge gate finds the approval at the new head.
+  // No hand edit of the run state: the merge gate finds the fresh approval at the new head.
+  await s.gh.respond([
+    { match: '--paginate --jq .[] | {id, state, commit_id', stdout: [600, 880].map((id) => JSON.stringify({ id, state: 'APPROVED', commit_id: head, login: BOT })).join('\n') + '\n' },
+    { match: 'mergeStateStatus', stdout: prView({ headRefOid: head }) },
+  ])
   const gate = await s.cli('merge-gate', '--repo', REPO, '--pr', '13', '--config', s.config)
   assert.equal(gate.stderr, '')
   assert.equal(JSON.parse(gate.stdout).gate, 'go')
 })
 
-test('a restack with a content change records no restack, so a carried approval is not recorded and a fresh APPROVE posts', async (t) => {
+test('a restack with a content change moves nothing, and a later head still gets a fresh APPROVE', async (t) => {
   const s = await appLanding(t, { 3: 'three' })
   const before = await readdir(join(s.root, 'pr-13'))
   const restacked = await s.restack()
@@ -691,7 +700,6 @@ test('restack --pr refuses a PR with no run state before it moves anything (exit
   assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
 })
 
-// The restack record says the new tip holds only reviewed content, so
 // restack --pr checks what it moves, and onto what, before it moves anything.
 const REFUSED_RESTACK = [
   ['a branch that is not the head of the PR', {}, 'origin/main', { head_ref: 'ticket/9-other' },
@@ -701,7 +709,7 @@ const REFUSED_RESTACK = [
 ] as const
 
 for (const [name, sideChange, onto, over, message] of REFUSED_RESTACK) {
-  test(`restack --pr refuses ${name}, moves nothing, and records nothing`, async (t) => {
+  test(`restack --pr refuses ${name} and moves nothing`, async (t) => {
     const s = await appLanding(t, {}, over)
     // `side`: main plus a commit that no review saw.
     await s.git('checkout', '-qb', 'side', 'main')
@@ -719,34 +727,3 @@ for (const [name, sideChange, onto, over, message] of REFUSED_RESTACK) {
     assert.deepEqual(await readdir(join(s.root, 'pr-13')), before)
   })
 }
-
-test('restack --pr of a layer that moved since the run pinned its head passes, but records nothing', async (t) => {
-  const pinned = 'b'.repeat(40)
-  const s = await appLanding(t, {}, { head_sha: pinned })
-  const before = await readdir(join(s.root, 'pr-13'))
-  const { code, stdout, stderr } = await s.restack()
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  const out = JSON.parse(stdout)
-  assert.equal(out.same, true)
-  assert.equal(out.recorded, false)
-  assert.equal(out.not_recorded, `the old tip ${s.childTip} is not the head PR #13 pinned (${pinned}), so no review carries to the new tip`)
-  assert.deepEqual(await readdir(join(s.root, 'pr-13')), before)
-})
-
-test('restack --pr that cannot write its record puts the branch back at its old tip and exits 1', async (t) => {
-  const s = await appLanding(t)
-  const runDir = join(s.root, 'pr-13')
-  const state = await readFile(join(runDir, 'state.json'), 'utf8')
-  // A run dir the CLI can read but not write; made writable again at once,
-  // so the temp dirs can be removed.
-  await chmod(runDir, 0o500)
-  const { code, stdout, stderr } = await s.restack().finally(() => chmod(runDir, 0o700))
-  assert.equal(code, 1)
-  assert.equal(stdout, '')
-  assert.match(stderr, new RegExp(`^review\\.ts stack: cannot write the restack record of PR #13: .*\\. child is back at ${s.childTip}\\n$`))
-  assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
-  assert.equal(await s.git('status', '--porcelain'), '')
-  assert.deepEqual(await readdir(runDir), ['state.json'])
-  assert.equal(await readFile(join(runDir, 'state.json'), 'utf8'), state)
-})

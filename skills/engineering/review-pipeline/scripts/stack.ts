@@ -8,8 +8,8 @@
 //   stack restack      after a parent layer lands, moves the checked-out child
 //                      layer onto the default branch from the parent's
 //                      pre-landing tip, and checks with git range-diff that no
-//                      patch changed. With --pr it records the pass in that
-//                      layer PR's run dir.
+//                      patch changed. With --pr it first checks that the
+//                      branch and --onto fit that layer PR's run.
 //   stack merge-layer  squash-merges one reviewed layer at its re-checked head,
 //                      only after the stack-final review of the whole stack
 //                      is complete.
@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { configApp, squashMerge } from './finish.ts'
 import { gh, json, listLines, oneLine } from './github.ts'
-import { loadState, saveRestack, stateRoot, type Restack } from './run-state.ts'
+import { loadState, stateRoot } from './run-state.ts'
 
 const usage = usageFor('stack')
 
@@ -191,12 +191,9 @@ const PAIR = /^\s*(?:\d+|-+):\s+\S+\s+([=!<>])\s+(?:\d+|-+):\s+\S+/
 // commits (those after `from`, the parent layer's pre-landing tip). It passes
 // only when `git range-diff` pairs every commit with an unchanged patch.
 // Otherwise the branch goes back to its old tip, and nothing was pushed.
-// With `--pr`, a pass is also recorded in that layer PR's run dir, so that
-// post-review can count a review GitHub carried from the old tip to the new.
-// The record is a claim that the new tip holds only reviewed content, so
-// `--pr` also needs the PR's branch checked out and `--onto` at the default
-// branch (origin/HEAD), and it records only a restack of the head the run
-// pinned (a layer that got a fix since then needs a fresh review anyway).
+// With `--pr`, it first checks that the checked-out branch is that PR's head
+// and that `--onto` is the default branch (origin/HEAD), so a layer moves only
+// onto reviewed content.
 async function restack(values: Record<string, string | boolean | undefined>): Promise<string> {
   const { from, onto } = values
   if (typeof from !== 'string' || from === '') throw usage('restack needs --from <the parent layer pre-landing tip>')
@@ -271,18 +268,8 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
       1,
     )
   }
-  const result: Restack = { branch: branch.out, from, onto, old_tip: oldTip, new_tip: newTip.out, commits: markers.length, same: true }
-  if (state === undefined) return `${JSON.stringify(result)}\n`
-  if (oldTip !== state.head_sha) {
-    const why = `the old tip ${oldTip} is not the head PR #${state.pr} pinned (${state.head_sha}), so no review carries to the new tip`
-    return `${JSON.stringify({ ...result, recorded: false, not_recorded: why })}\n`
-  }
-  try {
-    await saveRestack(state.pr, result)
-  } catch (error) {
-    throw putBack(`cannot write the restack record of PR #${state.pr}: ${oneLine((error as Error).message)}`)
-  }
-  return `${JSON.stringify({ ...result, recorded: true })}\n`
+  const result = { branch: branch.out, from, onto, old_tip: oldTip, new_tip: newTip.out, commits: markers.length, same: true }
+  return `${JSON.stringify(result)}\n`
 }
 
 // Land one layer: its review passed (`mode: layer`, phase complete), the

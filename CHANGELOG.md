@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.2
+
+- `review-pipeline`: a layer whose head moved by a restack always gets a fresh App APPROVE at the new head. `post-review` never counts an old APPROVE that GitHub shows on the new head, and `stack restack --pr` writes no record to the run dir. `--pr` keeps its branch and `--onto` checks.
+
 ## 1.0.1
 
 - `git-guardrails-claude-code`: the hook also blocks quoted or escaped forms (`git "reset" \--hard`), abbreviated long options (`git clean --fo`, `git branch --del --forc x`) and any inline `git -c alias.*` or `include.*`, in any case. `SKILL.md` now says the hook guards against accidents, not a hostile agent.

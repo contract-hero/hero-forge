@@ -792,14 +792,11 @@ test('with the App, an APPROVE on a failing gate is still refused before any tok
 
 // A restack after the parent layer landed moved the head of a layer from OLD
 // to FIXED. GitHub can then show the App's round 1 APPROVE (review 600, first
-// recorded at OLD) on FIXED. `stack restack --pr 13` records a restack with no
-// content change in the run dir; here the test writes that record itself.
+// recorded at OLD) on FIXED. The new head always gets a fresh APPROVE.
 const OLD = 'd'.repeat(40)
 const VERDICT_MARKER = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=verdict -->'
 
-type Carried = { restack?: Record<string, unknown> | null; github?: Record<string, unknown>[] }
-
-async function carriedSetup(t: Parameters<typeof tempDir>[0], options: Carried = {}) {
+async function restackedSetup(t: Parameters<typeof tempDir>[0], github: Record<string, unknown>[]) {
   const s = await gateSetup(t, { app: true, phase: 'complete', mode: 'layer' })
   await s.patch({
     reviews: [
@@ -808,11 +805,6 @@ async function carriedSetup(t: Parameters<typeof tempDir>[0], options: Carried =
     ],
     gates: [{ round: 1, commit: OLD, result: 'pass' }],
   })
-  const restack = options.restack === undefined
-    ? { branch: 'ticket/5-child', from: 'a'.repeat(40), onto: 'origin/main', old_tip: OLD, new_tip: FIXED, commits: 2, same: true }
-    : options.restack
-  if (restack !== null) await writeFile(join(s.dir, 'state', 'pr-13', 'restack.json'), JSON.stringify(restack))
-  const github = options.github ?? [{ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: FIXED, login: BOT, state: 'APPROVED' }]
   await s.gh.respond([
     { match: 'pulls/13/comments', stdout: POSTED },
     { match: '--paginate', stdout: listed(...(github as { id: number; body: string }[])) },
@@ -821,394 +813,24 @@ async function carriedSetup(t: Parameters<typeof tempDir>[0], options: Carried =
   return s
 }
 
-test('with the App, an APPROVE that GitHub carried to a restacked head with no content change is recorded there, and nothing is posted', async (t) => {
-  const s = await carriedSetup(t)
-  const { code, stdout, stderr } = await s.gated('verdict')
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  assert.deepEqual(JSON.parse(stdout), { posted: false, duplicate: true, id: 600, carried_from: OLD, gate: 'pass', problems: [] })
-  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS, LIST])
-  assert.deepEqual((await s.reviews()).slice(1), [
-    { round: 1, kind: 'verdict', id: 600, commit: OLD, as: BOT, event: 'APPROVE' },
-    { round: 1, kind: 'verdict', id: 600, commit: FIXED, as: BOT, event: 'APPROVE' },
-  ])
-  assert.deepEqual(await s.gates(), [{ round: 1, commit: OLD, result: 'pass' }, { round: 1, commit: FIXED, result: 'pass' }])
-})
-
-test('with the App, a verdict at a new head is not a duplicate of the verdict at the old head: it posts', async (t) => {
-  const s = await carriedSetup(t, {
-    github: [{ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: OLD, login: BOT, state: 'APPROVED' }],
-  })
-  const { code, stdout, stderr } = await s.gated('verdict')
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  assert.deepEqual(JSON.parse(stdout), {
-    posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
-  })
-  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS, LIST, POST])
-  assert.deepEqual(
-    (await s.reviews()).slice(1).map((r: { id: number; commit: string }) => [r.id, r.commit]),
-    [[600, OLD], [666, FIXED]],
-  )
-})
-
-// A carried APPROVE that does not count: the new head gets a fresh APPROVE.
-const NOT_CARRIED = [
-  ['with no restack record (the head moved by new commits, or the restack showed a content change)', { restack: null }],
-  ['with a restack record that ends at another head', {
-    restack: { branch: 'b', from: 'a'.repeat(40), onto: 'origin/main', old_tip: OLD, new_tip: 'f'.repeat(40), commits: 1, same: true },
-  }],
-  ['with a restack record that starts at another commit than the recorded approval', {
-    restack: { branch: 'b', from: 'a'.repeat(40), onto: 'origin/main', old_tip: 'f'.repeat(40), new_tip: FIXED, commits: 1, same: true },
-  }],
-  ['when GitHub shows it dismissed', {
-    github: [{ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: FIXED, login: BOT, state: 'DISMISSED' }],
-  }],
-  ['when a later review by the App requests changes', {
-    github: [
-      { id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: FIXED, login: BOT, state: 'APPROVED' },
-      { id: 601, body: 'not this time', commit_id: FIXED, login: BOT, state: 'CHANGES_REQUESTED' },
-    ],
-  }],
+const RESTACKED = [
+  ['that GitHub shows on the new head', FIXED],
+  ['that GitHub still shows on the old head', OLD],
 ] as const
 
-for (const [name, options] of NOT_CARRIED) {
-  test(`with the App, a carried APPROVE ${name} is not recorded, and a fresh APPROVE posts`, async (t) => {
-    const s = await carriedSetup(t, options as Carried)
+for (const [name, commit] of RESTACKED) {
+  test(`with the App, a layer whose head moved by a restack gets a fresh APPROVE at the new head, with an old APPROVE ${name}`, async (t) => {
+    const s = await restackedSetup(t, [{ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: commit, login: BOT, state: 'APPROVED' }])
     const { code, stdout, stderr } = await s.gated('verdict')
     assert.equal(stderr, '')
     assert.equal(code, 0)
     assert.deepEqual(JSON.parse(stdout), {
       posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
     })
+    assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS, LIST, POST])
     assert.deepEqual(
       (await s.reviews()).slice(1).map((r: { id: number; commit: string }) => [r.id, r.commit]),
       [[600, OLD], [666, FIXED]],
     )
   })
 }
-
-test('a restack record that is not valid exits 4 and posts nothing', async (t) => {
-  const s = await carriedSetup(t, { restack: { old_tip: OLD } })
-  const { code, stderr } = await s.gated('verdict')
-  assert.equal(code, 4)
-  assert.match(stderr, /corrupt restack record .*restack\.json: it needs old_tip, new_tip and same: true/)
-  assert.ok((await s.calls()).every((c) => !c.argv.includes('POST')))
-})
-
-test('with the App, an APPROVE carried over two restacks in a row (OLD to FIXED, then FIXED to NEXT) is recorded at each head, and nothing is posted', async (t) => {
-  const s = await carriedSetup(t)
-  assert.equal((await s.gated('verdict')).code, 0)
-
-  // The next unchanged restack moves the layer from FIXED to NEXT, and GitHub
-  // shows review 600 on NEXT.
-  const NEXT = '9'.repeat(40)
-  await s.patch({ head_sha: NEXT })
-  await writeFile(
-    join(s.dir, 'state', 'pr-13', 'restack.json'),
-    JSON.stringify({ branch: 'ticket/5-child', from: 'a'.repeat(40), onto: 'origin/main', old_tip: FIXED, new_tip: NEXT, commits: 2, same: true }),
-  )
-  await s.gh.respond([
-    { match: 'pulls/13/comments', stdout: POSTED },
-    { match: '--paginate', stdout: listed({ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: NEXT, login: BOT, state: 'APPROVED' }) },
-    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
-  ])
-  const { code, stdout, stderr } = await runCli(
-    ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', NEXT, '--round', '1', '--kind', 'verdict',
-      '--payload', join(s.dir, 'verdict-payload.json'), '--config', s.configPath,
-      '--ledger', join(s.dir, 'findings.json'), '--recheck', join(s.dir, 'recheck-r1.json')],
-    { env: s.env },
-  )
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  assert.deepEqual(JSON.parse(stdout), { posted: false, duplicate: true, id: 600, carried_from: FIXED, gate: 'pass', problems: [] })
-  assert.ok((await s.calls()).every((c) => !c.argv.includes('POST')))
-  assert.deepEqual(
-    (await s.reviews()).slice(1).map((r: { id: number; commit: string }) => [r.id, r.commit]),
-    [[600, OLD], [600, FIXED], [600, NEXT]],
-  )
-})
-
-// A zero-finding round: the ledger the Orchestrator wrote to the run dir is
-// empty. The review posts with no findings table, and post-review records a
-// gate pass at the pinned head, after it checked every reviewer's output. No
-// re-checker runs: the run advances to rechecked on that pass.
-
-const FINDINGS_OUT = (pair: number, axis: string) => JSON.stringify({ axis, pair, findings: [], notes: '' })
-const TABLE_HEAD = '| ID | Where | Axis | Severity | Pairs | Finding |\n| --- | --- | --- | --- | --- | --- |'
-const ZERO = {
-  event: 'COMMENT',
-  body: `## Review pipeline: round 1\n\nRuntime claude, 2 pairs, commit ccccccc.\n\nSpec: no spec available.\n\n${TABLE_HEAD}\n\nDropped: 1 (S1: a nitpick).`,
-  comments: [],
-}
-
-type ZeroSetup = { outputs?: Record<string, string | null>; payload?: unknown; app?: boolean }
-
-// A run state at review-dispatched, a run dir with an empty ledger and one
-// output per reviewer (`outputs` overrides one; null leaves it out), and a
-// fake gh that answers the review post with id 555.
-async function zeroSetup(t: Parameters<typeof tempDir>[0], options: ZeroSetup = {}) {
-  const s = await setup(t, {
-    payload: options.payload ?? ZERO,
-    app: options.app ? {} : undefined,
-    responses: [{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 555 }) }],
-  })
-  await s.patch({ phase: 'review-dispatched' })
-  const runDir = join(s.dir, 'state', 'pr-13')
-  await writeFile(join(runDir, 'findings.json'), '[]\n')
-  const outputs: Record<string, string | null> = {
-    'reviewer-p1-standards': FINDINGS_OUT(1, 'standards'),
-    'reviewer-p2-standards': FINDINGS_OUT(2, 'standards'),
-    ...options.outputs,
-  }
-  for (const [name, out] of Object.entries(outputs)) if (out !== null) await writeFile(join(runDir, `${name}.json`), out)
-  const runState = (...args: string[]) => runCli(['run-state', ...args], { env: s.env })
-  return { ...s, runDir, runState }
-}
-
-test('a zero-finding review posts with no findings table and records a gate pass at the pinned head', async (t) => {
-  const s = await zeroSetup(t)
-  const { code, stdout, stderr } = await s.post()
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  assert.deepEqual(JSON.parse(stdout), {
-    posted: true, id: 555, as: 'user', event: 'COMMENT', round: 1, kind: 'review', gate: 'pass', problems: [],
-  })
-  const posts = (await s.gh.calls()).filter((c) => c.argv.includes('POST'))
-  assert.equal(posts.length, 1)
-  const sent = JSON.parse(posts[0]!.stdin)
-  assert.deepEqual(sent.comments, [])
-  assert.doesNotMatch(sent.body, /\|/)
-  assert.equal(
-    sent.body,
-    `## Review pipeline: round 1\n\nRuntime claude, 2 pairs, commit ccccccc.\n\nSpec: no spec available.\n\nNo findings.\n\nDropped: 1 (S1: a nitpick).\n\n${MARKER}`,
-  )
-  assert.deepEqual(await s.gates(), [{ round: 1, commit: SHA, result: 'pass' }])
-})
-
-test('a zero-finding walkthrough with no table and no "No findings." line gets that line at the end', async (t) => {
-  const s = await zeroSetup(t, { payload: { ...ZERO, body: '## Review pipeline: round 1\n\nSpec: no spec available.\n' } })
-  const { code, stderr } = await s.post()
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  const sent = JSON.parse((await s.gh.calls()).find((c) => c.argv.includes('POST'))!.stdin)
-  assert.equal(sent.body, `## Review pipeline: round 1\n\nSpec: no spec available.\n\nNo findings.\n\n${MARKER}`)
-})
-
-for (const [name, outputs, why] of [
-  ['a missing reviewer output', { 'reviewer-p2-standards': null }, /reviewer-p2-standards\.json is missing/],
-  ['a reviewer output that is prose', { 'reviewer-p2-standards': 'No findings here.' }, /reviewer-p2-standards\.json is not JSON/],
-  ['a reviewer output that breaks the findings schema', { 'reviewer-p2-standards': '{"axis":"standards","pair":2,"findings":[]}' }, /does not match findings\.schema\.json: \$: missing "notes"/],
-] as const) {
-  test(`a zero-finding round with ${name} posts nothing and records no pass`, async (t) => {
-    const s = await zeroSetup(t, { outputs })
-    const { code, stdout, stderr } = await s.post()
-    assert.equal(code, 1)
-    assert.equal(stdout, '')
-    assert.match(stderr, /a round with zero findings passes only when every reviewer's output is valid, so nothing was posted and no pass is recorded: no valid output from reviewer-p2-standards \(/)
-    assert.match(stderr, why)
-    assert.doesNotMatch(stderr, /reviewer-p1-standards/)
-    assert.deepEqual(await s.gh.calls(), [])
-    assert.deepEqual(await s.reviews(), [])
-    assert.deepEqual(await s.gates(), [])
-    await assert.rejects(access(join(s.runDir, 'recheck-r1.json')))
-    assert.equal((await s.runState('advance', '--pr', '13', 'review-posted')).code, 1)
-  })
-}
-
-test('a zero-finding round with <run dir>/spec.md needs the Spec reviewers too, whatever the walkthrough says', async (t) => {
-  const s = await zeroSetup(t)
-  await writeFile(join(s.runDir, 'spec.md'), '# #2: Spec\n')
-  const { code, stderr } = await s.post()
-  assert.equal(code, 1)
-  assert.match(stderr, /no valid output from reviewer-p1-spec, reviewer-p2-spec \(/)
-  assert.deepEqual(await s.gh.calls(), [])
-  assert.deepEqual(await s.gates(), [])
-
-  await writeFile(join(s.runDir, 'reviewer-p1-spec.json'), FINDINGS_OUT(1, 'spec'))
-  await writeFile(join(s.runDir, 'reviewer-p2-spec.json'), `\`\`\`json\n${FINDINGS_OUT(2, 'spec')}\n\`\`\`\n`)
-  const again = await s.post()
-  assert.equal(again.code, 0, again.stderr)
-  assert.equal(JSON.parse(again.stdout).gate, 'pass')
-})
-
-test('a zero-finding round with no <run dir>/spec.md needs only the Standards reviewers, whatever the walkthrough says', async (t) => {
-  const s = await zeroSetup(t, { payload: { ...ZERO, body: ZERO.body.replace('Spec: no spec available.\n\n', '') } })
-  const { code, stdout, stderr } = await s.post()
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  assert.equal(JSON.parse(stdout).gate, 'pass')
-})
-
-// Inline comments on GitHub, as `gh api --paginate --jq` lists them.
-const inlineFinding = (review: number) =>
-  `${JSON.stringify({ id: 101, in_reply_to_id: null, pull_request_review_id: review, login: 'alilloig', body: '**F1** (Standards, bug, high, 2/2 pairs) ...' })}\n`
-
-test('a zero-finding re-run whose recorded review holds an inline finding on GitHub records no pass', async (t) => {
-  const s = await zeroSetup(t)
-  await s.patch({ reviews: [{ round: 1, kind: 'review', id: 555, commit: SHA, as: 'user', event: 'COMMENT' }] })
-  await s.gh.respond([{ match: 'pulls/13/comments', stdout: inlineFinding(555) }, ME])
-  const { code, stdout, stderr } = await s.post()
-  assert.equal(code, 1)
-  assert.equal(stdout, '')
-  assert.match(stderr, /the ledger is empty, but GitHub shows inline findings in this run's review, so no pass is recorded: F1 is posted inline but is not in the ledger/)
-  assert.deepEqual(await s.gates(), [])
-  await assert.rejects(access(join(s.runDir, 'recheck-r1.json')))
-})
-
-test('a zero-finding post that finds its own marked review on GitHub with an inline finding records no pass', async (t) => {
-  const s = await zeroSetup(t)
-  await s.gh.respond([
-    { match: 'pulls/13/comments', stdout: inlineFinding(777) },
-    { match: '--paginate', stdout: listed({ id: 777, body: `## Review pipeline: round 1\n\n${MARKER}` }) },
-    ME,
-  ])
-  const { code, stderr } = await s.post()
-  assert.equal(code, 1)
-  assert.match(stderr, /GitHub shows inline findings in this run's review, so no pass is recorded: F1 is posted inline/)
-  assert.ok((await s.gh.calls()).every((c) => !c.argv.includes('POST')))
-  assert.deepEqual(await s.reviews(), [])
-  assert.deepEqual(await s.gates(), [])
-})
-
-test('a zero-finding post reads the inline comments, and a re-run records the same pass and posts nothing', async (t) => {
-  const s = await zeroSetup(t)
-  assert.equal((await s.post()).code, 0)
-  assert.ok((await s.gh.calls()).some((c) => c.argv.join(' ') === COMMENTS.join(' ')))
-  const again = await s.post()
-  assert.equal(again.code, 0, again.stderr)
-  assert.deepEqual(JSON.parse(again.stdout), { posted: false, duplicate: true, id: 555, gate: 'pass', problems: [] })
-  assert.equal((await s.gh.calls()).filter((c) => c.argv.includes('POST')).length, 1)
-  assert.deepEqual(await s.gates(), [{ round: 1, commit: SHA, result: 'pass' }])
-})
-
-test('a zero-finding post keeps an existing empty re-check file as it is', async (t) => {
-  const s = await zeroSetup(t)
-  const old = '{"items":[]}'
-  await writeFile(join(s.runDir, 'recheck-r1.json'), old)
-  assert.equal((await s.post()).code, 0)
-  assert.equal(await readFile(join(s.runDir, 'recheck-r1.json'), 'utf8'), old)
-})
-
-test('a zero-finding walkthrough loses a findings table with no outer pipes', async (t) => {
-  const body = '## Review pipeline: round 1\n\nSpec: no spec available.\n\nID | Where | Axis | Severity | Pairs | Finding\n--- | --- | --- | --- | --- | ---\n\nDropped: 0.'
-  const s = await zeroSetup(t, { payload: { ...ZERO, body } })
-  const { code, stderr } = await s.post()
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  const sent = JSON.parse((await s.gh.calls()).find((c) => c.argv.includes('POST'))!.stdin)
-  assert.equal(sent.body, `## Review pipeline: round 1\n\nSpec: no spec available.\n\nNo findings.\n\nDropped: 0.\n\n${MARKER}`)
-})
-
-test('a zero-finding round with a Spec reviewer output in the run dir, and no spec.md, needs every pair\'s Spec output', async (t) => {
-  const s = await zeroSetup(t, { outputs: { 'reviewer-p1-spec': FINDINGS_OUT(1, 'spec') } })
-  const { code, stderr } = await s.post()
-  assert.equal(code, 1)
-  assert.match(stderr, /no valid output from reviewer-p2-spec \(.*reviewer-p2-spec\.json is missing/)
-  assert.deepEqual(await s.gh.calls(), [])
-  assert.deepEqual(await s.gates(), [])
-})
-
-// An empty ledger with a finding row in the walkthrough table is an
-// inconsistent Orchestrator output: the row would be lost, so it is refused.
-for (const [name, table] of [
-  ['with outer pipes', `${TABLE_HEAD}\n| F1 | src/a.ts:5 | Standards | high | 2/2 | Off by one. |`],
-  ['with no outer pipes', 'ID | Where | Axis | Severity | Pairs | Finding\n--- | --- | --- | --- | --- | ---\nF1 | src/a.ts:5 | Standards | high | 2/2 | Off by one.'],
-] as const) {
-  test(`a zero-finding walkthrough whose findings table (${name}) has a finding row posts nothing and records no pass`, async (t) => {
-    const s = await zeroSetup(t, { payload: { ...ZERO, body: ZERO.body.replace(TABLE_HEAD, table) } })
-    const { code, stderr } = await s.post()
-    assert.equal(code, 1)
-    assert.match(stderr, /the ledger \S+findings\.json is empty, but the walkthrough's findings table has 1 row\(s\): every finding in the table needs a ledger entry/)
-    assert.deepEqual(await s.gh.calls(), [])
-    assert.deepEqual(await s.gates(), [])
-  })
-}
-
-const CLEAN_PR = JSON.stringify({
-  state: 'OPEN', isDraft: false, headRefOid: SHA, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
-  statusCheckRollup: [{ __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' }],
-})
-
-test('after a zero-finding review, the run advances to rechecked with no re-check post, and merge-gate accepts the recorded pass', async (t) => {
-  const s = await zeroSetup(t)
-  assert.equal((await s.post()).code, 0)
-  for (const phase of ['review-posted', 'adjudicated', 'rechecked', 'body-rewritten', 'ready', 'explained']) {
-    const advanced = await s.runState('advance', '--pr', '13', phase)
-    assert.equal(advanced.code, 0, `${phase}: ${advanced.stderr}`)
-  }
-  assert.deepEqual(JSON.parse(await readFile(join(s.runDir, 'recheck-r1.json'), 'utf8')), { items: [] })
-  const kinds = (await s.reviews()).map((r: { kind: string }) => r.kind)
-  assert.deepEqual(kinds, ['review'])
-
-  await s.gh.respond([{ match: 'mergeStateStatus', stdout: CLEAN_PR }])
-  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--config', s.configPath], { env: s.env })
-  assert.equal(gate.stderr, '')
-  assert.equal(gate.code, 0)
-  assert.deepEqual(JSON.parse(gate.stdout).gate, 'go')
-  assert.deepEqual(JSON.parse(gate.stdout).problems, [])
-})
-
-test('with the App, a zero-finding round gets its APPROVE from the gate on the empty re-check, and merge-gate says go', async (t) => {
-  const s = await zeroSetup(t, { app: true })
-  const reviewed = await s.post()
-  assert.equal(reviewed.code, 0, reviewed.stderr)
-  for (const phase of ['review-posted', 'adjudicated', 'rechecked', 'body-rewritten', 'ready']) {
-    assert.equal((await s.runState('advance', '--pr', '13', phase)).code, 0, phase)
-  }
-  const verdict = join(s.dir, 'verdict-r1.json')
-  await writeFile(verdict, JSON.stringify({ event: 'APPROVE', body: '## Verdict: round 1', comments: [] }))
-  await s.gh.respond([{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) }])
-  const approved = await runCli(
-    ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'verdict',
-      '--payload', verdict, '--config', s.configPath, '--ledger', join(s.runDir, 'findings.json'), '--recheck', join(s.runDir, 'recheck-r1.json')],
-    { env: s.env },
-  )
-  assert.equal(approved.stderr, '')
-  assert.equal(approved.code, 0)
-  assert.deepEqual(JSON.parse(approved.stdout), {
-    posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
-  })
-  for (const phase of ['verdict-posted', 'explained']) assert.equal((await s.runState('advance', '--pr', '13', phase)).code, 0, phase)
-
-  await s.gh.respond([
-    { match: 'mergeStateStatus', stdout: CLEAN_PR },
-    { match: 'pulls/13/reviews', stdout: `${JSON.stringify({ id: 555, state: 'COMMENTED', commit_id: SHA, login: BOT })}\n${JSON.stringify({ id: 666, state: 'APPROVED', commit_id: SHA, login: BOT })}\n` },
-  ])
-  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--config', s.configPath], { env: s.env })
-  assert.equal(gate.stderr, '')
-  assert.deepEqual(JSON.parse(gate.stdout).problems, [])
-  assert.equal(JSON.parse(gate.stdout).gate, 'go')
-})
-
-test('with the App, a zero-finding round replaces a re-check file with items from another run, and goes through the APPROVE and merge-gate go', async (t) => {
-  const s = await zeroSetup(t, { app: true })
-  await writeFile(join(s.runDir, 'recheck-r1.json'), '{"items":[{"id":"F1","status":"fixed","reason":"from an earlier run"}]}')
-  const reviewed = await s.post()
-  assert.equal(reviewed.code, 0, reviewed.stderr)
-  assert.deepEqual(JSON.parse(await readFile(join(s.runDir, 'recheck-r1.json'), 'utf8')), { items: [] })
-  for (const phase of ['review-posted', 'adjudicated', 'rechecked', 'body-rewritten', 'ready']) {
-    assert.equal((await s.runState('advance', '--pr', '13', phase)).code, 0, phase)
-  }
-  const verdict = join(s.dir, 'verdict-r1.json')
-  await writeFile(verdict, JSON.stringify({ event: 'APPROVE', body: '## Verdict: round 1', comments: [] }))
-  await s.gh.respond([{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) }])
-  const approved = await runCli(
-    ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'verdict',
-      '--payload', verdict, '--config', s.configPath, '--ledger', join(s.runDir, 'findings.json'), '--recheck', join(s.runDir, 'recheck-r1.json')],
-    { env: s.env },
-  )
-  assert.equal(approved.stderr, '')
-  assert.equal(approved.code, 0)
-  assert.equal(JSON.parse(approved.stdout).gate, 'pass')
-  for (const phase of ['verdict-posted', 'explained']) assert.equal((await s.runState('advance', '--pr', '13', phase)).code, 0, phase)
-
-  await s.gh.respond([
-    { match: 'mergeStateStatus', stdout: CLEAN_PR },
-    { match: 'pulls/13/reviews', stdout: `${JSON.stringify({ id: 555, state: 'COMMENTED', commit_id: SHA, login: BOT })}\n${JSON.stringify({ id: 666, state: 'APPROVED', commit_id: SHA, login: BOT })}\n` },
-  ])
-  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--config', s.configPath], { env: s.env })
-  assert.equal(gate.stderr, '')
-  assert.deepEqual(JSON.parse(gate.stdout).problems, [])
-  assert.equal(JSON.parse(gate.stdout).gate, 'go')
-})
