@@ -120,7 +120,14 @@ export function latestGate(state: State, commit: string): GateRecord | undefined
 // The last verdict posted at `commit` by `login` (default: the run's
 // reviewer_login), if any.
 export function latestVerdict(state: State, commit: string, login = state.reviewer_login): ReviewRecord | undefined {
-  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === login).at(-1)
+  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === login && firstRecord(state, r)).at(-1)
+}
+
+// Whether `r` is the first record of its review id. hero-forge 1.0.1 recorded
+// a review that GitHub moved to a restacked head a second time, at the new
+// head: that later record is not a review of its commit.
+export function firstRecord(state: State, r: ReviewRecord): boolean {
+  return state.reviews.find((x) => x.id === r.id) === r
 }
 
 // The one step after `state.phase` (aborted and stopped aside, which any
@@ -253,60 +260,6 @@ export async function saveState(state: State): Promise<void> {
   const tmp = `${file}.${randomBytes(6).toString('hex')}`
   try {
     await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
-    await rename(tmp, file)
-  } catch (error) {
-    await rm(tmp, { force: true })
-    throw error
-  }
-}
-
-// What `stack restack --pr N` writes to `<run dir>/restack.json` after a
-// restack whose range-diff shows no content change: the layer moved from
-// `old_tip` to `new_tip`. post-review reads it to count a review that GitHub
-// carried from the old tip to the new one. A restack that fails writes none.
-export type Restack = {
-  branch: string
-  from: string
-  onto: string
-  old_tip: string
-  new_tip: string
-  commits: number
-  same: true
-}
-
-export function restackFile(pr: number): string {
-  return join(runDir(pr), 'restack.json')
-}
-
-// The last restack record of PR `pr`, or undefined when there is none. A file
-// that is not a restack record is broken (exit 4).
-export async function loadRestack(pr: number): Promise<Restack | undefined> {
-  const file = restackFile(pr)
-  let text: string
-  try {
-    text = await readFile(file, 'utf8')
-  } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') return undefined
-    throw new Failure(`cannot read ${file}: ${(error as Error).message}`, 1)
-  }
-  let value: unknown
-  try {
-    value = JSON.parse(text)
-  } catch (error) {
-    throw new Failure(`corrupt restack record ${file}: ${(error as Error).message}`, 4)
-  }
-  const r = value as Record<string, unknown>
-  const ok = typeof value === 'object' && value !== null && isSha(r.old_tip) && isSha(r.new_tip) && r.same === true
-  if (!ok) throw new Failure(`corrupt restack record ${file}: it needs old_tip, new_tip and same: true`, 4)
-  return value as Restack
-}
-
-// Write the restack record atomically, as saveState writes the state.
-export async function saveRestack(pr: number, restack: Restack): Promise<void> {
-  const file = restackFile(pr)
-  const tmp = `${file}.${randomBytes(6).toString('hex')}`
-  try {
-    await writeFile(tmp, `${JSON.stringify(restack, null, 2)}\n`, { mode: 0o600 })
     await rename(tmp, file)
   } catch (error) {
     await rm(tmp, { force: true })

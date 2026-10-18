@@ -6,9 +6,8 @@
 // state, then (in case the state lost the record) on GitHub, by a hidden
 // marker on the last line of a review by the same poster on the same commit.
 // A review that the run state records at another commit, and that GitHub
-// now shows on this one, was carried over by a restack. It counts as this
-// commit's review only when `stack restack --pr` recorded that restack with
-// no content change; otherwise a fresh review posts.
+// now shows on this one (GitHub can move a review to a restacked head), is
+// not this commit's review: a fresh review posts.
 //
 // With a run state, the post must be at the run's `head_sha` and `round`,
 // and the config and the run state must agree on the reviewer App.
@@ -40,9 +39,9 @@ import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
 import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
 import {
   EVENTS,
+  firstRecord,
   isOneOf,
   KINDS,
-  loadRestack,
   loadState,
   runDir,
   saveState,
@@ -107,8 +106,7 @@ function checkPayload(value: unknown): Payload {
 
 // Record the review (once per round, kind and commit, the key of the
 // duplicate check) and the gate result (once per round, commit and result) in
-// the PR's run state, when there is one. One review id can be on record at
-// two commits: GitHub carried it from the old head to the new one.
+// the PR's run state, when there is one.
 async function record(state: State | undefined, entry: ReviewRecord | undefined, gate: GateRecord | undefined): Promise<void> {
   if (state === undefined) return
   const fresh = await loadState(state.pr)
@@ -355,7 +353,7 @@ async function post(argv: string[]): Promise<string> {
   }
 
   // Primary resume check: the run state already records this round's review.
-  const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit)
+  const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit && firstRecord(state, r))
   if (recorded !== undefined) {
     await save(undefined)
     return `${JSON.stringify({ posted: false, duplicate: true, id: recorded.id, ...gate })}\n`
@@ -374,26 +372,15 @@ async function post(argv: string[]): Promise<string> {
   const entry = (id: number): ReviewRecord => ({ round, kind, id, commit, as: poster.as, event: payload.event })
   const reviews = await listReviews(reviewsPath, pr, poster)
   const existing = findOwnReview(reviews, mark, poster, commit)
-  if (existing !== undefined) {
-    // The run state records this review at another commit: GitHub carried it
-    // to `commit`. It counts only after a restack with no content change;
-    // otherwise the new head gets a fresh review. After two carries (A to B,
-    // then B to C) the review is on record at A and B: the latest record, B,
-    // is where the last restack started.
-    const earlier = state?.reviews
-      .filter((r) => r.id === existing.id && r.round === round && r.kind === kind && r.commit !== commit)
-      .at(-1)
+  // A review the run state records at another commit is not this commit's
+  // review, even when GitHub now shows it here: the new head gets a fresh one.
+  const movedHere = existing !== undefined && state?.reviews.some((r) => r.id === existing.id && r.commit !== commit)
+  if (existing !== undefined && !movedHere) {
     // Our review is already on GitHub: a zero-finding pass also needs it to
     // hold no inline finding.
     if (zero) zeroGate([...reviewIds, existing.id])
-    if (earlier === undefined) {
-      await save(entry(existing.id))
-      return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id, ...gate })}\n`
-    }
-    if (await carries(pr, earlier.commit, commit, existing, reviews, poster, kind, payload.event)) {
-      await save(entry(existing.id))
-      return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id, carried_from: earlier.commit, ...gate })}\n`
-    }
+    await save(entry(existing.id))
+    return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id, ...gate })}\n`
   }
 
   const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(outgoing), poster.token)
@@ -438,32 +425,6 @@ function listReviews(reviewsPath: string, pr: number, poster: Identity): Promise
 // does not count, so nobody can suppress the pipeline's review by copying it.
 function findOwnReview(reviews: GitHubReview[], mark: string, poster: Identity, commit: string): GitHubReview | undefined {
   return reviews.filter((r) => r.login === poster.login && r.commit_id === commit && hasOwnMarker(r.body, mark)).at(-1)
-}
-
-// The state GitHub gives a review of each event.
-const STATE_OF: Record<Event, string> = { COMMENT: 'COMMENTED', APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED' }
-
-// Whether the review GitHub carried from `from` to `to` counts at `to`. The
-// layer's run dir must hold the record of `stack restack --pr` that moved the
-// layer from `from` to `to` with no content change. On GitHub the review must
-// still be the event this post would send, and a verdict must be the poster's
-// latest review that is not a COMMENT (nor PENDING), as the merge gate reads it.
-async function carries(
-  pr: number,
-  from: string,
-  to: string,
-  review: GitHubReview,
-  reviews: GitHubReview[],
-  poster: Identity,
-  kind: Kind,
-  event: Event,
-): Promise<boolean> {
-  const restack = await loadRestack(pr)
-  if (restack === undefined || restack.old_tip !== from || restack.new_tip !== to || restack.same !== true) return false
-  if (review.state !== STATE_OF[event]) return false
-  if (kind !== 'verdict') return true
-  const latest = reviews.filter((r) => r.login === poster.login && r.state !== 'COMMENTED' && r.state !== 'PENDING').at(-1)
-  return latest?.id === review.id
 }
 
 export const main = runMain('post-review', post)
