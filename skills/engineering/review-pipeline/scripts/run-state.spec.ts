@@ -187,13 +187,77 @@ test('create over a run in flight is refused, so a resumed run keeps its state',
   assert.equal(code, 1)
   assert.equal(
     stderr,
-    'review.ts run-state: run in flight for PR #13 (phase review-posted): resume it, or create --force\n',
+    'review.ts run-state: run in flight for PR #13 (phase review-posted): resume it, or, when the PR head moved, run-state supersede --pr 13 first (create --force is for a corrupt state file)\n',
   )
   assert.equal(await readFile(s.file, 'utf8'), before)
 
   const forced = await s.cli(...CREATE, '--force')
   assert.equal(forced.code, 0)
   assert.equal(JSON.parse(await readFile(s.file, 'utf8')).phase, 'created')
+})
+
+// The PR head moved after a review was posted (here at rechecked, with a
+// passing gate): supersede archives the whole run dir, so a new run starts
+// clean at the new head and no file of the old run reaches it.
+test('supersede archives a run in flight with a superseded marker, and a plain create then starts fresh', async (t) => {
+  const s = await stateRoot(t)
+  await s.seed({ phase: 'rechecked', gates: [{ round: 1, commit: SHA, result: 'pass' }] })
+  await writeFile(join(s.root, 'pr-13', 'recheck-r1.json'), '{"items":[]}')
+  const { code, stdout, stderr } = await s.cli('supersede', '--pr', '13')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const archive = join(s.root, `pr-13.superseded-${SHA.slice(0, 7)}`)
+  assert.deepEqual(JSON.parse(stdout), { superseded: 13, phase: 'rechecked', head_sha: SHA, archive })
+  assert.deepEqual((await readdir(s.root)).sort(), [`pr-13.superseded-${SHA.slice(0, 7)}`])
+  const old = JSON.parse(await readFile(join(archive, 'state.json'), 'utf8'))
+  assert.equal(old.phase, 'superseded')
+  assert.deepEqual(old.gates, [{ round: 1, commit: SHA, result: 'pass' }])
+  assert.deepEqual((await readdir(archive)).sort(), ['recheck-r1.json', 'state.json'])
+
+  const created = await s.cli(...CREATE.map((a) => (a === SHA ? SHA2 : a)))
+  assert.equal(created.stderr, '')
+  assert.equal(created.code, 0)
+  assert.equal(JSON.parse(await readFile(s.file, 'utf8')).head_sha, SHA2)
+  assert.deepEqual(await readdir(join(s.root, 'pr-13')), ['state.json'])
+})
+
+test('supersede at phase created is refused: pin the new head instead', async (t) => {
+  const s = await stateRoot(t)
+  await s.seed({ phase: 'created' })
+  const before = await readFile(s.file, 'utf8')
+  const { code, stderr } = await s.cli('supersede', '--pr', '13')
+  assert.equal(code, 1)
+  assert.equal(
+    stderr,
+    'review.ts run-state: run for PR #13 is at created: nothing was reviewed yet, so pin the new head with run-state set --pr 13 head_sha <sha>\n',
+  )
+  assert.equal(await readFile(s.file, 'utf8'), before)
+})
+
+test('supersede with no run state exits 3', async (t) => {
+  const s = await stateRoot(t)
+  const { code, stderr } = await s.cli('supersede', '--pr', '13')
+  assert.equal(code, 3)
+  assert.match(stderr, /no run state for PR #13/)
+})
+
+test('supersede refuses when the archive dir already exists, and moves nothing', async (t) => {
+  const s = await stateRoot(t)
+  await s.seed({ phase: 'review-posted' })
+  await mkdir(join(s.root, `pr-13.superseded-${SHA.slice(0, 7)}`))
+  const before = await readFile(s.file, 'utf8')
+  const { code, stderr } = await s.cli('supersede', '--pr', '13')
+  assert.equal(code, 1)
+  assert.match(stderr, /pr-13\.superseded-aaaaaaa already exists/)
+  assert.equal(await readFile(s.file, 'utf8'), before)
+})
+
+test('advance to superseded is refused: only supersede ends a run that way', async (t) => {
+  const s = await stateRoot(t)
+  await s.seed({ phase: 'review-posted' })
+  const { code, stderr } = await s.cli('advance', '--pr', '13', 'superseded')
+  assert.equal(code, 1)
+  assert.match(stderr, /cannot advance PR #13 from review-posted to superseded/)
 })
 
 test('create over a terminal run starts a new one', async (t) => {

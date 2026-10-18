@@ -15,12 +15,12 @@ import {
 
 const SHA = 'c'.repeat(40)
 const MARKER = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=review -->'
-const LIST = ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, login: .user.login}', 'repos/contract-hero/hero-forge/pulls/13/reviews']
+const LIST = ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, submitted_at, login: .user.login}', 'repos/contract-hero/hero-forge/pulls/13/reviews']
 const USER = ['api', 'user', '--jq', '.login']
 const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
 
 // One line of the review list, as `gh api --paginate --jq` prints it.
-function listed(...reviews: { id: number; body: string; commit_id?: string; login?: string; state?: string }[]): string {
+function listed(...reviews: { id: number; body: string; commit_id?: string; login?: string; state?: string; submitted_at?: string }[]): string {
   return reviews.map((r) => `${JSON.stringify({ state: 'COMMENTED', commit_id: SHA, login: 'alilloig', ...r })}\n`).join('')
 }
 const POST = ['api', '-X', 'POST', 'repos/contract-hero/hero-forge/pulls/13/reviews', '--input', '-']
@@ -161,6 +161,8 @@ const NOT_OURS = [
   ['a marker in our own review on another commit', { commit_id: 'd'.repeat(40) }],
   ['a marker for another round', { body: MARKER.replace('round=1', 'round=11') }],
   ['a marker that is not the last line', { body: `${MARKER}\n\nmore text below the copied marker` }],
+  // A superseded run left this review; GitHub can show it on the new head.
+  ['our own marked review submitted before this run was created', { submitted_at: '2020-01-01T00:00:00Z' }],
 ] as const
 
 for (const [name, change] of NOT_OURS) {

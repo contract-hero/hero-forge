@@ -16,6 +16,7 @@ const ISSUE_COMMENTS = ['api', '--paginate', '--jq', '.[] | {id, body, login: .u
 const replyTo = (comment: number) => ['api', '-X', 'POST', `repos/${REPO}/pulls/13/comments/${comment}/replies`, '--input', '-']
 const COMMENT_POST = ['api', '-X', 'POST', `repos/${REPO}/issues/13/comments`, '--input', '-']
 const marker = (round: number, kind: string) => `<!-- hero-forge:review-pipeline pr=13 round=${round} kind=${kind} -->`
+const adjudicationMarker = (round: number, review = 555) => `<!-- hero-forge:review-pipeline pr=13 round=${round} kind=adjudication review=${review} -->`
 const replyMarker = (round: number, id: string) => `<!-- hero-forge:review-pipeline pr=13 round=${round} kind=reply id=${id} -->`
 
 type Inline = { id: number; body: string; review?: number; reply_to?: number; login?: string }
@@ -56,7 +57,7 @@ const SUMMARY_1 = [
   '',
   'Each inline finding also has this answer in its thread.',
   '',
-  marker(1, 'adjudication'),
+  adjudicationMarker(1),
 ].join('\n')
 
 type Setup = { ledger?: unknown; recheck?: unknown; noState?: boolean }
@@ -143,6 +144,16 @@ test('a re-run posts nothing that is already on the PR', async (t) => {
   assert.deepEqual((await s.calls()).map((c) => c.argv), [USER, COMMENTS, replyTo(102), ISSUE_COMMENTS])
 })
 
+test("the adjudication comment of an earlier run on the same PR (another review) does not count: this run posts its own", async (t) => {
+  const s = await setup(t)
+  const earlier = SUMMARY_1.replace(adjudicationMarker(1), adjudicationMarker(1, 444))
+  await s.github(FINDINGS, `${JSON.stringify({ id: 777, login: 'alilloig', body: earlier })}\n`)
+  const { code, stdout } = await s.reply(1)
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout).comment, { id: 900, posted: true })
+  assert.deepEqual(JSON.parse((await s.calls()).at(-1)!.stdin), { body: SUMMARY_1 })
+})
+
 test('a copied marker from someone else does not count as our answer', async (t) => {
   const s = await setup(t)
   const copied = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=reply id=F1 -->'
@@ -184,7 +195,7 @@ test('round 2 answers only what the round 1 re-check left open, plus new ledger 
   assert.deepEqual(JSON.parse(calls[2]!.stdin), {
     body: 'ACCEPT: handled the case after all\n\n<!-- hero-forge:review-pipeline pr=13 round=2 kind=reply id=F2 -->',
   })
-  assert.match(JSON.parse(calls[5]!.stdin).body, /^## Adjudication: round 2\n[^]*\| F2 \|[^]*\| F4 \|[^]*kind=adjudication -->$/)
+  assert.match(JSON.parse(calls[5]!.stdin).body, /^## Adjudication: round 2\n[^]*\| F2 \|[^]*\| F4 \|[^]*kind=adjudication review=555 -->$/)
   assert.doesNotMatch(JSON.parse(calls[5]!.stdin).body, /\| F1 \|/)
 })
 
@@ -233,7 +244,7 @@ test('a ledger where that holds a token is refused before any gh call', async (t
 
 test('a ledger reason that holds the pipeline marker is refused before any gh call', async (t) => {
   const s = await setup(t, {
-    ledger: [LEDGER[0], { ...LEDGER[1], reason: `fine ${marker(1, 'adjudication')}` }, LEDGER[2]],
+    ledger: [LEDGER[0], { ...LEDGER[1], reason: `fine ${adjudicationMarker(1)}` }, LEDGER[2]],
   })
   const { code, stderr } = await s.reply(1)
   assert.equal(code, 1)

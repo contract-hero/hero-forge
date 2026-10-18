@@ -69,9 +69,11 @@ Run `review.ts run-state read --pr N`.
 | `adjudicated` | **Re-check**. A `recheck-r<round>.json` that parses is reused: do not dispatch the re-checker again. A zero-finding round: `advance rechecked`, then **Finish**, with no re-check post |
 | `rechecked` | run **Re-check** step 4's `post-review` again: it posts nothing new and prints the same `gate`. Then step 5 or 6. A zero-finding round has no re-check post: go to **Finish** |
 | `body-rewritten`, `ready`, `verdict-posted`, `explained`, `merged` | **Finish**, at the step after that phase, as the run's `mode` says |
-| `complete`, `aborted`, `stopped` | the last run ended (`stopped`: `max_rounds` rounds failed, or the re-checker failed twice). Tell the user; start a new run only if they ask (`create` over a terminal state starts fresh) |
+| `complete`, `aborted`, `stopped`, `superseded` | the last run ended (`stopped`: `max_rounds` rounds failed, or the re-checker failed twice; `superseded`: its head moved, see below). Tell the user; start a new run only if they ask (`create` over a terminal state starts fresh) |
 
 If the PR head moved since the state was created and the phase is `created`, pin the new head: `review.ts run-state set --pr N head_sha <sha>`.
+
+**Head moved after a review.** The phase is past `created`, the PR head is not the run's `head_sha`, the new commits are not this run's own `apply review round <R>` fixes (Adjudication pins those), and nothing was approved or merged at the new head. The run cannot go on: its review, re-check and gate belong to the old head, and `merge-gate` stops on the moved head. Run `review.ts run-state supersede --pr N`, with no question to the user. It marks the run `superseded` and moves its run dir to `pr-<N>.superseded-<sha7>` beside it, so no file of the old run reaches the new one. Then start a new run at the new head (**Fixed point**). `create --force` stays for a corrupt state file (exit 4). A head that `implement-spec-stack` moves on purpose is pinned with `run-state set` by that skill, so the run's `head_sha` already is the PR head and this case does not apply.
 
 ## Fixed point
 
@@ -170,7 +172,7 @@ for endpoint in pulls/N/reviews pulls/N/comments issues/N/comments; do
 done > <run dir>/posted-r<R>.jsonl
 ```
 
-2. **Brief.** Fill the template [rechecker-brief.md](./rechecker-brief.md) and save it to `<run dir>/rechecker-brief-r<R>.md`. The fix commits are the `apply review round <n>` commits of rounds 1 to R.
+2. **Brief.** Fill the template [rechecker-brief.md](./rechecker-brief.md) and save it to `<run dir>/rechecker-brief-r<R>.md`. The fix commits are the `apply review round <n>` commits of rounds 1 to R. This run's reviews are the ids that `review.ts run-state read --pr N reviews` lists, so the re-checker can tell them from the posts of a superseded run.
 3. **Dispatch** one fresh, read-only re-checker on the reviewer's model and effort.
    - `runtime: claude`: one fresh sub-agent with model `<reviewer.agent_model>` and effort `<reviewer.effort>`, given the brief's contents. Write its final message verbatim to `<run dir>/recheck-r<R>.json`.
    - `runtime: codex`: `review.ts codex-exec --role reviewer --brief <run dir>/rechecker-brief-r<R>.md --out <run dir>/recheck-r<R>.json --schema <the folder this SKILL.md is in>/recheck.schema.json`. The re-checker runs read-only, with no network and no gh token, and `codex-exec` exits 1 when its output does not match the schema. **Codex runtime** has the rules for `codex-exec`.
@@ -186,7 +188,7 @@ review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind r
 5. **Pass:** go to **Finish**. With the App, its APPROVE comes in **Finish**, after the PR is ready for review.
 6. **Fail:** `review.ts run-state next-round --pr N --max-rounds <max_rounds>`. It prints the new `round` and `phase`:
    - `review-posted`: round R+1 starts. Go to **Adjudication** and answer the open items and the gate's `problems`.
-   - `stopped`: `max_rounds` rounds failed. With the App, post its REQUEST_CHANGES verdict (**App identity**). The PR stays in draft. Stop and ask the user, with the open items and the gate's `problems`. Offer two ways on: fix the PR by hand and run `/review-pipeline N` again (a new run, with a fresh review of the new head), or leave the PR in draft for a human reviewer. Do not start another round yourself.
+   - `stopped`: `max_rounds` rounds failed. With the App, post its REQUEST_CHANGES verdict (**App identity**). The PR stays in draft. Stop and ask the user, with the open items and the gate's `problems`. Offer two ways on: fix the PR by hand, run `review.ts run-state supersede --pr N`, and run `/review-pipeline N` again (a new run, with a fresh review of the new head), or leave the PR in draft for a human reviewer. Do not start another round yourself.
 
 ## App identity
 
@@ -226,7 +228,7 @@ The caller sets the mode when the run starts (`run-state create --mode`). `revie
 5. **Wait for a green gate.** `review.ts merge-gate --repo O/R --pr N` reads the PR once and prints `gate`, `ci`, `checks`, and `problems`. It never waits, so you do. A PR with no CI checks at all is allowed: `ci: none` is `go`.
    - `go`: go to step 6. One exception: `ci: none` right after a push, in a repo with workflow files in `.github/workflows/`, can mean the checks are not registered yet. Wait 30 seconds and run `merge-gate` once more. Still `none`: the repo has no PR checks; go to step 6.
    - `wait`: CI is running, or GitHub has not computed mergeability yet (`UNKNOWN`). For CI, run `gh pr checks N --repo O/R --watch` in the background (CI can outlast a shell time limit, and a timeout is not a failure). For `UNKNOWN`, wait 10 seconds. Then run `merge-gate` again. A third `UNKNOWN` in a row counts as `stop`.
-   - `stop`: red CI, a merge conflict, a head that moved after the re-check, no passing re-check recorded at the head, a merge state that needs a human (`BLOCKED`, `BEHIND`), or, with the App, no valid App approval. The App approval is valid only when the App's latest verdict recorded at the head is APPROVE, and its latest review on GitHub that is not a COMMENT is APPROVED on the head, by the login the App's own credentials give. Do not merge, re-run CI, or fix it yourself: stop and ask the user, with the `problems`. A moved head means new commits, and new commits need a new run (`/review-pipeline N`).
+   - `stop`: red CI, a merge conflict, a head that moved after the re-check, no passing re-check recorded at the head, a merge state that needs a human (`BLOCKED`, `BEHIND`), or, with the App, no valid App approval. The App approval is valid only when the App's latest verdict recorded at the head is APPROVE, and its latest review on GitHub that is not a COMMENT is APPROVED on the head, by the login the App's own credentials give. Do not merge, re-run CI, or fix it yourself: stop and ask the user, with the `problems`. A moved head means new commits, and new commits need a new run: `review.ts run-state supersede --pr N`, then `/review-pipeline N` (**Resume**, "Head moved after a review").
    - `merged`: the PR is already merged. Go to step 6, which records it.
 6. **Merge.** `review.ts merge --repo O/R --pr N`. It runs the gate again and, on `go`, squash-merges with `--match-head-commit <head_sha>`, so only the commit the re-checker graded can merge. It never uses `--admin` or `--delete-branch`, and it checks that the PR is `MERGED` afterwards. On a PR that is already merged it changes nothing and prints `already: true`. Exit 1 (the gate changed, or GitHub refused): stop and ask the user, with the message. Then `advance merged`, then `advance complete`, and report the PR URL, the merge commit, the number of rounds, and the explainer path.
 

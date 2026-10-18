@@ -103,7 +103,9 @@ function judge(view: PrView, state: State, appLogin: string | null, reviews: Git
   const wait: string[] = []
   if (view.state !== 'OPEN') stop.push(`the PR is ${view.state}, not OPEN`)
   if (view.headRefOid !== state.head_sha) {
-    stop.push(`the head moved since the re-check: the PR is at ${view.headRefOid}, the re-check graded ${state.head_sha}`)
+    stop.push(
+      `the head moved since the re-check: the PR is at ${view.headRefOid}, the re-check graded ${state.head_sha}. Start a new run at the new head: review.ts run-state supersede --pr ${state.pr}, then /review-pipeline ${state.pr}`,
+    )
   }
   if (view.isDraft) stop.push('the PR is still a draft: flip it to ready first')
   // The re-check gate, on both paths: the latest result at the head.

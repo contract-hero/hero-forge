@@ -29,7 +29,8 @@ export const COMMANDS = {
   review.ts run-state read    --pr N [<key>]
   review.ts run-state advance --pr N <phase>
   review.ts run-state set     --pr N <key> <value>    (key: ${SETTABLE.join(' | ')})
-  review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)`,
+  review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)
+  review.ts run-state supersede  --pr N    (the PR head moved after a review: archive the run, then create a new one)`,
   },
   'app-token': {
     summary: 'Check the reviewer GitHub App, or print its bot login.',
