@@ -1,49 +1,59 @@
-// Tests that the skills an agent starts by name are model-invoked, read from
-// the real skill files.
+// Tests that every skill is model-invoked, read from the real skill files.
 //   node --test scripts/invocation.spec.ts
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { test } from 'node:test'
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-// Agents and routers start these through the Skill tool, but only by name.
-const BY_NAME = ['implement-pr', 'implement-spec-stack', 'setup-review-pipeline']
+const BUCKETS = ['engineering', 'productivity']
 
-function read(skill: string, file: string) {
-  return readFileSync(join(REPO, 'skills', 'engineering', skill, file), 'utf8')
+// Each skill as `<bucket>/<name>`: a folder in a bucket that holds a SKILL.md.
+function skills() {
+  return BUCKETS.flatMap((bucket) =>
+    readdirSync(join(REPO, 'skills', bucket), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(REPO, 'skills', bucket, entry.name, 'SKILL.md')))
+      .map((entry) => `${bucket}/${entry.name}`),
+  ).sort()
+}
+
+function files(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name)
+    return entry.isDirectory() ? files(path) : entry.isFile() ? [path] : []
+  })
 }
 
 // The YAML block between the first two `---` lines of a SKILL.md.
 function frontmatter(skill: string) {
-  const match = /^---\n([\s\S]*?)\n---\n/.exec(read(skill, 'SKILL.md'))
+  const match = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(join(REPO, 'skills', skill, 'SKILL.md'), 'utf8'))
   assert.ok(match, `${skill}/SKILL.md has no frontmatter`)
   return match[1] ?? ''
 }
 
-function description(skill: string) {
-  const match = /^description: "(.*)"$/m.exec(frontmatter(skill))
-  assert.ok(match, `${skill}/SKILL.md has no quoted description`)
-  return match[1] ?? ''
-}
+test('the buckets hold skills', () => {
+  assert.ok(skills().length > 0)
+})
 
-for (const skill of BY_NAME) {
-  test(`${skill}: SKILL.md does not disable model invocation`, () => {
-    assert.doesNotMatch(frontmatter(skill), /^disable-model-invocation:\s*true\s*$/m)
-  })
+test('no SKILL.md sets disable-model-invocation', () => {
+  const hits = skills().filter((skill) => /^disable-model-invocation:/m.test(frontmatter(skill)))
+  assert.deepEqual(hits, [])
+})
 
-  test(`${skill}: agents/openai.yaml does not disable implicit invocation`, () => {
-    assert.doesNotMatch(read(skill, 'agents/openai.yaml'), /^\s*allow_implicit_invocation:\s*false\s*$/m)
-  })
+test('no agents/openai.yaml exists under skills/', () => {
+  const hits = files(join(REPO, 'skills'))
+    .filter((file) => file.endsWith('openai.yaml'))
+    .map((file) => relative(REPO, file))
+  assert.deepEqual(hits, [])
+})
 
-  test(`${skill}: the description limits triggering to an explicit request by name`, () => {
-    const text = description(skill)
-    assert.match(text, /Use only on an explicit request for this skill by name/)
-    assert.ok(text.includes(`the user runs /${skill}`), text)
-    assert.ok(text.includes(`an agent or router asks for ${skill} through the Skill tool`), text)
-    assert.match(text, /Do not start it because /)
+test('every SKILL.md has a quoted, one-line description', () => {
+  const hits = skills().filter((skill) => {
+    const match = /^description: "(.+)"$/m.exec(frontmatter(skill))
+    return !match
   })
-}
+  assert.deepEqual(hits, [])
+})
