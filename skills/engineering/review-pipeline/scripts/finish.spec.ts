@@ -132,7 +132,7 @@ const CASES: { name: string; pr: Pr; gate: string; ci: string; problem?: RegExp 
   { name: 'branch protection blocking is stop', pr: { mergeStateStatus: 'BLOCKED' }, gate: 'stop', ci: 'green', problem: /BLOCKED/ },
   { name: 'a branch behind its base is stop', pr: { mergeStateStatus: 'BEHIND' }, gate: 'stop', ci: 'green', problem: /BEHIND/ },
   { name: 'a draft PR is stop', pr: { isDraft: true, mergeStateStatus: 'DRAFT' }, gate: 'stop', ci: 'green', problem: /draft/ },
-  { name: 'a head the re-checker did not see is stop', pr: { headRefOid: OTHER }, gate: 'stop', ci: 'green', problem: /head moved/ },
+  { name: 'a head the re-checker did not see is stop', pr: { headRefOid: OTHER }, gate: 'stop', ci: 'green', problem: /head moved.*run-state supersede --pr 13/ },
   { name: 'a closed PR is stop', pr: { state: 'CLOSED' }, gate: 'stop', ci: 'green', problem: /CLOSED/ },
   { name: 'an already merged PR is merged', pr: { state: 'MERGED', mergeable: 'UNKNOWN' }, gate: 'merged', ci: 'green' },
 ]

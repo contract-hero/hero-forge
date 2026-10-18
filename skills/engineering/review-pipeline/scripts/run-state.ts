@@ -7,9 +7,12 @@
 // output, the review payload). `phase` is the last completed checkpoint, and
 // `advance` moves it one step at a time, in the order of the run's mode.
 // `reviews` and `gates` are what post-review recorded; some steps need them.
+// `supersede` ends a run whose PR head moved after a review was posted: it
+// marks the run `superseded` and moves the whole run dir aside, so a new run
+// at the new head starts with no file of the old one.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Failure, parse, positive, refuse, runMain, SETTABLE, usageFor } from './cli.ts'
 
@@ -27,9 +30,10 @@ export const PHASES = [
   'complete',
   'aborted',
   'stopped',
+  'superseded',
 ] as const
 export type Phase = (typeof PHASES)[number]
-const TERMINAL: readonly Phase[] = ['complete', 'aborted', 'stopped']
+const TERMINAL: readonly Phase[] = ['complete', 'aborted', 'stopped', 'superseded']
 export const MODES = ['single', 'layer', 'stack-final'] as const
 export type Mode = (typeof MODES)[number]
 export const RUNTIMES = ['codex', 'claude'] as const
@@ -328,13 +332,43 @@ async function create(pr: number, values: Record<string, string | boolean | unde
   if (values.force !== true) {
     try {
       const old = await loadState(pr)
-      refuse(TERMINAL.includes(old.phase), `run in flight for PR #${pr} (phase ${old.phase}): resume it, or create --force`)
+      refuse(
+        TERMINAL.includes(old.phase),
+        `run in flight for PR #${pr} (phase ${old.phase}): resume it, or, when the PR head moved, run-state supersede --pr ${pr} first (create --force is for a corrupt state file)`,
+      )
     } catch (error) {
       if (!(error instanceof Failure) || error.code !== 3) throw error
     }
   }
   await saveState(state)
   return `${JSON.stringify(state, null, 2)}\n`
+}
+
+// End the run of PR `pr` because its head moved after a review was posted:
+// phase `superseded`, and the run dir renamed to `pr-<N>.superseded-<sha7>`
+// beside it, where nothing reads it. At `created` nothing was reviewed yet, so
+// the new head is pinned with `set` instead.
+async function supersede(pr: number): Promise<string> {
+  const state = await loadState(pr)
+  refuse(
+    state.phase !== 'created',
+    `run for PR #${pr} is at created: nothing was reviewed yet, so pin the new head with run-state set --pr ${pr} head_sha <sha>`,
+  )
+  const dir = runDir(pr)
+  const archive = `${dir}.superseded-${state.head_sha.slice(0, 7)}`
+  const taken = await stat(archive).then(
+    () => true,
+    () => false,
+  )
+  refuse(!taken, `${archive} already exists: move it away, then run supersede again`)
+  const phase = state.phase
+  // Move the dir first: if the marker write then fails, the old run is still
+  // out of the new run's way.
+  await rename(dir, archive)
+  state.phase = 'superseded'
+  state.updated_at = new Date().toISOString()
+  await writeFile(join(archive, 'state.json'), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
+  return `${JSON.stringify({ superseded: pr, phase, head_sha: state.head_sha, archive })}\n`
 }
 
 function setValue(key: string, raw: string): unknown {
@@ -389,6 +423,9 @@ async function dispatch(argv: string[]): Promise<string> {
       await saveState(state)
       return ''
     }
+    case 'supersede':
+      arity(0)
+      return supersede(pr)
     case 'next-round': {
       arity(0)
       const max = positive('max-rounds', values['max-rounds'], usage)

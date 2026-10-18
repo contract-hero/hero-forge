@@ -20,7 +20,10 @@ const usage = usageFor('reply')
 const cell = (text: string) => text.replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|')
 
 const replyMarker = (pr: number, round: number, id: string) => marker({ pr, round, kind: 'reply', id })
-const commentMarker = (pr: number, round: number) => marker({ pr, round, kind: 'adjudication' })
+// The adjudication comment also names the run's review, so a new run on the
+// same PR (after a supersede) posts its own comment.
+const commentMarker = (pr: number, round: number, review: number | undefined) =>
+  marker({ pr, round, kind: 'adjudication', ...(review === undefined ? {} : { review }) })
 // The exact objects posted: a finding's thread reply, and the PR comment.
 const replyPost = (pr: number, round: number, entry: LedgerEntry) => ({
   body: withMarker(`${entry.decision}: ${entry.reason}`, replyMarker(pr, round, entry.id)),
@@ -80,10 +83,11 @@ async function reply(argv: string[]): Promise<string> {
     targets.flatMap((e) => [e.id, e.reason, typeof e.where === 'string' ? e.where : '']),
     `ledger ${ledgerPath}`,
   )
-  const commentPost = { body: summary(round, targets, commentMarker(pr, round)) }
+  const state = await loadState(pr)
+  const runReview = state.reviews.find((r) => r.kind === 'review')?.id
+  const commentPost = { body: summary(round, targets, commentMarker(pr, round, runReview)) }
   refuseSecretsIn([...targets.map((e) => replyPost(pr, round, e)), commentPost], `ledger ${ledgerPath}`)
 
-  const state = await loadState(pr)
   const me = await userIdentity()
   const comments = await listInlineComments(repo, pr)
   const reviewIds = state.reviews.filter((r) => r.kind === 'review').map((r) => r.id)
@@ -123,7 +127,7 @@ async function reply(argv: string[]): Promise<string> {
 
   let comment: { id: number; posted: boolean } | null = null
   if (targets.length > 0) {
-    const mark = commentMarker(pr, round)
+    const mark = commentMarker(pr, round, runReview)
     const existing = (
       await listLines<{ id: number; body: string | null; login: string | null }>(
         ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${repo}/issues/${pr}/comments`],
