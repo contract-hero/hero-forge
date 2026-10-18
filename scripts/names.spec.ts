@@ -42,8 +42,8 @@ const OLD_SKILLS = new RegExp(
     .join('|'),
 )
 
-// History keeps the old names: the ADRs, the changelog and the changesets.
-const HISTORY = [/^\.agents\/adr\//, /^CHANGELOG\.md$/, /^\.changeset\//]
+// History keeps the old names: the ADRs and the changelog.
+const HISTORY = [/^\.agents\/adr\//, /^CHANGELOG\.md$/]
 
 // Every file git tracks or would track, as a path from the repo root.
 function repoFiles() {
