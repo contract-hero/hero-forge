@@ -1,9 +1,9 @@
 // The stack subcommands of implement-spec-stack: order, restack, merge-layer, path.
 import assert from 'node:assert/strict'
-import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { baseEnv, fakeGh, run, runCli, seedState, tempDir, type FakeGhResponse } from './test-helpers.ts'
+import { appKey, baseEnv, fakeGh, fakeGitHubApi, run, runCli, seedState, tempDir, type FakeGhResponse } from './test-helpers.ts'
 
 const REPO = 'contract-hero/hero-pocock'
 const REPO_URL = `https://api.github.com/repos/${REPO}`
@@ -249,7 +249,7 @@ async function layers(t: Parameters<typeof tempDir>[0]) {
     await chmod(join(bin, 'git'), 0o755)
     return { PATH: `${bin}:${process.env.PATH ?? ''}` }
   }
-  return { dir, git, write, lines, parentTip, childTip, land, fixParent, restack, brokenRangeDiff }
+  return { dir, gitEnv: env, git, write, lines, parentTip, childTip, land, fixParent, restack, brokenRangeDiff }
 }
 
 test('restack keeps only the child commits when the parent got a fix after the child branched', async (t) => {
@@ -568,4 +568,185 @@ test('order stops on a blocked_by cycle and names the tickets in it', async (t) 
     stderr,
     'review.ts stack: the blocked_by graph has a cycle: #5 -> #7 -> #6 -> #5 (each is blocked by the next). Break the cycle on the issue tracker, then run order again\n',
   )
+})
+
+// Landing a restacked layer with the reviewer App (#24). The layer's run
+// approved its old tip (review 600). After the parent lands, `restack --pr`
+// moves the layer, and GitHub shows review 600 on the new tip.
+const BOT = 'hero-reviewer[bot]'
+const VERDICT_MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=verdict -->'
+
+async function appLanding(t: Parameters<typeof tempDir>[0], mainChange: Record<number, string> = {}, over: Record<string, unknown> = {}) {
+  const s = await layers(t)
+  await s.land(mainChange)
+  // origin/HEAD names main, the default branch, as after a clone.
+  await s.git('update-ref', 'refs/remotes/origin/main', 'main')
+  await s.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
+  const dir = await tempDir(t)
+  const gh = await fakeGh(dir)
+  const key = await appKey(dir)
+  const api = await fakeGitHubApi(t, key.publicKey, {
+    'GET /repos/contract-hero/hero-pocock/installation': { status: 200, body: { id: 4242 } },
+    'POST /app/installations/4242/access_tokens': { status: 201, body: { token: 'ghs_faketoken0123456789' } },
+    'GET /app': { status: 200, body: { slug: 'hero-reviewer' } },
+  })
+  const envFile = join(dir, 'reviewer-app.env')
+  await writeFile(envFile, `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
+  const root = join(dir, 'state')
+  const env = {
+    ...gh.env,
+    HERO_POCOCK_STATE_DIR: root,
+    HERO_POCOCK_REVIEWER_APP_ENV: envFile,
+    HERO_POCOCK_GITHUB_API_URL: api.url,
+  }
+  await seedState(root, {
+    base_ref: 'parent', head_ref: 'child', head_sha: s.childTip, mode: 'layer', phase: 'complete',
+    reviewer_login: BOT,
+    reviews: [
+      { round: 1, kind: 'review', id: 555, commit: s.childTip, as: BOT, event: 'COMMENT' },
+      { round: 1, kind: 'verdict', id: 600, commit: s.childTip, as: BOT, event: 'APPROVE' },
+    ],
+    gates: [{ round: 1, commit: s.childTip, result: 'pass' }],
+    ...over,
+  })
+  const config = join(dir, 'review.md')
+  await writeFile(config, '```yaml\nruntime: claude\napp: enabled\n```\n')
+  const files = { ledger: join(dir, 'findings.json'), recheck: join(dir, 'recheck-r1.json'), payload: join(dir, 'verdict-landing.json') }
+  await writeFile(files.ledger, '[]')
+  await writeFile(files.recheck, JSON.stringify({ items: [] }))
+  await writeFile(files.payload, JSON.stringify({ event: 'APPROVE', body: '## Verdict: landing', comments: [] }))
+  // GitHub carried review 600 to `head`.
+  const carriedTo = (head: string) =>
+    gh.respond([
+      { match: '--paginate --jq .[] | {id, state, body', stdout: `${JSON.stringify({ id: 600, state: 'APPROVED', body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: head, login: BOT })}\n` },
+      { match: '--paginate --jq .[] | {id, state, commit_id', stdout: `${JSON.stringify({ id: 600, state: 'APPROVED', commit_id: head, login: BOT })}\n` },
+      { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 880 }) },
+      { match: 'mergeStateStatus', stdout: prView({ headRefOid: head }) },
+    ])
+  const verdict = (head: string) =>
+    runCli(
+      ['post-review', '--repo', REPO, '--pr', '13', '--commit', head, '--round', '1', '--kind', 'verdict', '--payload', files.payload,
+        '--config', config, '--ledger', files.ledger, '--recheck', files.recheck],
+      { env },
+    )
+  const cli = (...args: string[]) => runCli(args, { env })
+  const restack = (onto = 'origin/main') =>
+    runCli(['stack', 'restack', '--from', s.parentTip, '--onto', onto, '--pr', '13'], { cwd: s.dir, env: { ...s.gitEnv, HERO_POCOCK_STATE_DIR: root } })
+  return { ...s, gh, env, root, config, restack, carriedTo, verdict, cli }
+}
+
+test('restack --pr records a restack with no content change, so post-review records the approval GitHub carried, and the gate says go', async (t) => {
+  const s = await appLanding(t)
+  const restacked = await s.restack()
+  assert.equal(restacked.stderr, '')
+  assert.equal(restacked.code, 0)
+  const head = JSON.parse(restacked.stdout).new_tip
+  assert.equal(JSON.parse(restacked.stdout).recorded, true)
+  assert.equal((await s.cli('run-state', 'set', '--pr', '13', 'head_sha', head)).code, 0)
+
+  await s.carriedTo(head)
+  const posted = await s.verdict(head)
+  assert.equal(posted.stderr, '')
+  assert.equal(posted.code, 0)
+  assert.deepEqual(JSON.parse(posted.stdout), { posted: false, duplicate: true, id: 600, carried_from: s.childTip, gate: 'pass', problems: [] })
+  assert.ok((await s.gh.calls()).every((c) => !c.argv.includes('POST')))
+
+  // No hand edit of the run state: the merge gate finds the approval at the new head.
+  const gate = await s.cli('merge-gate', '--repo', REPO, '--pr', '13', '--config', s.config)
+  assert.equal(gate.stderr, '')
+  assert.equal(JSON.parse(gate.stdout).gate, 'go')
+})
+
+test('a restack with a content change records no restack, so a carried approval is not recorded and a fresh APPROVE posts', async (t) => {
+  const s = await appLanding(t, { 3: 'three' })
+  const before = await readdir(join(s.root, 'pr-13'))
+  const restacked = await s.restack()
+  assert.equal(restacked.code, 1)
+  assert.match(restacked.stderr, /shows a content change/)
+  assert.deepEqual(await readdir(join(s.root, 'pr-13')), before)
+
+  // Even if the head moves anyway and GitHub shows the old approval on it,
+  // the new head gets a fresh APPROVE.
+  const head = 'f'.repeat(40)
+  assert.equal((await s.cli('run-state', 'set', '--pr', '13', 'head_sha', head)).code, 0)
+  await s.carriedTo(head)
+  const posted = await s.verdict(head)
+  assert.equal(posted.stderr, '')
+  assert.equal(posted.code, 0)
+  assert.deepEqual(JSON.parse(posted.stdout), {
+    posted: true, id: 880, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
+  })
+})
+
+test('restack --pr refuses a PR with no run state before it moves anything (exit 3)', async (t) => {
+  const s = await layers(t)
+  await s.land()
+  const root = await tempDir(t)
+  const { code, stderr } = await runCli(['stack', 'restack', '--from', s.parentTip, '--onto', 'main', '--pr', '13'], {
+    cwd: s.dir,
+    env: { ...s.gitEnv, HERO_POCOCK_STATE_DIR: root },
+  })
+  assert.equal(code, 3)
+  assert.match(stderr, /no run state for PR #13/)
+  assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
+})
+
+// The restack record says the new tip holds only reviewed content, so
+// restack --pr checks what it moves, and onto what, before it moves anything.
+const REFUSED_RESTACK = [
+  ['a branch that is not the head of the PR', {}, 'origin/main', { head_ref: 'ticket/9-other' },
+    /^review\.ts stack: the checked-out branch child is not the head of PR #13 \(ticket\/9-other\): check --pr\n$/],
+  ['an --onto that is not the default branch', { 7: 'unreviewed' }, 'side', {},
+    /^review\.ts stack: --onto side is not the default branch \(origin\/HEAD is at [0-9a-f]{40}\): a layer moves onto the default branch only\n$/],
+] as const
+
+for (const [name, sideChange, onto, over, message] of REFUSED_RESTACK) {
+  test(`restack --pr refuses ${name}, moves nothing, and records nothing`, async (t) => {
+    const s = await appLanding(t, {}, over)
+    // `side`: main plus a commit that no review saw.
+    await s.git('checkout', '-qb', 'side', 'main')
+    if (Object.keys(sideChange).length > 0) {
+      await s.write('a.txt', s.lines(sideChange))
+      await s.git('commit', '-qam', 'unreviewed change')
+    }
+    await s.git('checkout', '-q', 'child')
+    const before = await readdir(join(s.root, 'pr-13'))
+    const { code, stdout, stderr } = await s.restack(onto)
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.match(stderr, message)
+    assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
+    assert.deepEqual(await readdir(join(s.root, 'pr-13')), before)
+  })
+}
+
+test('restack --pr of a layer that moved since the run pinned its head passes, but records nothing', async (t) => {
+  const pinned = 'b'.repeat(40)
+  const s = await appLanding(t, {}, { head_sha: pinned })
+  const before = await readdir(join(s.root, 'pr-13'))
+  const { code, stdout, stderr } = await s.restack()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const out = JSON.parse(stdout)
+  assert.equal(out.same, true)
+  assert.equal(out.recorded, false)
+  assert.equal(out.not_recorded, `the old tip ${s.childTip} is not the head PR #13 pinned (${pinned}), so no review carries to the new tip`)
+  assert.deepEqual(await readdir(join(s.root, 'pr-13')), before)
+})
+
+test('restack --pr that cannot write its record puts the branch back at its old tip and exits 1', async (t) => {
+  const s = await appLanding(t)
+  const runDir = join(s.root, 'pr-13')
+  const state = await readFile(join(runDir, 'state.json'), 'utf8')
+  // A run dir the CLI can read but not write; made writable again at once,
+  // so the temp dirs can be removed.
+  await chmod(runDir, 0o500)
+  const { code, stdout, stderr } = await s.restack().finally(() => chmod(runDir, 0o700))
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, new RegExp(`^review\\.ts stack: cannot write the restack record of PR #13: .*\\. child is back at ${s.childTip}\\n$`))
+  assert.equal(await s.git('rev-parse', 'HEAD'), s.childTip)
+  assert.equal(await s.git('status', '--porcelain'), '')
+  assert.deepEqual(await readdir(runDir), ['state.json'])
+  assert.equal(await readFile(join(runDir, 'state.json'), 'utf8'), state)
 })

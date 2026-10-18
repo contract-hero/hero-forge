@@ -73,7 +73,7 @@ export const COMMANDS = {
     usage: `usage:
   review.ts stack order       --repo O/R --spec N
   review.ts stack path        --spec N
-  review.ts stack restack     --from <parent pre-landing tip> --onto <ref>   (in the layer's worktree)
+  review.ts stack restack     --from <parent pre-landing tip> --onto <ref> [--pr <layer PR>]   (in the layer's worktree)
   review.ts stack merge-layer --repo O/R --pr N --base <default branch> --stack-pr S [--config <path>]`,
   },
 } as const satisfies Record<string, { summary: string; usage: string }>

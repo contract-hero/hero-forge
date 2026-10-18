@@ -8,7 +8,8 @@
 //   stack restack      after a parent layer lands, moves the checked-out child
 //                      layer onto the default branch from the parent's
 //                      pre-landing tip, and checks with git range-diff that no
-//                      patch changed.
+//                      patch changed. With --pr it records the pass in that
+//                      layer PR's run dir.
 //   stack merge-layer  squash-merges one reviewed layer at its re-checked head,
 //                      only after the stack-final review of the whole stack
 //                      is complete.
@@ -17,7 +18,7 @@ import { join } from 'node:path'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { configApp, squashMerge } from './finish.ts'
 import { gh, json, listLines, oneLine } from './github.ts'
-import { loadState, stateRoot } from './run-state.ts'
+import { loadState, saveRestack, stateRoot, type Restack } from './run-state.ts'
 
 const usage = usageFor('stack')
 
@@ -190,12 +191,34 @@ const PAIR = /^\s*(?:\d+|-+):\s+\S+\s+([=!<>])\s+(?:\d+|-+):\s+\S+/
 // commits (those after `from`, the parent layer's pre-landing tip). It passes
 // only when `git range-diff` pairs every commit with an unchanged patch.
 // Otherwise the branch goes back to its old tip, and nothing was pushed.
+// With `--pr`, a pass is also recorded in that layer PR's run dir, so that
+// post-review can count a review GitHub carried from the old tip to the new.
+// The record is a claim that the new tip holds only reviewed content, so
+// `--pr` also needs the PR's branch checked out and `--onto` at the default
+// branch (origin/HEAD), and it records only a restack of the head the run
+// pinned (a layer that got a fix since then needs a fresh review anyway).
 async function restack(values: Record<string, string | boolean | undefined>): Promise<string> {
   const { from, onto } = values
   if (typeof from !== 'string' || from === '') throw usage('restack needs --from <the parent layer pre-landing tip>')
   if (typeof onto !== 'string' || onto === '') throw usage('restack needs --onto <ref>, for example origin/main')
+  const pr = values.pr === undefined ? undefined : positive('pr', values.pr, usage)
+  // The run must exist before anything moves (exit 3 when it does not).
+  const state = pr === undefined ? undefined : await loadState(pr)
   const branch = git(['symbolic-ref', '--quiet', '--short', 'HEAD'])
   refuse(branch.ok, 'restack needs the layer branch checked out (HEAD is detached)')
+  if (state !== undefined) {
+    refuse(
+      branch.out === state.head_ref,
+      `the checked-out branch ${branch.out} is not the head of PR #${state.pr} (${state.head_ref}): check --pr`,
+    )
+    const ontoSha = mustGit(['rev-parse', '--verify', '--quiet', `${onto}^{commit}`], `--onto ${onto} is not a commit`)
+    const main = git(['rev-parse', '--verify', '--quiet', 'origin/HEAD^{commit}'])
+    refuse(main.ok, 'restack --pr needs origin/HEAD to name the default branch: run git remote set-head origin --auto')
+    refuse(
+      ontoSha === main.out,
+      `--onto ${onto} is not the default branch (origin/HEAD is at ${main.out}): a layer moves onto the default branch only`,
+    )
+  }
   refuse(
     mustGit(['status', '--porcelain'], 'cannot read the worktree status') === '',
     'the worktree has uncommitted changes: commit or remove them before restack',
@@ -248,7 +271,18 @@ async function restack(values: Record<string, string | boolean | undefined>): Pr
       1,
     )
   }
-  return `${JSON.stringify({ branch: branch.out, from, onto, old_tip: oldTip, new_tip: newTip.out, commits: markers.length, same: true })}\n`
+  const result: Restack = { branch: branch.out, from, onto, old_tip: oldTip, new_tip: newTip.out, commits: markers.length, same: true }
+  if (state === undefined) return `${JSON.stringify(result)}\n`
+  if (oldTip !== state.head_sha) {
+    const why = `the old tip ${oldTip} is not the head PR #${state.pr} pinned (${state.head_sha}), so no review carries to the new tip`
+    return `${JSON.stringify({ ...result, recorded: false, not_recorded: why })}\n`
+  }
+  try {
+    await saveRestack(state.pr, result)
+  } catch (error) {
+    throw putBack(`cannot write the restack record of PR #${state.pr}: ${oneLine((error as Error).message)}`)
+  }
+  return `${JSON.stringify({ ...result, recorded: true })}\n`
 }
 
 // Land one layer: its review passed (`mode: layer`, phase complete), the

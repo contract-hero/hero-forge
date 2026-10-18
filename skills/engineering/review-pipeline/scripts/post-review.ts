@@ -5,6 +5,10 @@
 // Before posting it checks for this round's review twice: first in the run
 // state, then (in case the state lost the record) on GitHub, by a hidden
 // marker on the last line of a review by the same poster on the same commit.
+// A review that the run state records at another commit, and that GitHub
+// now shows on this one, was carried over by a restack. It counts as this
+// commit's review only when `stack restack --pr` recorded that restack with
+// no content change; otherwise a fresh review posts.
 //
 // With a run state, the post must be at the run's `head_sha` and `round`,
 // and the config and the run state must agree on the reviewer App.
@@ -34,11 +38,13 @@ import {
   EVENTS,
   isOneOf,
   KINDS,
+  loadRestack,
   loadState,
   saveState,
   usesApp,
   type Event,
   type GateRecord,
+  type Kind,
   type ReviewRecord,
   type State,
 } from './run-state.ts'
@@ -93,13 +99,16 @@ function checkPayload(value: unknown): Payload {
   return p as Payload
 }
 
-// Record the review (once per id) and the gate result (once per round,
-// commit and result) in the PR's run state, when there is one.
+// Record the review (once per round, kind and commit, the key of the
+// duplicate check) and the gate result (once per round, commit and result) in
+// the PR's run state, when there is one. One review id can be on record at
+// two commits: GitHub carried it from the old head to the new one.
 async function record(state: State | undefined, entry: ReviewRecord | undefined, gate: GateRecord | undefined): Promise<void> {
   if (state === undefined) return
   const fresh = await loadState(state.pr)
   let changed = false
-  if (entry !== undefined && !fresh.reviews.some((r) => r.id === entry.id)) {
+  const same = (r: ReviewRecord) => entry !== undefined && r.round === entry.round && r.kind === entry.kind && r.commit === entry.commit
+  if (entry !== undefined && !fresh.reviews.some(same)) {
     fresh.reviews.push(entry)
     changed = true
   }
@@ -254,10 +263,25 @@ async function post(argv: string[]): Promise<string> {
   }
   const reviewsPath = `repos/${repo}/pulls/${pr}/reviews`
   const entry = (id: number): ReviewRecord => ({ round, kind, id, commit, as: poster.as, event: payload.event })
-  const existing = await findOwnReview(reviewsPath, pr, mark, poster, commit)
+  const reviews = await listReviews(reviewsPath, pr, poster)
+  const existing = findOwnReview(reviews, mark, poster, commit)
   if (existing !== undefined) {
-    await record(state, entry(existing), gateRecord)
-    return `${JSON.stringify({ posted: false, duplicate: true, id: existing, ...gate })}\n`
+    // The run state records this review at another commit: GitHub carried it
+    // to `commit`. It counts only after a restack with no content change;
+    // otherwise the new head gets a fresh review. After two carries (A to B,
+    // then B to C) the review is on record at A and B: the latest record, B,
+    // is where the last restack started.
+    const earlier = state?.reviews
+      .filter((r) => r.id === existing.id && r.round === round && r.kind === kind && r.commit !== commit)
+      .at(-1)
+    if (earlier === undefined) {
+      await record(state, entry(existing.id), gateRecord)
+      return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id, ...gate })}\n`
+    }
+    if (await carries(pr, earlier.commit, commit, existing, reviews, poster, kind, payload.event)) {
+      await record(state, entry(existing.id), gateRecord)
+      return `${JSON.stringify({ posted: false, duplicate: true, id: existing.id, carried_from: earlier.commit, ...gate })}\n`
+    }
   }
 
   const posted = await gh(['api', '-X', 'POST', reviewsPath, '--input', '-'], JSON.stringify(outgoing), poster.token)
@@ -267,24 +291,50 @@ async function post(argv: string[]): Promise<string> {
   return `${JSON.stringify({ posted: true, id, as: poster.as, event: payload.event, round, kind, ...gate })}\n`
 }
 
+type GitHubReview = { id: number; state: string; body: string | null; commit_id: string | null; login: string | null }
+
+// The PR's reviews, oldest first, as GitHub lists them.
+function listReviews(reviewsPath: string, pr: number, poster: Identity): Promise<GitHubReview[]> {
+  return listLines<GitHubReview>(
+    ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, login: .user.login}', reviewsPath],
+    `the reviews of PR #${pr}`,
+    poster.token,
+  )
+}
+
 // Fallback resume check, for a run state that lost its record: a review on
 // the PR whose last line is the marker, posted by the poster's login (the
 // App's `<slug>[bot]` when it posts as the App), on `commit`. A marker in
 // anyone else's review, on another commit, or anywhere but the last line,
 // does not count, so nobody can suppress the pipeline's review by copying it.
-async function findOwnReview(
-  reviewsPath: string,
+function findOwnReview(reviews: GitHubReview[], mark: string, poster: Identity, commit: string): GitHubReview | undefined {
+  return reviews.filter((r) => r.login === poster.login && r.commit_id === commit && hasOwnMarker(r.body, mark)).at(-1)
+}
+
+// The state GitHub gives a review of each event.
+const STATE_OF: Record<Event, string> = { COMMENT: 'COMMENTED', APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED' }
+
+// Whether the review GitHub carried from `from` to `to` counts at `to`. The
+// layer's run dir must hold the record of `stack restack --pr` that moved the
+// layer from `from` to `to` with no content change. On GitHub the review must
+// still be the event this post would send, and a verdict must be the poster's
+// latest review that is not a COMMENT (nor PENDING), as the merge gate reads it.
+async function carries(
   pr: number,
-  mark: string,
+  from: string,
+  to: string,
+  review: GitHubReview,
+  reviews: GitHubReview[],
   poster: Identity,
-  commit: string,
-): Promise<number | undefined> {
-  const reviews = await listLines<{ id: number; body: string | null; commit_id: string | null; login: string | null }>(
-    ['api', '--paginate', '--jq', '.[] | {id, body, commit_id, login: .user.login}', reviewsPath],
-    `the reviews of PR #${pr}`,
-    poster.token,
-  )
-  return reviews.find((r) => r.login === poster.login && r.commit_id === commit && hasOwnMarker(r.body, mark))?.id
+  kind: Kind,
+  event: Event,
+): Promise<boolean> {
+  const restack = await loadRestack(pr)
+  if (restack === undefined || restack.old_tip !== from || restack.new_tip !== to || restack.same !== true) return false
+  if (review.state !== STATE_OF[event]) return false
+  if (kind !== 'verdict') return true
+  const latest = reviews.filter((r) => r.login === poster.login && r.state !== 'COMMENTED' && r.state !== 'PENDING').at(-1)
+  return latest?.id === review.id
 }
 
 export const main = runMain('post-review', post)

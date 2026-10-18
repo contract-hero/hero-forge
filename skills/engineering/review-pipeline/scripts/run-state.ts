@@ -260,6 +260,60 @@ export async function saveState(state: State): Promise<void> {
   }
 }
 
+// What `stack restack --pr N` writes to `<run dir>/restack.json` after a
+// restack whose range-diff shows no content change: the layer moved from
+// `old_tip` to `new_tip`. post-review reads it to count a review that GitHub
+// carried from the old tip to the new one. A restack that fails writes none.
+export type Restack = {
+  branch: string
+  from: string
+  onto: string
+  old_tip: string
+  new_tip: string
+  commits: number
+  same: true
+}
+
+export function restackFile(pr: number): string {
+  return join(runDir(pr), 'restack.json')
+}
+
+// The last restack record of PR `pr`, or undefined when there is none. A file
+// that is not a restack record is broken (exit 4).
+export async function loadRestack(pr: number): Promise<Restack | undefined> {
+  const file = restackFile(pr)
+  let text: string
+  try {
+    text = await readFile(file, 'utf8')
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return undefined
+    throw new Failure(`cannot read ${file}: ${(error as Error).message}`, 1)
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch (error) {
+    throw new Failure(`corrupt restack record ${file}: ${(error as Error).message}`, 4)
+  }
+  const r = value as Record<string, unknown>
+  const ok = typeof value === 'object' && value !== null && isSha(r.old_tip) && isSha(r.new_tip) && r.same === true
+  if (!ok) throw new Failure(`corrupt restack record ${file}: it needs old_tip, new_tip and same: true`, 4)
+  return value as Restack
+}
+
+// Write the restack record atomically, as saveState writes the state.
+export async function saveRestack(pr: number, restack: Restack): Promise<void> {
+  const file = restackFile(pr)
+  const tmp = `${file}.${randomBytes(6).toString('hex')}`
+  try {
+    await writeFile(tmp, `${JSON.stringify(restack, null, 2)}\n`, { mode: 0o600 })
+    await rename(tmp, file)
+  } catch (error) {
+    await rm(tmp, { force: true })
+    throw error
+  }
+}
+
 async function update(pr: number, change: (state: State) => void): Promise<void> {
   const state = await loadState(pr)
   change(state)

@@ -15,13 +15,13 @@ import {
 
 const SHA = 'c'.repeat(40)
 const MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=review -->'
-const LIST = ['api', '--paginate', '--jq', '.[] | {id, body, commit_id, login: .user.login}', 'repos/contract-hero/hero-pocock/pulls/13/reviews']
+const LIST = ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, login: .user.login}', 'repos/contract-hero/hero-pocock/pulls/13/reviews']
 const USER = ['api', 'user', '--jq', '.login']
 const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
 
 // One line of the review list, as `gh api --paginate --jq` prints it.
-function listed(...reviews: { id: number; body: string; commit_id?: string; login?: string }[]): string {
-  return reviews.map((r) => `${JSON.stringify({ commit_id: SHA, login: 'alilloig', ...r })}\n`).join('')
+function listed(...reviews: { id: number; body: string; commit_id?: string; login?: string; state?: string }[]): string {
+  return reviews.map((r) => `${JSON.stringify({ state: 'COMMENTED', commit_id: SHA, login: 'alilloig', ...r })}\n`).join('')
 }
 const POST = ['api', '-X', 'POST', 'repos/contract-hero/hero-pocock/pulls/13/reviews', '--input', '-']
 
@@ -788,4 +788,143 @@ test('with the App, an APPROVE on a failing gate is still refused before any tok
   assert.match(stderr, /the gate fails, so the PR cannot be approved/)
   assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS])
   assert.equal(s.api!.requests.length, minted)
+})
+
+// A restack after the parent layer landed moved the head of a layer from OLD
+// to FIXED. GitHub can then show the App's round 1 APPROVE (review 600, first
+// recorded at OLD) on FIXED. `stack restack --pr 13` records a restack with no
+// content change in the run dir; here the test writes that record itself.
+const OLD = 'd'.repeat(40)
+const VERDICT_MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=verdict -->'
+
+type Carried = { restack?: Record<string, unknown> | null; github?: Record<string, unknown>[] }
+
+async function carriedSetup(t: Parameters<typeof tempDir>[0], options: Carried = {}) {
+  const s = await gateSetup(t, { app: true, phase: 'complete', mode: 'layer' })
+  await s.patch({
+    reviews: [
+      ...(await s.reviews()),
+      { round: 1, kind: 'verdict', id: 600, commit: OLD, as: BOT, event: 'APPROVE' },
+    ],
+    gates: [{ round: 1, commit: OLD, result: 'pass' }],
+  })
+  const restack = options.restack === undefined
+    ? { branch: 'ticket/5-child', from: 'a'.repeat(40), onto: 'origin/main', old_tip: OLD, new_tip: FIXED, commits: 2, same: true }
+    : options.restack
+  if (restack !== null) await writeFile(join(s.dir, 'state', 'pr-13', 'restack.json'), JSON.stringify(restack))
+  const github = options.github ?? [{ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: FIXED, login: BOT, state: 'APPROVED' }]
+  await s.gh.respond([
+    { match: 'pulls/13/comments', stdout: POSTED },
+    { match: '--paginate', stdout: listed(...(github as { id: number; body: string }[])) },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
+  ])
+  return s
+}
+
+test('with the App, an APPROVE that GitHub carried to a restacked head with no content change is recorded there, and nothing is posted', async (t) => {
+  const s = await carriedSetup(t)
+  const { code, stdout, stderr } = await s.gated('verdict')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { posted: false, duplicate: true, id: 600, carried_from: OLD, gate: 'pass', problems: [] })
+  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS, LIST])
+  assert.deepEqual((await s.reviews()).slice(1), [
+    { round: 1, kind: 'verdict', id: 600, commit: OLD, as: BOT, event: 'APPROVE' },
+    { round: 1, kind: 'verdict', id: 600, commit: FIXED, as: BOT, event: 'APPROVE' },
+  ])
+  assert.deepEqual(await s.gates(), [{ round: 1, commit: OLD, result: 'pass' }, { round: 1, commit: FIXED, result: 'pass' }])
+})
+
+test('with the App, a verdict at a new head is not a duplicate of the verdict at the old head: it posts', async (t) => {
+  const s = await carriedSetup(t, {
+    github: [{ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: OLD, login: BOT, state: 'APPROVED' }],
+  })
+  const { code, stdout, stderr } = await s.gated('verdict')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), {
+    posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
+  })
+  assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS, LIST, POST])
+  assert.deepEqual(
+    (await s.reviews()).slice(1).map((r: { id: number; commit: string }) => [r.id, r.commit]),
+    [[600, OLD], [666, FIXED]],
+  )
+})
+
+// A carried APPROVE that does not count: the new head gets a fresh APPROVE.
+const NOT_CARRIED = [
+  ['with no restack record (the head moved by new commits, or the restack showed a content change)', { restack: null }],
+  ['with a restack record that ends at another head', {
+    restack: { branch: 'b', from: 'a'.repeat(40), onto: 'origin/main', old_tip: OLD, new_tip: 'f'.repeat(40), commits: 1, same: true },
+  }],
+  ['with a restack record that starts at another commit than the recorded approval', {
+    restack: { branch: 'b', from: 'a'.repeat(40), onto: 'origin/main', old_tip: 'f'.repeat(40), new_tip: FIXED, commits: 1, same: true },
+  }],
+  ['when GitHub shows it dismissed', {
+    github: [{ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: FIXED, login: BOT, state: 'DISMISSED' }],
+  }],
+  ['when a later review by the App requests changes', {
+    github: [
+      { id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: FIXED, login: BOT, state: 'APPROVED' },
+      { id: 601, body: 'not this time', commit_id: FIXED, login: BOT, state: 'CHANGES_REQUESTED' },
+    ],
+  }],
+] as const
+
+for (const [name, options] of NOT_CARRIED) {
+  test(`with the App, a carried APPROVE ${name} is not recorded, and a fresh APPROVE posts`, async (t) => {
+    const s = await carriedSetup(t, options as Carried)
+    const { code, stdout, stderr } = await s.gated('verdict')
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    assert.deepEqual(JSON.parse(stdout), {
+      posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
+    })
+    assert.deepEqual(
+      (await s.reviews()).slice(1).map((r: { id: number; commit: string }) => [r.id, r.commit]),
+      [[600, OLD], [666, FIXED]],
+    )
+  })
+}
+
+test('a restack record that is not valid exits 4 and posts nothing', async (t) => {
+  const s = await carriedSetup(t, { restack: { old_tip: OLD } })
+  const { code, stderr } = await s.gated('verdict')
+  assert.equal(code, 4)
+  assert.match(stderr, /corrupt restack record .*restack\.json: it needs old_tip, new_tip and same: true/)
+  assert.ok((await s.calls()).every((c) => !c.argv.includes('POST')))
+})
+
+test('with the App, an APPROVE carried over two restacks in a row (OLD to FIXED, then FIXED to NEXT) is recorded at each head, and nothing is posted', async (t) => {
+  const s = await carriedSetup(t)
+  assert.equal((await s.gated('verdict')).code, 0)
+
+  // The next unchanged restack moves the layer from FIXED to NEXT, and GitHub
+  // shows review 600 on NEXT.
+  const NEXT = '9'.repeat(40)
+  await s.patch({ head_sha: NEXT })
+  await writeFile(
+    join(s.dir, 'state', 'pr-13', 'restack.json'),
+    JSON.stringify({ branch: 'ticket/5-child', from: 'a'.repeat(40), onto: 'origin/main', old_tip: FIXED, new_tip: NEXT, commits: 2, same: true }),
+  )
+  await s.gh.respond([
+    { match: 'pulls/13/comments', stdout: POSTED },
+    { match: '--paginate', stdout: listed({ id: 600, body: `## Verdict: round 1\n\n${VERDICT_MARKER}`, commit_id: NEXT, login: BOT, state: 'APPROVED' }) },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
+  ])
+  const { code, stdout, stderr } = await runCli(
+    ['post-review', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--commit', NEXT, '--round', '1', '--kind', 'verdict',
+      '--payload', join(s.dir, 'verdict-payload.json'), '--config', s.configPath,
+      '--ledger', join(s.dir, 'findings.json'), '--recheck', join(s.dir, 'recheck-r1.json')],
+    { env: s.env },
+  )
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { posted: false, duplicate: true, id: 600, carried_from: FIXED, gate: 'pass', problems: [] })
+  assert.ok((await s.calls()).every((c) => !c.argv.includes('POST')))
+  assert.deepEqual(
+    (await s.reviews()).slice(1).map((r: { id: number; commit: string }) => [r.id, r.commit]),
+    [[600, OLD], [600, FIXED], [600, NEXT]],
+  )
 })
