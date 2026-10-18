@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { appKey, baseEnv, fakeGitHubApi, runCli, tempDir, type FakeApiRoute } from './test-helpers.ts'
 
-const REPO = 'contract-hero/hero-pocock'
+const REPO = 'contract-hero/hero-forge'
 const NO_APP = '# Review pipeline\n\n```yaml\nruntime: claude\n```\n'
 const WITH_APP = '# Review pipeline\n\n```yaml\nruntime: claude\napp: enabled\n```\n'
 const TOKEN = 'ghs_faketoken0123456789'
@@ -37,9 +37,9 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const envFile = join(dir, 'reviewer-app.env')
   if (options.env !== null) {
     const text = typeof options.env === 'function' ? options.env(dir) : options.env
-    await writeFile(envFile, text ?? `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
+    await writeFile(envFile, text ?? `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${key.pem}\n`)
   }
-  const env = { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: envFile, HERO_POCOCK_GITHUB_API_URL: api.url }
+  const env = { ...baseEnv(), HERO_FORGE_REVIEWER_APP_ENV: envFile, HERO_FORGE_GITHUB_API_URL: api.url }
   // `--check` unless the test names its own flags.
   const mint = (...extra: string[]) =>
     runCli(['app-token', '--repo', REPO, '--config', configPath, ...(extra.length === 0 ? ['--check'] : extra)], { env })
@@ -70,7 +70,7 @@ test('--check mints a token for this one repo, signed by the App key, and prints
     ],
   )
   assert.deepEqual(s.api.requests[1]?.body, {
-    repositories: ['hero-pocock'],
+    repositories: ['hero-forge'],
     permissions: { pull_requests: 'write', contents: 'read' },
   })
 })
@@ -92,30 +92,35 @@ test('without --check or --login it is a usage error, calls no API, and never pr
 
 const BROKEN: [string, Setup, RegExp][] = [
   ['the env file is missing', { env: null }, /env file .*reviewer-app\.env does not exist/],
-  ['the env file has no App ID', { env: 'HERO_POCOCK_REVIEWER_APP_KEY=/x.pem\n' }, /sets no HERO_POCOCK_REVIEWER_APP_ID/],
-  ['the env file has no key path', { env: 'HERO_POCOCK_REVIEWER_APP_ID=1\n' }, /sets no HERO_POCOCK_REVIEWER_APP_KEY/],
+  ['the env file has no App ID', { env: 'HERO_FORGE_REVIEWER_APP_KEY=/x.pem\n' }, /sets no HERO_FORGE_REVIEWER_APP_ID/],
+  ['the env file has no key path', { env: 'HERO_FORGE_REVIEWER_APP_ID=1\n' }, /sets no HERO_FORGE_REVIEWER_APP_KEY/],
   [
     'the key file does not exist',
-    { env: (dir) => `HERO_POCOCK_REVIEWER_APP_ID=1\nHERO_POCOCK_REVIEWER_APP_KEY=${join(dir, 'gone.pem')}\n` },
+    { env: (dir) => `HERO_FORGE_REVIEWER_APP_ID=1\nHERO_FORGE_REVIEWER_APP_KEY=${join(dir, 'gone.pem')}\n` },
     /cannot read the App private key .*gone\.pem \(ENOENT\)/,
   ],
   [
     'the key file is not a PEM key',
-    { env: (dir) => `HERO_POCOCK_REVIEWER_APP_ID=1\nHERO_POCOCK_REVIEWER_APP_KEY=${join(dir, 'review.md')}\n` },
+    { env: (dir) => `HERO_FORGE_REVIEWER_APP_ID=1\nHERO_FORGE_REVIEWER_APP_KEY=${join(dir, 'review.md')}\n` },
     /the App private key .*review\.md is not a valid PEM private key/,
   ],
   ['the key is not the App key (GitHub answers 401)', { wrongKey: true }, /find the App installation failed: HTTP 401 \(A JSON web token could not be decoded\)/],
   [
     'the App is not installed on the repo (404)',
     { routes: { ...WORKING, [`GET /repos/${REPO}/installation`]: { status: 404, body: { message: 'Not Found' } } } },
-    /the reviewer App is not installed on contract-hero\/hero-pocock \(HTTP 404\)/,
+    /the reviewer App is not installed on contract-hero\/hero-forge \(HTTP 404\)/,
   ],
   [
     'GitHub refuses the token',
-    { routes: { ...WORKING, 'POST /app/installations/4242/access_tokens': { status: 422, body: { message: 'no access to hero-pocock' } } } },
-    /mint the installation token failed: HTTP 422 \(no access to hero-pocock\)/,
+    { routes: { ...WORKING, 'POST /app/installations/4242/access_tokens': { status: 422, body: { message: 'no access to hero-forge' } } } },
+    /mint the installation token failed: HTTP 422 \(no access to hero-forge\)/,
   ],
   ['the config is invalid', { config: '```yaml\nruntime: claude\napp: yes\n```\n' }, /app must be "enabled" or left out/],
+  [
+    'the env file uses only the old HERO_POCOCK_ key names',
+    { env: (dir) => `HERO_POCOCK_REVIEWER_APP_ID=1\nHERO_POCOCK_REVIEWER_APP_KEY=${join(dir, 'reviewer-app.pem')}\n` },
+    /sets no HERO_FORGE_REVIEWER_APP_ID/,
+  ],
 ]
 
 for (const [name, options, message] of BROKEN) {
@@ -134,7 +139,7 @@ for (const [name, options, message] of BROKEN) {
 test('a missing config exits 4: the pipeline never asks for a token without one', async (t) => {
   const s = await setup(t)
   const { code, stderr } = await runCli(['app-token', '--repo', REPO, '--config', join(s.dir, 'nope.md'), '--check'], {
-    env: { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: s.envFile, HERO_POCOCK_GITHUB_API_URL: s.api.url },
+    env: { ...baseEnv(), HERO_FORGE_REVIEWER_APP_ENV: s.envFile, HERO_FORGE_GITHUB_API_URL: s.api.url },
   })
   assert.equal(code, 4)
   assert.match(stderr, /no review config at/)
@@ -144,15 +149,47 @@ test('a missing config exits 4: the pipeline never asks for a token without one'
 test('an unreachable GitHub API exits 4', async (t) => {
   const s = await setup(t)
   const { code, stderr } = await runCli(['app-token', '--repo', REPO, '--config', join(s.dir, 'review.md'), '--check'], {
-    env: { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: s.envFile },
+    env: { ...baseEnv(), HERO_FORGE_REVIEWER_APP_ENV: s.envFile },
   })
   assert.equal(code, 4)
   assert.match(stderr, /find the App installation: cannot reach the GitHub API at http:\/\/127\.0\.0\.1:9/)
 })
 
+test('the old App env names and the LFG_ credentials are ignored: the hero-forge env file is missing', async (t) => {
+  const s = await setup(t, { env: null })
+  const home = join(s.dir, 'home')
+  const old = join(s.dir, 'old.env')
+  await writeFile(old, `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${s.key.pem}\nHERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${s.key.pem}\n`)
+  const env: Record<string, string | undefined> = {
+    ...baseEnv(),
+    HOME: home,
+    HERO_POCOCK_REVIEWER_APP_ENV: old,
+    HERO_POCOCK_GITHUB_API_URL: s.api.url,
+    HERO_FORGE_GITHUB_API_URL: s.api.url,
+    LFG_REVIEWER_APP_ID: '987654',
+    LFG_REVIEWER_APP_KEY: s.key.pem,
+  }
+  delete env.HERO_FORGE_REVIEWER_APP_ENV
+  const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, '--check'], { env })
+  assert.equal(code, 4)
+  assert.equal(stdout, '')
+  const expected = join(home, '.config', 'hero-forge', 'reviewer-app.env').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(stderr, new RegExp(`env file ${expected} does not exist`))
+  assert.deepEqual(s.api.requests, [])
+})
+
+test('the old HERO_POCOCK_GITHUB_API_URL is ignored', async (t) => {
+  const s = await setup(t, { env: (dir) => `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${join(dir, 'reviewer-app.pem')}\n` })
+  const env = { ...baseEnv(), HERO_FORGE_REVIEWER_APP_ENV: s.envFile, HERO_POCOCK_GITHUB_API_URL: s.api.url }
+  const { code, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, '--check'], { env })
+  assert.equal(code, 4)
+  assert.match(stderr, /find the App installation: cannot reach the GitHub API at http:\/\/127\.0\.0\.1:9/)
+  assert.deepEqual(s.api.requests, [])
+})
+
 test('bad arguments are a usage error (exit 2)', async (t) => {
   const s = await setup(t)
-  for (const args of [[], ['--repo', 'nope'], ['--repo', REPO, '--login', '--check'], ['--repo', REPO, '--bogus']]) {
+  for (const args of [[], ['--repo', 'nope'], ['--repo', REPO, '--login', '--check'], ['--repo', REPO, '--bogus'], ['--copy-from', '/x'], ['--repo', REPO, '--check', '--force']]) {
     const { code, stderr } = await runCli(['app-token', ...args], { env: baseEnv() })
     assert.equal(code, 2, `${args.join(' ')}: ${stderr}`)
     assert.match(stderr, /usage: review\.ts app-token/)
@@ -160,85 +197,10 @@ test('bad arguments are a usage error (exit 2)', async (t) => {
   assert.deepEqual(s.api.requests, [])
 })
 
-// An lfg-style credential dir: its env file uses the LFG_ names and points at
-// its own pem, as `~/.config/lfg/` does.
-async function lfgCredentials(dir: string) {
-  const lfg = join(dir, 'lfg')
-  await mkdir(lfg, { recursive: true })
-  const key = await appKey(lfg)
-  const env = join(lfg, 'reviewer-app.env')
-  await writeFile(env, `LFG_REVIEWER_APP_ID=987654\nLFG_REVIEWER_APP_KEY=${key.pem}\n`, { mode: 0o600 })
-  return { env, key }
-}
-
-test('--copy-from copies lfg credentials into a fresh env file and key, and prints only paths', async (t) => {
-  const dir = await tempDir(t)
-  const lfg = await lfgCredentials(dir)
-  const target = join(dir, 'hero-pocock', 'reviewer-app.env')
-  const env = { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: target }
-  const { code, stdout, stderr } = await runCli(['app-token', '--copy-from', lfg.env], { env })
-  assert.equal(stderr, '')
-  assert.equal(code, 0)
-  const pem = join(dir, 'hero-pocock', 'reviewer-app.pem')
-  assert.deepEqual(JSON.parse(stdout), { copied: true, env: target, key: pem })
-  assert.doesNotMatch(stdout, /987654/)
-  assert.equal(await readFile(pem, 'utf8'), await readFile(lfg.key.pem, 'utf8'))
-  assert.equal(await readFile(target, 'utf8'), `HERO_POCOCK_REVIEWER_APP_ID=987654\nHERO_POCOCK_REVIEWER_APP_KEY=${pem}\n`)
-  assert.equal((await stat(join(dir, 'hero-pocock'))).mode & 0o777, 0o700)
-  assert.equal((await stat(target)).mode & 0o777, 0o600)
-  assert.equal((await stat(pem)).mode & 0o777, 0o600)
-
-  // The copy works: a token mints from the new files with the old key.
-  const api = await fakeGitHubApi(t, lfg.key.publicKey, WORKING)
-  const configPath = join(dir, 'review.md')
-  await writeFile(configPath, WITH_APP)
-  const minted = await runCli(['app-token', '--repo', REPO, '--config', configPath, '--check'], {
-    env: { ...env, HERO_POCOCK_GITHUB_API_URL: api.url },
-  })
-  assert.deepEqual(minted, { code: 0, stdout: '', stderr: '' })
-  assert.equal(api.requests[0]?.iss, '987654')
-})
-
-test('--copy-from never overwrites existing credentials without --force', async (t) => {
-  const dir = await tempDir(t)
-  const lfg = await lfgCredentials(dir)
-  const target = join(dir, 'hero-pocock', 'reviewer-app.env')
-  await mkdir(join(dir, 'hero-pocock'))
-  await writeFile(target, 'HERO_POCOCK_REVIEWER_APP_ID=111\n')
-  const env = { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: target }
-
-  const refused = await runCli(['app-token', '--copy-from', lfg.env], { env })
-  assert.equal(refused.code, 1)
-  assert.match(refused.stderr, /already exists: .*--force/)
-  assert.equal(await readFile(target, 'utf8'), 'HERO_POCOCK_REVIEWER_APP_ID=111\n')
-
-  const forced = await runCli(['app-token', '--copy-from', lfg.env, '--force'], { env })
-  assert.equal(forced.code, 0, forced.stderr)
-  assert.match(await readFile(target, 'utf8'), /^HERO_POCOCK_REVIEWER_APP_ID=987654\n/)
-})
-
-test('--copy-from with no lfg env file exits 3, and with an incomplete one exits 4', async (t) => {
-  const dir = await tempDir(t)
-  const target = join(dir, 'hero-pocock', 'reviewer-app.env')
-  const env = { ...baseEnv(), HERO_POCOCK_REVIEWER_APP_ENV: target }
-
-  const absent = await runCli(['app-token', '--copy-from', join(dir, 'lfg', 'reviewer-app.env')], { env })
-  assert.equal(absent.code, 3)
-  assert.match(absent.stderr, /no lfg credentials at /)
-
-  await mkdir(join(dir, 'lfg'))
-  await writeFile(join(dir, 'lfg', 'reviewer-app.env'), 'LFG_REVIEWER_APP_ID=987654\n')
-  const incomplete = await runCli(['app-token', '--copy-from', join(dir, 'lfg', 'reviewer-app.env')], { env })
-  assert.equal(incomplete.code, 4)
-  assert.match(incomplete.stderr, /sets no LFG_REVIEWER_APP_KEY/)
-  assert.doesNotMatch(incomplete.stderr, /987654/)
-  await assert.rejects(stat(target))
-})
-
 test('the env file is read as data: export, quotes, comments and a ~/ key path', async (t) => {
   const dir = await tempDir(t)
   const home = join(dir, 'home')
-  const appDir = join(home, '.config', 'hero-pocock')
+  const appDir = join(home, '.config', 'hero-forge')
   await mkdir(appDir, { recursive: true })
   const key = await appKey(appDir)
   const api = await fakeGitHubApi(t, key.publicKey, WORKING)
@@ -246,11 +208,11 @@ test('the env file is read as data: export, quotes, comments and a ~/ key path',
   await writeFile(configPath, WITH_APP)
   await writeFile(
     join(appDir, 'reviewer-app.env'),
-    `# reviewer App\n\nexport HERO_POCOCK_REVIEWER_APP_ID="Iv23liFAKE"\nHERO_POCOCK_REVIEWER_APP_KEY='~/.config/hero-pocock/reviewer-app.pem'\n`,
+    `# reviewer App\n\nexport HERO_FORGE_REVIEWER_APP_ID="Iv23liFAKE"\nHERO_FORGE_REVIEWER_APP_KEY='~/.config/hero-forge/reviewer-app.pem'\n`,
   )
-  // No HERO_POCOCK_REVIEWER_APP_ENV: the default path under this test's HOME is used.
-  const env: Record<string, string | undefined> = { ...baseEnv(), HOME: home, HERO_POCOCK_GITHUB_API_URL: `${api.url}/` }
-  delete env.HERO_POCOCK_REVIEWER_APP_ENV
+  // No HERO_FORGE_REVIEWER_APP_ENV: the default path under this test's HOME is used.
+  const env: Record<string, string | undefined> = { ...baseEnv(), HOME: home, HERO_FORGE_GITHUB_API_URL: `${api.url}/` }
+  delete env.HERO_FORGE_REVIEWER_APP_ENV
   const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', configPath, '--login'], { env })
   assert.equal(stderr, '')
   assert.equal(code, 0)

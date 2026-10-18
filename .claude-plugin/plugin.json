@@ -1,13 +1,13 @@
 {
-  "name": "hero-pocock",
+  "name": "hero-forge",
   "version": "0.2.3",
   "description": "Álvaro Lillo's version of Matt Pocock's skills, tuned for the Contract Hero work-stream: grilling, spec/ticket flows, TDD, code review, domain modelling and more, with every question asked as an AskUserQuestion dialog in Claude Code.",
   "author": {
     "name": "Álvaro Lillo",
     "url": "https://github.com/contract-hero"
   },
-  "homepage": "https://github.com/contract-hero/hero-pocock",
-  "repository": "https://github.com/contract-hero/hero-pocock",
+  "homepage": "https://github.com/contract-hero/hero-forge",
+  "repository": "https://github.com/contract-hero/hero-forge",
   "license": "MIT",
   "keywords": [
     "engineering",

@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { ASK, GRILL } from './register'
 
-// The `name` in `.claude-plugin/plugin.json`: the one line that differs upstream.
-const PLUGIN = 'hero-pocock'
+// The `name` in `.claude-plugin/plugin.json`.
+const PLUGIN = 'hero-forge'
 
 const BODY = 'Interview the user relentlessly.'
 
