@@ -39,6 +39,7 @@ import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
 import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
 import {
   EVENTS,
+  firstRecord,
   isOneOf,
   KINDS,
   loadState,
@@ -352,7 +353,7 @@ async function post(argv: string[]): Promise<string> {
   }
 
   // Primary resume check: the run state already records this round's review.
-  const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit)
+  const recorded = state?.reviews.find((r) => r.round === round && r.kind === kind && r.commit === commit && firstRecord(state, r))
   if (recorded !== undefined) {
     await save(undefined)
     return `${JSON.stringify({ posted: false, duplicate: true, id: recorded.id, ...gate })}\n`

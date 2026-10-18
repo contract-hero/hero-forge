@@ -213,6 +213,8 @@ const APPROVALS: { name: string; reviews?: unknown[]; github: string; gate: stri
     reviews: [APPROVE, { ...APPROVE, id: 602, event: 'REQUEST_CHANGES' }], github: review('APPROVED'), gate: 'stop', problem: LOCAL_NOT_APPROVED },
   { name: 'a recorded approval of an older head is stop', reviews: [{ ...APPROVE, commit: OTHER }], github: review('APPROVED'),
     gate: 'stop', problem: LOCAL_NOT_APPROVED },
+  { name: 'an approval of an older head recorded again at the head (a restack, by an older version) is stop',
+    reviews: [{ ...APPROVE, commit: OTHER }, APPROVE], github: review('APPROVED'), gate: 'stop', problem: LOCAL_NOT_APPROVED },
   { name: 'a verdict recorded by another poster is stop', reviews: [{ ...APPROVE, as: 'user' }], github: review('APPROVED'),
     gate: 'stop', problem: LOCAL_NOT_APPROVED },
   { name: 'no approval on GitHub is stop', github: '', gate: 'stop',

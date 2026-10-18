@@ -120,7 +120,14 @@ export function latestGate(state: State, commit: string): GateRecord | undefined
 // The last verdict posted at `commit` by `login` (default: the run's
 // reviewer_login), if any.
 export function latestVerdict(state: State, commit: string, login = state.reviewer_login): ReviewRecord | undefined {
-  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === login).at(-1)
+  return state.reviews.filter((r) => r.kind === 'verdict' && r.commit === commit && r.as === login && firstRecord(state, r)).at(-1)
+}
+
+// Whether `r` is the first record of its review id. hero-forge 1.0.1 recorded
+// a review that GitHub moved to a restacked head a second time, at the new
+// head: that later record is not a review of its commit.
+export function firstRecord(state: State, r: ReviewRecord): boolean {
+  return state.reviews.find((x) => x.id === r.id) === r
 }
 
 // The one step after `state.phase` (aborted and stopped aside, which any
