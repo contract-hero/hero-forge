@@ -7,7 +7,7 @@ import { appKey, fakeGh, fakeGitHubApi, runCli, seedState, tempDir, type FakeApi
 
 const SHA = 'c'.repeat(40)
 const OTHER = 'd'.repeat(40)
-const REPO = 'contract-hero/hero-pocock'
+const REPO = 'contract-hero/hero-forge'
 const VIEW = ['pr', 'view', '13', '--repo', REPO, '--json', 'state,isDraft,headRefOid,mergeable,mergeStateStatus,statusCheckRollup']
 const MERGE = ['pr', 'merge', '13', '--repo', REPO, '--squash', '--match-head-commit', SHA]
 const VERIFY = ['pr', 'view', '13', '--repo', REPO, '--json', 'state,mergeCommit']
@@ -78,8 +78,8 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const key = await appKey(dir)
   const api = await fakeGitHubApi(t, key.publicKey, options.routes ?? APP_ROUTES)
   const appEnv = join(dir, 'reviewer-app.env')
-  await writeFile(appEnv, `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
-  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: root, HERO_POCOCK_REVIEWER_APP_ENV: appEnv, HERO_POCOCK_GITHUB_API_URL: api.url }
+  await writeFile(appEnv, `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${key.pem}\n`)
+  const env = { ...gh.env, HERO_FORGE_STATE_DIR: root, HERO_FORGE_REVIEWER_APP_ENV: appEnv, HERO_FORGE_GITHUB_API_URL: api.url }
   const configPath = join(dir, 'review.md')
   await writeFile(configPath, options.config ?? (options.app ? APP_CONFIG : CONFIG))
   if (options.noState !== true) {
@@ -315,10 +315,10 @@ test('merge-gate with no run state exits 3', async (t) => {
 test('merge-gate refuses a repo that is not the run state repo', async (t) => {
   const s = await setup(t)
   const { code, stderr } = await runCli(['merge-gate', '--repo', 'someone/else', '--pr', '13', '--config', s.configPath], {
-    env: { ...s.gh.env, HERO_POCOCK_STATE_DIR: join(s.dir, 'state') },
+    env: { ...s.gh.env, HERO_FORGE_STATE_DIR: join(s.dir, 'state') },
   })
   assert.equal(code, 1)
-  assert.match(stderr, /contract-hero\/hero-pocock/)
+  assert.match(stderr, /contract-hero\/hero-forge/)
 })
 
 test('merge-gate exits 1 when gh cannot read the PR', async (t) => {
@@ -437,7 +437,7 @@ test('merge fails when the PR is not MERGED after the merge call', async (t) => 
 const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
 const ISSUE_COMMENTS = ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${REPO}/issues/13/comments`]
 const COMMENT_POST = ['api', '-X', 'POST', `repos/${REPO}/issues/13/comments`, '--input', '-']
-const EXPLAINER_MARKER = '<!-- hero-pocock:review-pipeline pr=13 kind=explainer -->'
+const EXPLAINER_MARKER = '<!-- hero-forge:review-pipeline pr=13 kind=explainer -->'
 
 async function withExplainer(t: Parameters<typeof tempDir>[0]) {
   const s = await setup(t, { phase: 'ready' })
@@ -499,13 +499,13 @@ test('an explainer path that holds a token is refused before any gh call and is 
 
 test('an explainer path that holds the pipeline marker is refused before any gh call', async (t) => {
   const s = await setup(t, { phase: 'ready' })
-  const dir = join(s.dir, 'hero-pocock:review-pipeline')
+  const dir = join(s.dir, 'hero-forge:review-pipeline')
   await mkdir(dir)
   const file = join(dir, 'explainer.html')
   await writeFile(file, '<!doctype html>')
   const { code, stderr } = await s.cli('explainer', '--file', file)
   assert.equal(code, 1)
-  assert.match(stderr, /--file contains the marker "hero-pocock:review-pipeline"/)
+  assert.match(stderr, /--file contains the marker "hero-forge:review-pipeline"/)
   assert.deepEqual(await s.gh.calls(), [])
 })
 

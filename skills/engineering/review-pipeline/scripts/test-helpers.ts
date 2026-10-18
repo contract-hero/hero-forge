@@ -16,15 +16,15 @@ export type RunResult = { code: number | null; stdout: string; stderr: string }
 export type RunOptions = { cwd?: string; env?: Record<string, string | undefined>; stdin?: string }
 
 // The machine may export a real token, or hold real reviewer App credentials
-// in ~/.config/hero-pocock/. A test must never inherit or reach either: the App
+// in ~/.config/hero-forge/. A test must never inherit or reach either: the App
 // env file points at a path that does not exist, and the GitHub API at a port
 // nothing listens on, until a test sets its own.
 export function baseEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env }
   delete env.GH_TOKEN
   delete env.GITHUB_TOKEN
-  env.HERO_POCOCK_REVIEWER_APP_ENV = join(tmpdir(), 'review-pipeline-no-such-dir', 'reviewer-app.env')
-  env.HERO_POCOCK_GITHUB_API_URL = 'http://127.0.0.1:9'
+  env.HERO_FORGE_REVIEWER_APP_ENV = join(tmpdir(), 'review-pipeline-no-such-dir', 'reviewer-app.env')
+  env.HERO_FORGE_GITHUB_API_URL = 'http://127.0.0.1:9'
   return env
 }
 
@@ -65,7 +65,7 @@ export function stateFixture(over: Record<string, unknown> = {}): Record<string,
   const now = new Date().toISOString()
   return {
     schema: 2,
-    repo: 'contract-hero/hero-pocock',
+    repo: 'contract-hero/hero-forge',
     pr: 13,
     mode: 'single',
     base_ref: 'main',

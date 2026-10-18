@@ -23,8 +23,7 @@ Read whatever exists; don't assume:
 - `CLAUDE.md` and `AGENTS.md` at the repo root: which exists, and does it already have an `## Agent skills` block with a `### Review` entry?
 - `gh repo view --json nameWithOwner`: the repo as `O/R`, for the App check.
 - Reviewer App credentials. Check only that these files exist (`test -f <path>`). Never print, `cat` or read them: they hold the App ID and the path to a private key.
-  - `~/.config/hero-pocock/reviewer-app.env`: this plugin's credentials.
-  - `~/.config/lfg/reviewer-app.env`: the credentials of the personal `/lfg` skill, which this skill can copy.
+  - `~/.config/hero-forge/reviewer-app.env`: this plugin's credentials.
 
 ### 2. Present findings and ask
 
@@ -55,14 +54,13 @@ Offer the answers that fit what step 1 found, the recommended one first:
 
 | Found | Answers |
 | --- | --- |
-| `~/.config/hero-pocock/reviewer-app.env` | use the App (recommended when the current config has `app: enabled`, or there is no config yet); no App |
-| only `~/.config/lfg/reviewer-app.env` | copy the `/lfg` credentials and use the App (recommended); no App |
-| neither | no App (recommended); add the credentials by hand, then use the App |
+| `~/.config/hero-forge/reviewer-app.env` | use the App (recommended when the current config has `app: enabled`, or there is no config yet); no App |
+| no credentials | no App (recommended); add the credentials by hand, then use the App |
 
-Offer the copy only when `~/.config/lfg/reviewer-app.env` exists. For credentials by hand, tell the user to create `~/.config/hero-pocock/` (mode 700) with two files, both mode 600, and to tell you when they are there:
+For credentials by hand, tell the user to create `~/.config/hero-forge/` (mode 700) with two files, both mode 600, and to tell you when they are there:
 
 - `reviewer-app.pem`: the App's private key, as GitHub downloads it.
-- `reviewer-app.env`, two lines: `HERO_POCOCK_REVIEWER_APP_ID=<App ID or Client ID>` and `HERO_POCOCK_REVIEWER_APP_KEY=<absolute path of reviewer-app.pem>`.
+- `reviewer-app.env`, two lines: `HERO_FORGE_REVIEWER_APP_ID=<App ID or Client ID>` and `HERO_FORGE_REVIEWER_APP_KEY=<absolute path of reviewer-app.pem>`.
 
 Never ask the user to paste the App ID or the key into the conversation.
 
@@ -79,10 +77,9 @@ With the App, the block has the line `app: enabled`. Without it, the block has n
 
 **The App credentials** (only when the user chose the App):
 
-1. If the user chose the copy, run `review.ts app-token --copy-from ~/.config/lfg/reviewer-app.env`. It copies the private key to `~/.config/hero-pocock/reviewer-app.pem`, writes `~/.config/hero-pocock/reviewer-app.env` with this plugin's names and the new key path, and prints only the two paths. Do not copy the files yourself: the `/lfg` env file uses other names and points at the `/lfg` key. Exit 1 means credentials already exist there: ask the user whether to keep them or to copy over them (run it again with `--force`). Exit 4: show the message and stop the App part.
-2. Check the App before the config says `app: enabled`. Save the draft config to a temp file outside the repo and run `review.ts app-token --repo O/R --check --config <temp file>`. It mints a token and prints nothing.
-   - Exit 0: the App can post on this repo. Write the config with `app: enabled`.
-   - Exit 4: show the message (for example, the App is not installed on `O/R`, or GitHub refused the key). Ask the user to fix it and check again, or to write the config without the App. Never write `app: enabled` for an App that fails this check.
+Check the App before the config says `app: enabled`. Save the draft config to a temp file outside the repo and run `review.ts app-token --repo O/R --check --config <temp file>`. It mints a token and prints nothing.
+- Exit 0: the App can post on this repo. Write the config with `app: enabled`.
+- Exit 4: show the message (for example, the App is not installed on `O/R`, or GitHub refused the key). Ask the user to fix it and check again, or to write the config without the App. Never write `app: enabled` for an App that fails this check.
 
 **`docs/agents/review.md`**: write the whole file, replacing any previous version. Create `docs/agents/` if it is missing.
 

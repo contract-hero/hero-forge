@@ -2,7 +2,7 @@
 // per-PR checkpoint that lets an interrupted pipeline run resume without
 // repeating a step that already reached GitHub.
 //
-// The run dir is `${HERO_POCOCK_STATE_DIR:-<git common dir>/hero-pocock}/pr-<N>/`.
+// The run dir is `${HERO_FORGE_STATE_DIR:-<git common dir>/hero-forge}/pr-<N>/`.
 // It holds `state.json` plus the pipeline's own files (briefs, reviewer
 // output, the review payload). `phase` is the last completed checkpoint, and
 // `advance` moves it one step at a time, in the order of the run's mode.
@@ -209,11 +209,11 @@ function problem(value: unknown): string | undefined {
 }
 
 export function stateRoot(): string {
-  const override = process.env.HERO_POCOCK_STATE_DIR
+  const override = process.env.HERO_FORGE_STATE_DIR
   if (override !== undefined && override !== '') return override
   const git = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' })
-  refuse(git.status === 0, 'not inside a git repository (or set HERO_POCOCK_STATE_DIR)')
-  return join(git.stdout.trim(), 'hero-pocock')
+  refuse(git.status === 0, 'not inside a git repository (or set HERO_FORGE_STATE_DIR)')
+  return join(git.stdout.trim(), 'hero-forge')
 }
 
 export function runDir(pr: number): string {

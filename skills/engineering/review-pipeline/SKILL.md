@@ -28,11 +28,11 @@ If the Orchestrator cannot do its job and none of its reviewers can still run (i
 
 The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.ts` means `node "<the folder this SKILL.md is in>/scripts/review.ts"`, run from the repo root. It needs Node 22.18 or newer.
 
-Run `review.ts help` to list every subcommand with its one-line summary, and `review.ts <subcommand> --help` to see what one subcommand takes. Both print to stdout and exit 0. Both read the one usage table in the CLI, so trust them over a usage line you remember. The run state lives in `<git common dir>/hero-pocock/pr-<N>/`. The `stack` subcommand serves `implement-spec-stack`, and its SKILL.md says how to use it.
+Run `review.ts help` to list every subcommand with its one-line summary, and `review.ts <subcommand> --help` to see what one subcommand takes. Both print to stdout and exit 0. Both read the one usage table in the CLI, so trust them over a usage line you remember. The run state lives in `<git common dir>/hero-forge/pr-<N>/`. The `stack` subcommand serves `implement-spec-stack`, and its SKILL.md says how to use it.
 
 `run-state advance` moves the run one step at a time, in the order of **Resume**'s table and **Finish**'s modes. It refuses a skipped step, and a step whose record is missing: `review-posted` needs the round's review, `rechecked` the round's gate at `head_sha` (from the re-check, or from the review of a zero-finding round), `body-rewritten` a passing gate there, `verdict-posted` the App's APPROVE there. Advancing to the phase the run is already at does nothing, so a resumed step can repeat it. `run-state set` changes only `round`, `head_sha` and `explainer`: `reviewer_login` is fixed at `create`.
 
-Everything the helper CLI posts (reviews, replies, comments) goes through a scan for secret shapes first, and a match posts nothing. Agent text that holds the pipeline's hidden marker (`hero-pocock:review-pipeline`) is refused too, because only the CLI writes it. The scan is defence in depth, not a guarantee: an agent can encode a secret so that no scanner sees it. The real boundary is the read-only sandbox with no network and no gh token that every agent runs in on `runtime: codex` (**Codex runtime**). What is left is the risk of a secret encoded into a posted review.
+Everything the helper CLI posts (reviews, replies, comments) goes through a scan for secret shapes first, and a match posts nothing. Agent text that holds the pipeline's hidden marker (`hero-forge:review-pipeline`) is refused too, because only the CLI writes it. The scan is defence in depth, not a guarantee: an agent can encode a secret so that no scanner sees it. The real boundary is the read-only sandbox with no network and no gh token that every agent runs in on `runtime: codex` (**Codex runtime**). What is left is the risk of a secret encoded into a posted review.
 
 Every subcommand uses the same exit codes:
 
@@ -58,7 +58,7 @@ Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with 
 Run `review.ts run-state read --pr N`.
 
 - Exit 3: a new run. Go to **Fixed point**, then `review.ts run-state create` with its values.
-- Exit 4: the state file is corrupt. A review may already be on the PR, so check first: list the PR's reviews (`gh api --paginate repos/O/R/pulls/N/reviews`) and look for a body with `<!-- hero-pocock:review-pipeline pr=N`. Tell the user what you found, then `review.ts run-state create ... --force` and continue from the step after the last review you found.
+- Exit 4: the state file is corrupt. A review may already be on the PR, so check first: list the PR's reviews (`gh api --paginate repos/O/R/pulls/N/reviews`) and look for a body with `<!-- hero-forge:review-pipeline pr=N`. Tell the user what you found, then `review.ts run-state create ... --force` and continue from the step after the last review you found.
 - Exit 0: resume from the step after `phase`:
 
 | `phase` | Next step |
@@ -192,7 +192,7 @@ review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind r
 
 The config's `app` decides who posts. With `app: true`, the reviewer GitHub App posts every review, re-check and verdict, so the review is clearly not from the PR author, and the App approves or requests changes at the end of the loop. Without the App, everything posts from the user's own `gh` account as COMMENT reviews. On both paths the recorded re-check gate is part of the merge gate; with the App, so is the App's approval.
 
-The App's credentials are in `~/.config/hero-pocock/` (an env file and a private key), never in the repo. `post-review` reads them and mints a short-lived token itself for each post, so no agent ever sees the token. `review.ts app-token` has only `--check` and `--login`, and it never prints a token.
+The App's credentials are in `~/.config/hero-forge/` (an env file and a private key), never in the repo. `post-review` reads them and mints a short-lived token itself for each post, so no agent ever sees the token. `review.ts app-token` has only `--check` and `--login`, and it never prints a token.
 
 1. **Check at the start.** With `app: true`, run `review.ts app-token --repo O/R --login` in **Config**, before **Resume**. Exit 0 prints the App's login, `<slug>[bot]`: keep it for `run-state create --reviewer-login` in **Fixed point**. The run keeps that login to the end (`run-state set` cannot change it), and `post-review` and `merge-gate` check it against the login the App's own credentials give. Exit 4 means the App is enabled but broken (credentials missing, a bad key, the App not installed on the repo, or a GitHub error). Stop the run, show the message, and tell the user to fix the App or to re-run `/setup-review-pipeline`. Never continue as the user: that quietly turns the approval gate off.
 2. **Every post.** `post-review` posts as the App with no extra flag. If the App breaks in the middle of a run, `post-review` exits 4 and posts nothing: stop as in step 1. `reply` always posts as the user, because the PR author answers the review. A run state whose `reviewer_login` does not match the config (`none` with `app: true`, or a bot login without it) is refused: create the run again with the right login.

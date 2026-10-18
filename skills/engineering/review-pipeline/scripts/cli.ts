@@ -32,9 +32,8 @@ export const COMMANDS = {
   review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)`,
   },
   'app-token': {
-    summary: 'Check the reviewer GitHub App, print its bot login, or copy its credentials from /lfg.',
-    usage: `usage: review.ts app-token --repo O/R [--config <path>] --check | --login
-       review.ts app-token --copy-from <lfg env file> [--force]`,
+    summary: 'Check the reviewer GitHub App, or print its bot login.',
+    usage: `usage: review.ts app-token --repo O/R [--config <path>] --check | --login`,
   },
   'post-review': {
     summary: 'Post one review payload to a PR, at most once per PR, round, kind and commit.',

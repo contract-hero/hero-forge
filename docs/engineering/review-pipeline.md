@@ -20,12 +20,12 @@ Reach for it when a pull request is open and needs a review that lands on the PR
 
 | It needs | Why |
 | --- | --- |
-| `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md) | it holds the runtime, the number of pairs, and the model and effort of each role; without it the pipeline stops and points you to setup |
+| `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/setup-review-pipeline.md) | it holds the runtime, the number of pairs, and the model and effort of each role; without it the pipeline stops and points you to setup |
 | the Codex CLI, installed and logged in, for `runtime: codex` | the Orchestrator and the reviewers run as `codex exec` sessions; if `codex` is missing or broken, the pipeline stops and points you to setup |
 | Node 22.18 or newer, and `gh` logged in | the helper CLI that posts the review and keeps the run state is TypeScript run by Node, and it posts through `gh api` |
-| the reviewer App's credentials in `~/.config/hero-pocock/`, for `app: enabled` (optional) | the helper CLI mints a short-lived App token from them for each post; setup writes them, or copies them from `/lfg` |
+| the reviewer App's credentials in `~/.config/hero-forge/`, for `app: enabled` (optional) | the helper CLI mints a short-lived App token from them for each post; you add them by hand, and setup checks them |
 
-It keeps its working files outside the repo, in `hero-pocock/pr-<N>/` inside the git common dir, so nothing is committed.
+It keeps its working files outside the repo, in `hero-forge/pr-<N>/` inside the git common dir, so nothing is committed.
 
 ## Reviewer pairs
 
@@ -81,11 +81,11 @@ No. Before the merge, the helper CLI reads the PR's checks and its mergeability.
 
 **Where does the explainer go? Is it published?**
 
-It stays on your machine, in the run dir (`hero-pocock/pr-<N>/explainer.html` inside the git common dir). It is never committed and never published. The PR gets one comment with its local path, so whoever opens the PR on that machine can find it.
+It stays on your machine, in the run dir (`hero-forge/pr-<N>/explainer.html` inside the git common dir). It is never committed and never published. The PR gets one comment with its local path, so whoever opens the PR on that machine can find it.
 
 **Can I review a PR without merging it?**
 
-A plain `/review-pipeline <PR>` merges at the end. [implement-spec-stack](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-spec-stack.md) starts the run with `--mode layer` or `--mode stack-final`, which stop earlier: a stack layer stops once the PR is ready, and the whole-stack PR stops after the explainer, because the stack lands its layers itself. Those modes are for the stack; a plain run has no "do not merge" switch yet. To keep the PR open, tell the agent so before it reaches the merge.
+A plain `/review-pipeline <PR>` merges at the end. [implement-spec-stack](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-spec-stack.md) starts the run with `--mode layer` or `--mode stack-final`, which stop earlier: a stack layer stops once the PR is ready, and the whole-stack PR stops after the explainer, because the stack lands its layers itself. Those modes are for the stack; a plain run has no "do not merge" switch yet. To keep the PR open, tell the agent so before it reaches the merge.
 
 **Can the Implementer mark its own fixes as done?**
 
@@ -139,4 +139,4 @@ Run `review.ts help` for the list of every subcommand with its one-line summary.
 
 ## Where it fits
 
-`review-pipeline` is the **chain step** after a pull request opens: it follows [pr](https://aihero.dev/skills-pr), which shapes the PR body, and it needs the run-once [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md) first. Its in-session sibling is [code-review](https://aihero.dev/skills-code-review), whose two axes it reuses. For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.
+`review-pipeline` is the **chain step** after a pull request opens: it follows [pr](https://aihero.dev/skills-pr), which shapes the PR body, and it needs the run-once [setup-review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/setup-review-pipeline.md) first. Its in-session sibling is [code-review](https://aihero.dev/skills-code-review), whose two axes it reuses. For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.

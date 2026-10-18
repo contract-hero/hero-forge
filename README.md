@@ -1,4 +1,4 @@
-# Hero Pocock
+# Hero Forge
 
 **Álvaro Lillo's version of [Matt Pocock's skills](https://github.com/mattpocock/skills).** The same skills, tuned for the Contract Hero work-stream and published in the [Contract Hero plugin marketplace](https://github.com/contract-hero/plugin-marketplace).
 
@@ -12,78 +12,16 @@ More changes are on the way. [ADR 0004](./.agents/adr/0004-hero-pocock-is-a-tail
 
 ## Installation (30-second setup)
 
-A plugin updates itself. [skills.sh](https://skills.sh/contract-hero/hero-pocock) copies editable files into your project, and you update them by hand. Pick one per agent, because installing both gives you every skill twice.
+hero-forge is a Claude Code plugin, and it updates itself.
 
 ### 1. Get the skills
 
-<details>
-<summary><strong>Claude Code</strong></summary>
-
 ```bash
 claude plugin marketplace add contract-hero/plugin-marketplace
-claude plugin install hero-pocock@contract-hero
+claude plugin install hero-forge@contract-hero
 ```
 
 Updates itself when the marketplace has auto-update on. If `mattpocock-skills` is also installed, uninstall it (`claude plugin uninstall mattpocock-skills`): both plugins ship the same skills.
-
-</details>
-
-<details>
-<summary><strong>Codex</strong></summary>
-
-```bash
-codex plugin marketplace add contract-hero/hero-pocock
-codex plugin add hero-pocock@hero-pocock
-```
-
-Updates itself at startup.
-
-</details>
-
-<details>
-<summary><strong>GitHub Copilot</strong> (CLI and VS Code)</summary>
-
-```bash
-copilot plugin marketplace add contract-hero/hero-pocock
-copilot plugin install hero-pocock@hero-pocock
-```
-
-Then, once, add to `~/.copilot/settings.json`:
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "hero-pocock": { "source": { "source": "github", "repo": "contract-hero/hero-pocock" }, "autoUpdate": true }
-  }
-}
-```
-
-In VS Code, run **Chat: Install Plugin From Source** and enter `https://github.com/contract-hero/hero-pocock`. It updates daily.
-
-</details>
-
-<details>
-<summary><strong>Gemini CLI</strong> (manual updates)</summary>
-
-```bash
-gemini skills install https://github.com/contract-hero/hero-pocock.git --path skills/engineering
-gemini skills install https://github.com/contract-hero/hero-pocock.git --path skills/productivity
-```
-
-Re-run both commands to update.
-
-</details>
-
-<details>
-<summary><strong>Any other agent, or editable files</strong> (manual updates)</summary>
-
-```bash
-npx skills@latest add contract-hero/hero-pocock -a <agent>  # cursor, opencode, devin, windsurf, amp, pi; omit -a to choose
-```
-
-When the installer asks which skills to take, include `setup-matt-pocock-skills`. To update, run `npx skills@latest update`, and re-run `add` to pick up new skills.
-
-</details>
 
 ### 2. Run `/setup-matt-pocock-skills`
 

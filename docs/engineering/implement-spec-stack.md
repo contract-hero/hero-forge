@@ -1,6 +1,6 @@
 ## What it does
 
-`implement-spec-stack` takes a [spec](https://www.aihero.dev/ai-coding-dictionary/spec) and its [tickets](https://www.aihero.dev/ai-coding-dictionary/ticket) and turns them into a **stack** of draft pull requests, one per ticket. Each ticket is a **layer**: a branch cut from the ticket it waits on, with a PR that targets that branch. Implementer [subagents](https://www.aihero.dev/ai-coding-dictionary/subagent) build the ready tickets in their own git worktrees, and each layer goes through [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) against its parent layer. Then one final review of the whole stack runs against the spec, and the stack lands bottom-up.
+`implement-spec-stack` takes a [spec](https://www.aihero.dev/ai-coding-dictionary/spec) and its [tickets](https://www.aihero.dev/ai-coding-dictionary/ticket) and turns them into a **stack** of draft pull requests, one per ticket. Each ticket is a **layer**: a branch cut from the ticket it waits on, with a PR that targets that branch. Implementer [subagents](https://www.aihero.dev/ai-coding-dictionary/subagent) build the ready tickets in their own git worktrees, and each layer goes through [review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/review-pipeline.md) against its parent layer. Then one final review of the whole stack runs against the spec, and the stack lands bottom-up.
 
 Nothing merges until the whole stack has passed its final review. Upstream `implement-spec` collapses every ticket into one integration branch and reviews it once in the coding session; this skill keeps one reviewed PR per ticket, so each review is small, and the final review can still change any layer before the first one lands.
 
@@ -11,14 +11,14 @@ Type `/implement-spec-stack <spec>`, or an agent or router asks for `implement-s
 | Your situation | Reach for |
 | --- | --- |
 | A spec split into tickets with `blocked_by` edges, that should reach `main` as reviewed PRs, one per ticket | `/implement-spec-stack #2` |
-| One ticket that should reach `main` through a reviewed PR | [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) |
+| One ticket that should reach `main` through a reviewed PR | [implement-pr](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-pr.md) |
 | A spec that isn't split into tickets yet | [to-tickets](https://aihero.dev/skills-to-tickets) first |
 
 ## Prerequisites
 
 | It needs | Why |
 | --- | --- |
-| `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md) | every layer and the final review go through the pipeline; without the config, the skill stops before it builds anything |
+| `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/setup-review-pipeline.md) | every layer and the final review go through the pipeline; without the config, the skill stops before it builds anything |
 | GitHub Issues, with the tickets as sub-issues of the spec and the edges as native `blocked_by` dependencies | the stack order comes from that graph; on any other tracker the skill stops |
 | Node 22.18 or newer, and `gh` logged in | the stack steps run through the pipeline's helper CLI and `gh` |
 | A [harness](https://www.aihero.dev/ai-coding-dictionary/harness) that runs subagents in parallel, each in its own git worktree | independent tickets build at the same time. The skill waits for each subagent whose result its next step needs, so the run never ends while an implementer still works |
@@ -66,4 +66,4 @@ No. A layer run ends at ready, and the skill lands nothing until the final revie
 
 ## Where it fits
 
-`implement-spec-stack` is the whole-spec build step of the PR chain: `to-tickets → implement-spec-stack → review-pipeline`. It consumes the tickets [to-tickets](https://aihero.dev/skills-to-tickets) writes, drives [tdd](https://aihero.dev/skills-tdd) in each implementer, and hands every layer and the final stack to [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md), which needs the run-once [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md). For one ticket at a time, [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) is the sibling. For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.
+`implement-spec-stack` is the whole-spec build step of the PR chain: `to-tickets → implement-spec-stack → review-pipeline`. It consumes the tickets [to-tickets](https://aihero.dev/skills-to-tickets) writes, drives [tdd](https://aihero.dev/skills-tdd) in each implementer, and hands every layer and the final stack to [review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/review-pipeline.md), which needs the run-once [setup-review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/setup-review-pipeline.md). For one ticket at a time, [implement-pr](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-pr.md) is the sibling. For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.

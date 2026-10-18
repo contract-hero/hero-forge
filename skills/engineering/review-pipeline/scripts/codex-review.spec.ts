@@ -52,10 +52,10 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
     { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
   ] })
   const state = join(dir, 'state')
-  const env = { ...gh.env, PATH: `${join(dir, 'codex-bin')}:${gh.env.PATH}`, HERO_POCOCK_STATE_DIR: state }
+  const env = { ...gh.env, PATH: `${join(dir, 'codex-bin')}:${gh.env.PATH}`, HERO_FORGE_STATE_DIR: state }
   const configPath = join(dir, 'review.md')
   await writeFile(configPath, CONFIG)
-  const created = await runCli(['run-state', 'create', '--pr', '13', '--repo', 'contract-hero/hero-pocock', '--base', 'main',
+  const created = await runCli(['run-state', 'create', '--pr', '13', '--repo', 'contract-hero/hero-forge', '--base', 'main',
     '--head', 'feature/x', '--head-sha', sha, '--runtime', 'codex', '--reviewer-login', 'none',
     ...(options.mode === undefined ? [] : ['--mode', options.mode])], { cwd: repo, env })
   assert.equal(created.code, 0, created.stderr)
@@ -119,7 +119,7 @@ test('codex-review runs each reviewer read-only, has the Orchestrator consolidat
   const sent = JSON.parse(posts[0]!.stdin)
   assert.equal(sent.commit_id, s.sha)
   assert.equal(sent.event, 'COMMENT')
-  assert.match(sent.body, /^## Review pipeline: round 1\n\n<!-- hero-pocock:review-pipeline pr=13 round=1 kind=review -->$/)
+  assert.match(sent.body, /^## Review pipeline: round 1\n\n<!-- hero-forge:review-pipeline pr=13 round=1 kind=review -->$/)
   assert.deepEqual(sent.comments, [{ path: 'src/a.ts', line: 5, side: 'RIGHT', body: COMMENT.body }])
   assert.deepEqual(JSON.parse(await readFile(join(s.runDir, 'findings.json'), 'utf8')), LEDGER)
   assert.match(await readFile(join(s.runDir, 'orchestrator-report.md'), 'utf8'), /kept 1, dropped 0/)

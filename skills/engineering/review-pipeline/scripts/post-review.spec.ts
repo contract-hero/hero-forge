@@ -14,8 +14,8 @@ import {
 } from './test-helpers.ts'
 
 const SHA = 'c'.repeat(40)
-const MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=review -->'
-const LIST = ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, login: .user.login}', 'repos/contract-hero/hero-pocock/pulls/13/reviews']
+const MARKER = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=review -->'
+const LIST = ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, login: .user.login}', 'repos/contract-hero/hero-forge/pulls/13/reviews']
 const USER = ['api', 'user', '--jq', '.login']
 const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
 
@@ -23,7 +23,7 @@ const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
 function listed(...reviews: { id: number; body: string; commit_id?: string; login?: string; state?: string }[]): string {
   return reviews.map((r) => `${JSON.stringify({ state: 'COMMENTED', commit_id: SHA, login: 'alilloig', ...r })}\n`).join('')
 }
-const POST = ['api', '-X', 'POST', 'repos/contract-hero/hero-pocock/pulls/13/reviews', '--input', '-']
+const POST = ['api', '-X', 'POST', 'repos/contract-hero/hero-forge/pulls/13/reviews', '--input', '-']
 
 const PAYLOAD = {
   event: 'COMMENT',
@@ -46,7 +46,7 @@ const BOT = 'hero-reviewer[bot]'
 
 // GitHub's answers for a working reviewer App installed on the repo.
 const APP_ROUTES: Record<string, FakeApiRoute> = {
-  'GET /repos/contract-hero/hero-pocock/installation': { status: 200, body: { id: 4242 } },
+  'GET /repos/contract-hero/hero-forge/installation': { status: 200, body: { id: 4242 } },
   'POST /app/installations/4242/access_tokens': { status: 201, body: { token: TOKEN } },
   'GET /app': { status: 200, body: { slug: 'hero-reviewer' } },
 }
@@ -72,15 +72,15 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   await writeFile(payloadPath, typeof payload === 'string' ? payload : JSON.stringify(payload))
   const root = join(dir, 'state')
   const stateFile = join(root, 'pr-13', 'state.json')
-  const env: Record<string, string | undefined> = { ...gh.env, HERO_POCOCK_STATE_DIR: root }
+  const env: Record<string, string | undefined> = { ...gh.env, HERO_FORGE_STATE_DIR: root }
   let api: FakeGitHubApi | undefined
   if (options.app !== undefined) {
     const key = await appKey(dir)
     api = await fakeGitHubApi(t, key.publicKey, options.app.routes ?? APP_ROUTES)
     const envFile = join(dir, 'reviewer-app.env')
-    await writeFile(envFile, `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
-    env.HERO_POCOCK_REVIEWER_APP_ENV = envFile
-    env.HERO_POCOCK_GITHUB_API_URL = api.url
+    await writeFile(envFile, `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${key.pem}\n`)
+    env.HERO_FORGE_REVIEWER_APP_ENV = envFile
+    env.HERO_FORGE_GITHUB_API_URL = api.url
   }
   if (options.state !== null) {
     if (typeof options.state === 'string') {
@@ -88,7 +88,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
       await writeFile(stateFile, options.state)
     } else {
       const created = await runCli(
-        ['run-state', 'create', '--pr', '13', '--repo', 'contract-hero/hero-pocock', '--base', 'main', '--head', 'feature/x',
+        ['run-state', 'create', '--pr', '13', '--repo', 'contract-hero/hero-forge', '--base', 'main', '--head', 'feature/x',
           '--head-sha', SHA, '--runtime', 'claude', '--reviewer-login', options.app === undefined ? 'none' : BOT],
         { env },
       )
@@ -97,7 +97,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   }
   const post = (...extra: string[]) =>
     runCli(
-      ['post-review', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--commit', SHA, '--round', '1',
+      ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', SHA, '--round', '1',
         '--kind', 'review', '--payload', payloadPath, '--config', configPath, ...extra],
       { env },
     )
@@ -277,13 +277,13 @@ for (const [name, change] of [
     const { code, stdout, stderr } = await s.post()
     assert.equal(code, 1)
     assert.equal(stdout, '')
-    assert.match(stderr, /contains the marker "hero-pocock:review-pipeline", which only the helper CLI writes\. Nothing was posted/)
+    assert.match(stderr, /contains the marker "hero-forge:review-pipeline", which only the helper CLI writes\. Nothing was posted/)
     assert.deepEqual(await s.gh.calls(), [])
   })
 }
 
 test('a marker tag written in another case is refused too', async (t) => {
-  const s = await setup(t, { payload: { ...PAYLOAD, body: 'x <!-- HERO-POCOCK:Review-Pipeline pr=13 -->' } })
+  const s = await setup(t, { payload: { ...PAYLOAD, body: 'x <!-- HERO-FORGE:Review-Pipeline pr=13 -->' } })
   const { code, stderr } = await s.post()
   assert.equal(code, 1)
   assert.match(stderr, /contains the marker/)
@@ -414,9 +414,9 @@ test('bad arguments are a usage error (exit 2)', async (t) => {
 const FIXED = 'e'.repeat(40)
 const COMMENTS = [
   'api', '--paginate', '--jq', '.[] | {id, in_reply_to_id, pull_request_review_id, login: .user.login, body}',
-  'repos/contract-hero/hero-pocock/pulls/13/comments',
+  'repos/contract-hero/hero-forge/pulls/13/comments',
 ]
-const RECHECK_MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=recheck -->'
+const RECHECK_MARKER = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=recheck -->'
 
 type Inline = { id: number; body: string; review?: number; reply_to?: number; login?: string }
 
@@ -497,7 +497,7 @@ async function gateSetup(t: Parameters<typeof tempDir>[0], options: GateSetup = 
   const before = (await s.gh.calls()).length
   const gated = (kind: string) =>
     runCli(
-      ['post-review', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--commit', FIXED, '--round', '1',
+      ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', FIXED, '--round', '1',
         '--kind', kind, '--payload', kind === 'verdict' ? verdict : table, '--config', s.configPath,
         '--ledger', ledger, '--recheck', recheck],
       { env: s.env },
@@ -591,7 +591,7 @@ const PINNED = [
   ['a round that is not the run round', { round: 2 }, "--round 1 is not the run's round (2)"],
   ['a run state that names the App when the config has none', { reviewer_login: BOT },
     'the config does not enable the reviewer App, but the run state for PR #13 has reviewer_login hero-reviewer[bot]: re-create the run with the reviewer login the config implies'],
-  ['a run state for another repo', { repo: 'someone/else' }, 'the run state for PR #13 is for someone/else, not contract-hero/hero-pocock'],
+  ['a run state for another repo', { repo: 'someone/else' }, 'the run state for PR #13 is for someone/else, not contract-hero/hero-forge'],
 ] as const
 
 for (const [name, over, message] of PINNED) {
@@ -674,12 +674,12 @@ test('with the App, the duplicate check counts only the bot reviews', async (t) 
 
 test('a broken App exits 4, posts nothing, and never falls back to the user', async (t) => {
   const s = await setup(t, {
-    app: { routes: { ...APP_ROUTES, 'GET /repos/contract-hero/hero-pocock/installation': { status: 404, body: { message: 'Not Found' } } } },
+    app: { routes: { ...APP_ROUTES, 'GET /repos/contract-hero/hero-forge/installation': { status: 404, body: { message: 'Not Found' } } } },
   })
   const { code, stdout, stderr } = await s.post()
   assert.equal(code, 4)
   assert.equal(stdout, '')
-  assert.match(stderr, /^review\.ts post-review: the reviewer App is not installed on contract-hero\/hero-pocock \(HTTP 404\)/)
+  assert.match(stderr, /^review\.ts post-review: the reviewer App is not installed on contract-hero\/hero-forge \(HTTP 404\)/)
   assert.deepEqual(await s.gh.calls(), [])
   assert.deepEqual(await s.reviews(), [])
 })
@@ -754,7 +754,7 @@ test('with the App, a passing gate posts the APPROVE verdict as the bot at the f
   assert.deepEqual(JSON.parse(calls[2]!.stdin), {
     ...TABLE,
     event: 'APPROVE',
-    body: `${TABLE.body}\n\n<!-- hero-pocock:review-pipeline pr=13 round=1 kind=verdict -->`,
+    body: `${TABLE.body}\n\n<!-- hero-forge:review-pipeline pr=13 round=1 kind=verdict -->`,
     commit_id: FIXED,
   })
   assert.deepEqual(
@@ -795,7 +795,7 @@ test('with the App, an APPROVE on a failing gate is still refused before any tok
 // recorded at OLD) on FIXED. `stack restack --pr 13` records a restack with no
 // content change in the run dir; here the test writes that record itself.
 const OLD = 'd'.repeat(40)
-const VERDICT_MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=verdict -->'
+const VERDICT_MARKER = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=verdict -->'
 
 type Carried = { restack?: Record<string, unknown> | null; github?: Record<string, unknown>[] }
 
@@ -914,7 +914,7 @@ test('with the App, an APPROVE carried over two restacks in a row (OLD to FIXED,
     { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
   ])
   const { code, stdout, stderr } = await runCli(
-    ['post-review', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--commit', NEXT, '--round', '1', '--kind', 'verdict',
+    ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', NEXT, '--round', '1', '--kind', 'verdict',
       '--payload', join(s.dir, 'verdict-payload.json'), '--config', s.configPath,
       '--ledger', join(s.dir, 'findings.json'), '--recheck', join(s.dir, 'recheck-r1.json')],
     { env: s.env },
@@ -1142,7 +1142,7 @@ test('after a zero-finding review, the run advances to rechecked with no re-chec
   assert.deepEqual(kinds, ['review'])
 
   await s.gh.respond([{ match: 'mergeStateStatus', stdout: CLEAN_PR }])
-  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--config', s.configPath], { env: s.env })
+  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--config', s.configPath], { env: s.env })
   assert.equal(gate.stderr, '')
   assert.equal(gate.code, 0)
   assert.deepEqual(JSON.parse(gate.stdout).gate, 'go')
@@ -1160,7 +1160,7 @@ test('with the App, a zero-finding round gets its APPROVE from the gate on the e
   await writeFile(verdict, JSON.stringify({ event: 'APPROVE', body: '## Verdict: round 1', comments: [] }))
   await s.gh.respond([{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) }])
   const approved = await runCli(
-    ['post-review', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'verdict',
+    ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'verdict',
       '--payload', verdict, '--config', s.configPath, '--ledger', join(s.runDir, 'findings.json'), '--recheck', join(s.runDir, 'recheck-r1.json')],
     { env: s.env },
   )
@@ -1175,7 +1175,7 @@ test('with the App, a zero-finding round gets its APPROVE from the gate on the e
     { match: 'mergeStateStatus', stdout: CLEAN_PR },
     { match: 'pulls/13/reviews', stdout: `${JSON.stringify({ id: 555, state: 'COMMENTED', commit_id: SHA, login: BOT })}\n${JSON.stringify({ id: 666, state: 'APPROVED', commit_id: SHA, login: BOT })}\n` },
   ])
-  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--config', s.configPath], { env: s.env })
+  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--config', s.configPath], { env: s.env })
   assert.equal(gate.stderr, '')
   assert.deepEqual(JSON.parse(gate.stdout).problems, [])
   assert.equal(JSON.parse(gate.stdout).gate, 'go')
@@ -1194,7 +1194,7 @@ test('with the App, a zero-finding round replaces a re-check file with items fro
   await writeFile(verdict, JSON.stringify({ event: 'APPROVE', body: '## Verdict: round 1', comments: [] }))
   await s.gh.respond([{ match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) }])
   const approved = await runCli(
-    ['post-review', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'verdict',
+    ['post-review', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--commit', SHA, '--round', '1', '--kind', 'verdict',
       '--payload', verdict, '--config', s.configPath, '--ledger', join(s.runDir, 'findings.json'), '--recheck', join(s.runDir, 'recheck-r1.json')],
     { env: s.env },
   )
@@ -1207,7 +1207,7 @@ test('with the App, a zero-finding round replaces a re-check file with items fro
     { match: 'mergeStateStatus', stdout: CLEAN_PR },
     { match: 'pulls/13/reviews', stdout: `${JSON.stringify({ id: 555, state: 'COMMENTED', commit_id: SHA, login: BOT })}\n${JSON.stringify({ id: 666, state: 'APPROVED', commit_id: SHA, login: BOT })}\n` },
   ])
-  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-pocock', '--pr', '13', '--config', s.configPath], { env: s.env })
+  const gate = await runCli(['merge-gate', '--repo', 'contract-hero/hero-forge', '--pr', '13', '--config', s.configPath], { env: s.env })
   assert.equal(gate.stderr, '')
   assert.deepEqual(JSON.parse(gate.stdout).problems, [])
   assert.equal(JSON.parse(gate.stdout).gate, 'go')

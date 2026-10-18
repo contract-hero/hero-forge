@@ -2,9 +2,9 @@
 // re-run finds its own post and never posts twice.
 import { refuse } from './cli.ts'
 
-const TAG = 'hero-pocock:review-pipeline'
+const TAG = 'hero-forge:review-pipeline'
 
-// `<!-- hero-pocock:review-pipeline pr=13 round=1 kind=review -->`, with the
+// `<!-- hero-forge:review-pipeline pr=13 round=1 kind=review -->`, with the
 // fields in the order given.
 export function marker(fields: Record<string, string | number>): string {
   return `<!-- ${TAG} ${Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(' ')} -->`
