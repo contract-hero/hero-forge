@@ -4,9 +4,9 @@ This repo does not take proposals or contributions for new skills, including one
 
 ## Why this is out of scope
 
-The catalog is the set of skills I use myself every day, and it's deliberately small. Every skill is permanent maintenance surface: it has to stay in step with the others, with the docs pages, with `ask-matt`'s routing map, and with the plugin manifest. The shorter and fewer the skills, the cheaper they are to keep correct.
+The catalog is the set of skills I use myself every day, and it's deliberately small. Every skill is permanent maintenance surface: it has to stay in step with the others, with `ask-forge`'s routing map, and with the plugin manifest. The shorter and fewer the skills, the cheaper they are to keep correct.
 
-The rule I apply to my own ideas applies here too: if you can compose the behaviour from existing skills, it doesn't get a new skill. Most proposals are a specific workflow built out of grilling, `to-spec`, `to-tickets`, `implement` and friends, and that composition belongs in your own prompts or your own skills.
+The rule I apply to my own ideas applies here too: if you can compose the behaviour from existing skills, it doesn't get a new skill. Most proposals are a specific workflow built out of grilling, `to-spec`, `to-tickets`, `implement-pr` and friends, and that composition belongs in your own prompts or your own skills.
 
 You're very welcome to publish a skill yourself. skills.sh makes that straightforward, and nothing here needs to know about it.
 

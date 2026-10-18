@@ -1,8 +1,7 @@
 // `review.ts app-token` (usage in the table in cli.ts).
 // Check that the reviewer GitHub App can mint an installation token for the
-// repo, from the credentials in ~/.config/hero-pocock/ (never in the repo),
-// or print its bot login. Or copy the credentials of the personal `/lfg`
-// skill there.
+// repo, from the credentials in ~/.config/hero-forge/ (never in the repo),
+// or print its bot login.
 //
 // It never prints the token: any agent with a shell could take it and
 // approve its own PR. post-review mints its own token in-process
@@ -17,24 +16,24 @@
 // Output: the bot login `<slug>[bot]` (`--login`), or nothing (`--check`).
 // Errors never carry the token or the key.
 import { createPrivateKey, createSign, type KeyObject } from 'node:crypto'
-import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { loadConfig } from './config.ts'
 import { Failure, parse, runMain, usageFor } from './cli.ts'
 
-const FIX = 'Fix the App credentials, or re-run /setup-review-pipeline'
+const FIX = 'Fix the App credentials, or re-run /setup-forge'
 
-export const ID_KEY = 'HERO_POCOCK_REVIEWER_APP_ID'
-export const KEY_KEY = 'HERO_POCOCK_REVIEWER_APP_KEY'
+export const ID_KEY = 'HERO_FORGE_REVIEWER_APP_ID'
+export const KEY_KEY = 'HERO_FORGE_REVIEWER_APP_KEY'
 
-// The env file, overridable for tests with HERO_POCOCK_REVIEWER_APP_ENV.
+// The env file, overridable for tests with HERO_FORGE_REVIEWER_APP_ENV.
 export function appEnvPath(): string {
-  return process.env.HERO_POCOCK_REVIEWER_APP_ENV || join(homedir(), '.config', 'hero-pocock', 'reviewer-app.env')
+  return process.env.HERO_FORGE_REVIEWER_APP_ENV || join(homedir(), '.config', 'hero-forge', 'reviewer-app.env')
 }
 
 function apiBase(): string {
-  return (process.env.HERO_POCOCK_GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '')
+  return (process.env.HERO_FORGE_GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '')
 }
 
 function broken(message: string): Failure {
@@ -169,51 +168,6 @@ export async function mintAppToken(repo: string): Promise<AppIdentity> {
   return { token: access.token, login: `${app.slug}[bot]` }
 }
 
-// Copy the credentials of the personal `/lfg` skill: its env file uses the
-// LFG_ names and points at its own pem, so copying the env file as it is
-// would be wrong. Copy the pem next to our env file, then write our env file
-// with our names and the new key path. Exit 3: no lfg env file. Prints paths
-// only, never the App ID or the key.
-async function copyFrom(source: string, force: boolean): Promise<string> {
-  let text: string
-  try {
-    text = await readFile(source, 'utf8')
-  } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') throw new Failure(`no lfg credentials at ${source}`, 3)
-    throw new Failure(`cannot read ${source} (${(error as { code?: string }).code ?? 'error'})`, 4)
-  }
-  const values = parseEnvFile(text)
-  const id = values.get('LFG_REVIEWER_APP_ID') ?? ''
-  const sourceKey = values.get('LFG_REVIEWER_APP_KEY') ?? ''
-  if (id === '') throw new Failure(`${source} sets no LFG_REVIEWER_APP_ID`, 4)
-  if (sourceKey === '') throw new Failure(`${source} sets no LFG_REVIEWER_APP_KEY`, 4)
-  let pem: string
-  try {
-    pem = await readFile(sourceKey, 'utf8')
-    createPrivateKey(pem)
-  } catch {
-    throw new Failure(`the lfg private key ${sourceKey} cannot be read or is not a PEM private key`, 4)
-  }
-
-  const env = appEnvPath()
-  const dir = dirname(env)
-  const key = join(dir, 'reviewer-app.pem')
-  if (!force) {
-    for (const file of [env, key]) {
-      const exists = await access(file).then(() => true, () => false)
-      if (exists) throw new Failure(`${file} already exists: keep it, or copy over it with --force`, 1)
-    }
-  }
-  await mkdir(dir, { recursive: true, mode: 0o700 })
-  await chmod(dir, 0o700)
-  // chmod after each write: on --force, writeFile keeps an existing file's mode.
-  await writeFile(key, pem, { mode: 0o600 })
-  await chmod(key, 0o600)
-  await writeFile(env, `${ID_KEY}=${id}\n${KEY_KEY}=${key}\n`, { mode: 0o600 })
-  await chmod(env, 0o600)
-  return `${JSON.stringify({ copied: true, env, key })}\n`
-}
-
 const usage = usageFor('app-token')
 
 async function appToken(argv: string[]): Promise<string> {
@@ -224,19 +178,9 @@ async function appToken(argv: string[]): Promise<string> {
       config: { type: 'string' },
       login: { type: 'boolean' },
       check: { type: 'boolean' },
-      'copy-from': { type: 'string' },
-      force: { type: 'boolean' },
     },
     usage,
   )
-  const source = values['copy-from']
-  if (source !== undefined) {
-    if (values.repo !== undefined || values.config !== undefined || values.login || values.check) {
-      throw usage('--copy-from goes with --force only')
-    }
-    return copyFrom(source, values.force === true)
-  }
-  if (values.force) throw usage('--force goes with --copy-from only')
   const { repo } = values
   if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
   if (values.login && values.check) throw usage('--login and --check do not go together')

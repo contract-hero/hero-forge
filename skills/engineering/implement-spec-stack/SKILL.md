@@ -1,11 +1,11 @@
 ---
 name: implement-spec-stack
-description: "Implement a spec as a stack of pull requests, one per ticket along the blocked_by graph: review each layer, review the whole stack once, then land it bottom-up. Use only on an explicit request for this skill by name: the user runs /implement-spec-stack with a spec, or an agent or router asks for implement-spec-stack through the Skill tool. Do not start it because a spec or its tickets are mentioned."
+description: "Implement a spec as a stack of pull requests, one per ticket along the blocked_by graph: review each layer, review the whole stack once, then land it bottom-up. Use when the user runs /implement-spec-stack with a spec, or a spec with ready tickets is handed over for building by the user, an agent, or a router. Do not start it because a spec or its tickets are mentioned or discussed."
 ---
 
 You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.
 
-The issue tracker should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`. This skill reads the tickets as GitHub sub-issues of the spec, and their order from GitHub's native `blocked_by` dependencies (`docs/agents/issue-tracker.md`, **Blocking**). On any other tracker, tell the user that this skill needs GitHub Issues, and stop.
+The issue tracker should have been provided to you. If not, tell the user to run `/setup-forge`. This skill reads the tickets as GitHub sub-issues of the spec, and their order from GitHub's native `blocked_by` dependencies (`docs/agents/issue-tracker.md`, **Blocking**). On any other tracker, tell the user that this skill needs GitHub Issues, and stop.
 
 The goal is every ticket of the spec on the default branch, each through its own reviewed pull request, after one final review of the whole stack against the spec.
 
@@ -26,7 +26,7 @@ The helper CLI lives in the `review-pipeline` skill folder, a sibling of the fol
 | Subcommand | Does |
 | --- | --- |
 | `stack order --repo O/R --spec N` | prints the stack plan as JSON: `layers` (parents first, each with `ticket`, `title`, `branch`, `parent`, `depth`, `blockers`, `children`), `rewired` and `excluded` |
-| `stack path --spec N` | prints the stack dir, `<git common dir>/hero-pocock/stack-<N>/` |
+| `stack path --spec N` | prints the stack dir, `<git common dir>/hero-forge/stack-<N>/` |
 | `stack restack --from <sha> --onto <ref> --pr <N>` | in a layer's worktree: rebases the checked-out layer onto `<ref>` from its parent's pre-landing tip, and passes only when `git range-diff` shows no content change; otherwise it puts the branch back. With `--pr N` it first checks that the branch is PR N's head and that `<ref>` is the default branch (`origin/HEAD`), and it records a pass of the head the run pinned in PR N's run dir (`recorded`) |
 | `stack merge-layer --repo O/R --pr N --base <default branch> --stack-pr S` | squash-merges a reviewed layer at its re-checked head, through the same gate as `review.ts merge`, and only once the `stack-final` run of the stack PR S is `complete` |
 
@@ -34,7 +34,7 @@ The plan follows two rules. A ticket with more than one open blocker branches fr
 
 ## Steps
 
-1. **Check the review config.** Run `review.ts config`. Exit 3 or 4: show the message, tell the user to run `/setup-review-pipeline`, and stop. Read the default branch (`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`) and `O/R`.
+1. **Check the review config.** Run `review.ts config`. Exit 3 or 4: show the message, tell the user to run `/setup-forge`, and stop. Read the default branch (`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`) and `O/R`.
 
 2. **Plan the stack.** Create the stack dir (`mkdir -p "$(review.ts stack path --spec <N>)"`). If `<stack dir>/order.json` exists, this is a resume: keep it and go to **Resume**. Do not plan again, because a landed ticket closes and would drop out of a new plan. Otherwise run `review.ts stack order --repo O/R --spec <N>` and save its output to `<stack dir>/order.json`.
    - Exit 1 on a cycle: show the message, which names the tickets in the cycle, and stop. Build nothing.

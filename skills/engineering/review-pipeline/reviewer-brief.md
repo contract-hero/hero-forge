@@ -23,11 +23,7 @@ You see the whole diff. The focus order only says where to start, so that the pa
 
 Standards sources found in this repo: <list of files>.
 
-<Paste in full the smell baseline and its two rules from the section "### 3. Identify the standards sources" of code-review's SKILL.md.>
-
-<Paste in full the brief of the "Standards sub-agent prompt" from the section "### 4. Spawn both sub-agents in parallel" of code-review's SKILL.md.>
-
-<Paste in full the file standards-bug-axis.md from the review-pipeline skill folder.>
+<Paste in full the files standards-prompt.md, smell-baseline.md and standards-bug-axis.md from the review-pipeline skill folder.>
 
 Use these categories: `standard` (a documented standard, cite file and rule), `smell` (a baseline smell, always a judgement call), `bug`, `silent-failure`, `test-gap`.
 
@@ -41,7 +37,7 @@ Spec: <issue numbers and titles, or the spec path>. Contents:
 
 Acceptance criteria, in your focus order: <rotated list of the spec's acceptance criteria, if it has any>.
 
-<Paste in full the brief of the "Spec sub-agent prompt" from the section "### 4. Spawn both sub-agents in parallel" of code-review's SKILL.md.>
+<Paste in full the file spec-prompt.md from the review-pipeline skill folder.>
 
 Use these categories: `spec-missing` (asked for, missing or partial), `spec-creep` (not asked for), `spec-wrong` (implemented, but wrong). Quote the spec line in `citation`.
 

@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { fakeGh, runCli, tempDir, type FakeGhResponse } from './test-helpers.ts'
 
 const SHA = 'c'.repeat(40)
-const REPO = 'contract-hero/hero-pocock'
+const REPO = 'contract-hero/hero-forge'
 const USER = ['api', 'user', '--jq', '.login']
 const ME: FakeGhResponse = { match: 'api user', stdout: 'alilloig\n' }
 const COMMENTS = [
@@ -15,8 +15,8 @@ const COMMENTS = [
 const ISSUE_COMMENTS = ['api', '--paginate', '--jq', '.[] | {id, body, login: .user.login}', `repos/${REPO}/issues/13/comments`]
 const replyTo = (comment: number) => ['api', '-X', 'POST', `repos/${REPO}/pulls/13/comments/${comment}/replies`, '--input', '-']
 const COMMENT_POST = ['api', '-X', 'POST', `repos/${REPO}/issues/13/comments`, '--input', '-']
-const marker = (round: number, kind: string) => `<!-- hero-pocock:review-pipeline pr=13 round=${round} kind=${kind} -->`
-const replyMarker = (round: number, id: string) => `<!-- hero-pocock:review-pipeline pr=13 round=${round} kind=reply id=${id} -->`
+const marker = (round: number, kind: string) => `<!-- hero-forge:review-pipeline pr=13 round=${round} kind=${kind} -->`
+const replyMarker = (round: number, id: string) => `<!-- hero-forge:review-pipeline pr=13 round=${round} kind=reply id=${id} -->`
 
 type Inline = { id: number; body: string; review?: number; reply_to?: number; login?: string }
 
@@ -66,7 +66,7 @@ type Setup = { ledger?: unknown; recheck?: unknown; noState?: boolean }
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await tempDir(t)
   const gh = await fakeGh(dir, [{ match: '--input', stdout: JSON.stringify({ id: 555 }) }, ME])
-  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: join(dir, 'state') }
+  const env = { ...gh.env, HERO_FORGE_STATE_DIR: join(dir, 'state') }
   if (options.noState !== true) {
     const config = join(dir, 'review.md')
     await writeFile(config, '```yaml\nruntime: claude\n```\n')
@@ -119,9 +119,9 @@ test('round 1 answers each inline finding in its thread and every finding in one
   const calls = await s.calls()
   assert.deepEqual(calls.map((c) => c.argv), [USER, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST])
   assert.deepEqual(JSON.parse(calls[2]!.stdin), {
-    body: 'ACCEPT: sanitised in the fix commit\n\n<!-- hero-pocock:review-pipeline pr=13 round=1 kind=reply id=F1 -->',
+    body: 'ACCEPT: sanitised in the fix commit\n\n<!-- hero-forge:review-pipeline pr=13 round=1 kind=reply id=F1 -->',
   })
-  assert.deepEqual(JSON.parse(calls[3]!.stdin), { body: 'REFUTE: out of scope | see #6\n\n<!-- hero-pocock:review-pipeline pr=13 round=1 kind=reply id=F2 -->' })
+  assert.deepEqual(JSON.parse(calls[3]!.stdin), { body: 'REFUTE: out of scope | see #6\n\n<!-- hero-forge:review-pipeline pr=13 round=1 kind=reply id=F2 -->' })
   assert.deepEqual(JSON.parse(calls[5]!.stdin), { body: SUMMARY_1 })
   assert.ok(calls.every((c) => c.gh_token === null))
 })
@@ -131,7 +131,7 @@ test('a re-run posts nothing that is already on the PR', async (t) => {
   await s.github(
     [
       ...FINDINGS,
-      { id: 201, reply_to: 101, body: 'ACCEPT: ...\n\n<!-- hero-pocock:review-pipeline pr=13 round=1 kind=reply id=F1 -->' },
+      { id: 201, reply_to: 101, body: 'ACCEPT: ...\n\n<!-- hero-forge:review-pipeline pr=13 round=1 kind=reply id=F1 -->' },
     ],
     `${JSON.stringify({ id: 777, login: 'alilloig', body: SUMMARY_1 })}\n`,
   )
@@ -145,7 +145,7 @@ test('a re-run posts nothing that is already on the PR', async (t) => {
 
 test('a copied marker from someone else does not count as our answer', async (t) => {
   const s = await setup(t)
-  const copied = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=reply id=F1 -->'
+  const copied = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=reply id=F1 -->'
   await s.github(
     [...FINDINGS, { id: 201, reply_to: 101, login: 'mallory', body: copied }],
     `${JSON.stringify({ id: 778, login: 'mallory', body: SUMMARY_1 })}\n`,
@@ -182,7 +182,7 @@ test('round 2 answers only what the round 1 re-check left open, plus new ledger 
   const calls = await s.calls()
   assert.deepEqual(calls.map((c) => c.argv), [USER, COMMENTS, replyTo(102), replyTo(105), ISSUE_COMMENTS, COMMENT_POST])
   assert.deepEqual(JSON.parse(calls[2]!.stdin), {
-    body: 'ACCEPT: handled the case after all\n\n<!-- hero-pocock:review-pipeline pr=13 round=2 kind=reply id=F2 -->',
+    body: 'ACCEPT: handled the case after all\n\n<!-- hero-forge:review-pipeline pr=13 round=2 kind=reply id=F2 -->',
   })
   assert.match(JSON.parse(calls[5]!.stdin).body, /^## Adjudication: round 2\n[^]*\| F2 \|[^]*\| F4 \|[^]*kind=adjudication -->$/)
   assert.doesNotMatch(JSON.parse(calls[5]!.stdin).body, /\| F1 \|/)
@@ -237,7 +237,7 @@ test('a ledger reason that holds the pipeline marker is refused before any gh ca
   })
   const { code, stderr } = await s.reply(1)
   assert.equal(code, 1)
-  assert.match(stderr, /contains the marker "hero-pocock:review-pipeline", which only the helper CLI writes/)
+  assert.match(stderr, /contains the marker "hero-forge:review-pipeline", which only the helper CLI writes/)
   assert.deepEqual(await s.calls(), [])
 })
 

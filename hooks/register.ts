@@ -1,43 +1,5 @@
 import type { Register } from 'claude-code'
 
-// The promoted set, as `.claude-plugin/plugin.json` lists it. A skill from
-// this plugin matches on `pluginName`, whatever the manifest names the plugin.
-// A skill loaded from a user or project skills folder (skills.sh,
-// `scripts/link-skills.sh`) matches on its bare name against this list. That
-// also catches an unrelated loose skill of the same name, and it skips the
-// `in-progress/` skills that `scripts/link-skills.sh` also links.
-const SKILLS = new Set([
-  'ask-matt',
-  'diagnosing-bugs',
-  'grill-with-docs',
-  'triage',
-  'improve-codebase-architecture',
-  'setup-matt-pocock-skills',
-  'setup-review-pipeline',
-  'tdd',
-  'to-spec',
-  'to-tickets',
-  'wayfinder',
-  'implement-pr',
-  'implement-spec-stack',
-  'prototype',
-  'research',
-  'domain-modeling',
-  'codebase-design',
-  'code-review',
-  'review-pipeline',
-  'pr',
-  'retro',
-  'wizard',
-  'grill-me',
-  'grilling',
-  'handoff',
-  'teach',
-  'to-questionnaire',
-  'wait-what',
-  'writing-for-agents',
-])
-
 export const ASK = `
 
 ## Asking the user (Claude Code)
@@ -64,13 +26,15 @@ This replaces the round format above. Ask each round as AskUserQuestion calls: t
 // namespaces it.
 const bareName = (skill: string) => skill.slice(skill.lastIndexOf(':') + 1)
 
+// A skill matches only when it comes from this plugin: its `pluginName` equals
+// the `name` in `.claude-plugin/plugin.json`. A loose skill (one in a user or
+// project skills folder) has no `pluginName`, so it never matches, and a move
+// or rename of a skill needs no edit here.
 export const register: Register = on => {
   on('skill.prompt', ($, e, next) => {
-    const name = bareName(e.skill)
-    const loose = e.source === 'userSettings' || e.source === 'projectSettings'
-    const ours = e.pluginName === undefined ? loose && SKILLS.has(name) : e.pluginName === $.plugin.name
-    if (!ours) return next(e)
+    if (e.pluginName !== $.plugin.name) return next(e)
 
+    const name = bareName(e.skill)
     return next({ ...e, text: e.text + ASK + (name === 'grilling' ? GRILL : '') })
   })
 }

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { appKey, baseEnv, fakeGh, fakeGitHubApi, run, runCli, seedState, tempDir, type FakeGhResponse } from './test-helpers.ts'
 
-const REPO = 'contract-hero/hero-pocock'
+const REPO = 'contract-hero/hero-forge'
 const REPO_URL = `https://api.github.com/repos/${REPO}`
 
 type Ticket = { title?: string; state?: string; blockedBy?: (number | { number: number; state?: string; repo?: string })[] }
@@ -388,7 +388,7 @@ async function layerRun(t: Parameters<typeof tempDir>[0], options: LayerRun = {}
   const dir = await tempDir(t)
   const gh = await fakeGh(dir)
   const root = join(dir, 'state')
-  const env = { ...gh.env, HERO_POCOCK_STATE_DIR: root }
+  const env = { ...gh.env, HERO_FORGE_STATE_DIR: root }
   const config = join(dir, 'review.md')
   await writeFile(config, '```yaml\nruntime: claude\n```\n')
   await seedState(root, {
@@ -491,7 +491,7 @@ test('merge-layer needs --stack-pr (usage error)', async (t) => {
 
 test('merge-layer does not merge a layer with no passing re-check at its head', async (t) => {
   const s = await layerRun(t)
-  await seedState(s.env.HERO_POCOCK_STATE_DIR!, {
+  await seedState(s.env.HERO_FORGE_STATE_DIR!, {
     base_ref: 'ticket/4-parent', head_ref: 'ticket/5-child', head_sha: SHA, mode: 'layer', phase: 'complete', gates: [],
   })
   const { code, stderr } = await s.mergeLayer()
@@ -504,7 +504,7 @@ test('merge-layer does not merge a layer with no passing re-check at its head', 
 // at the new head with `post-review --kind recheck`, which records it there.
 test('merge-layer lands a restacked layer without the App once the re-check is posted again at the new head', async (t) => {
   const s = await layerRun(t)
-  const root = s.env.HERO_POCOCK_STATE_DIR!
+  const root = s.env.HERO_FORGE_STATE_DIR!
   const old = 'd'.repeat(40)
   await seedState(root, {
     base_ref: 'ticket/4-parent', head_ref: 'ticket/5-child', head_sha: SHA, mode: 'layer', phase: 'complete',
@@ -550,7 +550,7 @@ test('merge-layer does not merge when the gate stops (the head moved after the r
 
 test('path prints the stack dir of a spec beside the per-PR run dirs', async (t) => {
   const dir = await tempDir(t)
-  const { code, stdout } = await runCli(['stack', 'path', '--spec', '2'], { env: { ...baseEnv(), HERO_POCOCK_STATE_DIR: join(dir, 'state') } })
+  const { code, stdout } = await runCli(['stack', 'path', '--spec', '2'], { env: { ...baseEnv(), HERO_FORGE_STATE_DIR: join(dir, 'state') } })
   assert.equal(code, 0)
   assert.equal(stdout, `${join(dir, 'state', 'stack-2')}\n`)
 })
@@ -574,7 +574,7 @@ test('order stops on a blocked_by cycle and names the tickets in it', async (t) 
 // approved its old tip (review 600). After the parent lands, `restack --pr`
 // moves the layer, and GitHub shows review 600 on the new tip.
 const BOT = 'hero-reviewer[bot]'
-const VERDICT_MARKER = '<!-- hero-pocock:review-pipeline pr=13 round=1 kind=verdict -->'
+const VERDICT_MARKER = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=verdict -->'
 
 async function appLanding(t: Parameters<typeof tempDir>[0], mainChange: Record<number, string> = {}, over: Record<string, unknown> = {}) {
   const s = await layers(t)
@@ -586,18 +586,18 @@ async function appLanding(t: Parameters<typeof tempDir>[0], mainChange: Record<n
   const gh = await fakeGh(dir)
   const key = await appKey(dir)
   const api = await fakeGitHubApi(t, key.publicKey, {
-    'GET /repos/contract-hero/hero-pocock/installation': { status: 200, body: { id: 4242 } },
+    'GET /repos/contract-hero/hero-forge/installation': { status: 200, body: { id: 4242 } },
     'POST /app/installations/4242/access_tokens': { status: 201, body: { token: 'ghs_faketoken0123456789' } },
     'GET /app': { status: 200, body: { slug: 'hero-reviewer' } },
   })
   const envFile = join(dir, 'reviewer-app.env')
-  await writeFile(envFile, `HERO_POCOCK_REVIEWER_APP_ID=123456\nHERO_POCOCK_REVIEWER_APP_KEY=${key.pem}\n`)
+  await writeFile(envFile, `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${key.pem}\n`)
   const root = join(dir, 'state')
   const env = {
     ...gh.env,
-    HERO_POCOCK_STATE_DIR: root,
-    HERO_POCOCK_REVIEWER_APP_ENV: envFile,
-    HERO_POCOCK_GITHUB_API_URL: api.url,
+    HERO_FORGE_STATE_DIR: root,
+    HERO_FORGE_REVIEWER_APP_ENV: envFile,
+    HERO_FORGE_GITHUB_API_URL: api.url,
   }
   await seedState(root, {
     base_ref: 'parent', head_ref: 'child', head_sha: s.childTip, mode: 'layer', phase: 'complete',
@@ -631,7 +631,7 @@ async function appLanding(t: Parameters<typeof tempDir>[0], mainChange: Record<n
     )
   const cli = (...args: string[]) => runCli(args, { env })
   const restack = (onto = 'origin/main') =>
-    runCli(['stack', 'restack', '--from', s.parentTip, '--onto', onto, '--pr', '13'], { cwd: s.dir, env: { ...s.gitEnv, HERO_POCOCK_STATE_DIR: root } })
+    runCli(['stack', 'restack', '--from', s.parentTip, '--onto', onto, '--pr', '13'], { cwd: s.dir, env: { ...s.gitEnv, HERO_FORGE_STATE_DIR: root } })
   return { ...s, gh, env, root, config, restack, carriedTo, verdict, cli }
 }
 
@@ -684,7 +684,7 @@ test('restack --pr refuses a PR with no run state before it moves anything (exit
   const root = await tempDir(t)
   const { code, stderr } = await runCli(['stack', 'restack', '--from', s.parentTip, '--onto', 'main', '--pr', '13'], {
     cwd: s.dir,
-    env: { ...s.gitEnv, HERO_POCOCK_STATE_DIR: root },
+    env: { ...s.gitEnv, HERO_FORGE_STATE_DIR: root },
   })
   assert.equal(code, 3)
   assert.match(stderr, /no run state for PR #13/)

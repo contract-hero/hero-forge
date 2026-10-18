@@ -1,3 +1,0 @@
-interface:
-  display_name: "Implement Spec Stack"
-  short_description: "Implement a spec as a reviewed stack of PRs"

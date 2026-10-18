@@ -10,7 +10,7 @@ const SHA2 = 'b'.repeat(40)
 // A state root in a temp dir, and a runner that uses it.
 async function stateRoot(t: Parameters<typeof tempDir>[0]) {
   const root = await tempDir(t)
-  const env = { ...baseEnv(), HERO_POCOCK_STATE_DIR: root }
+  const env = { ...baseEnv(), HERO_FORGE_STATE_DIR: root }
   return {
     root,
     file: join(root, 'pr-13', 'state.json'),
@@ -20,7 +20,7 @@ async function stateRoot(t: Parameters<typeof tempDir>[0]) {
 }
 
 const CREATE = [
-  'create', '--pr', '13', '--repo', 'contract-hero/hero-pocock', '--base', 'main', '--head', 'feature/x',
+  'create', '--pr', '13', '--repo', 'contract-hero/hero-forge', '--base', 'main', '--head', 'feature/x',
   '--head-sha', SHA, '--runtime', 'claude', '--reviewer-login', 'none',
 ]
 
@@ -33,14 +33,24 @@ test('path prints the run dir under the state root and creates nothing', async (
   assert.deepEqual(await readdir(s.root), [])
 })
 
-test('without an override the state root is hero-pocock/ in the git common dir', async (t) => {
+test('without an override the state root is hero-forge/ in the git common dir', async (t) => {
   const repo = await realpath(await tempDir(t))
   assert.equal((await run('git', ['init', '-q', repo])).code, 0)
   const env = baseEnv()
-  delete env.HERO_POCOCK_STATE_DIR
+  delete env.HERO_FORGE_STATE_DIR
   const { code, stdout } = await runCli(['run-state', 'path', '--pr', '13'], { cwd: repo, env })
   assert.equal(code, 0)
-  assert.equal(stdout, `${join(repo, '.git', 'hero-pocock', 'pr-13')}\n`)
+  assert.equal(stdout, `${join(repo, '.git', 'hero-forge', 'pr-13')}\n`)
+})
+
+test('the old HERO_POCOCK_STATE_DIR override is ignored', async (t) => {
+  const repo = await realpath(await tempDir(t))
+  assert.equal((await run('git', ['init', '-q', repo])).code, 0)
+  const env: Record<string, string | undefined> = { ...baseEnv(), HERO_POCOCK_STATE_DIR: await tempDir(t) }
+  delete env.HERO_FORGE_STATE_DIR
+  const { code, stdout } = await runCli(['run-state', 'path', '--pr', '13'], { cwd: repo, env })
+  assert.equal(code, 0)
+  assert.equal(stdout, `${join(repo, '.git', 'hero-forge', 'pr-13')}\n`)
 })
 
 test('create writes a fresh state file in a private run dir', async (t) => {
@@ -55,7 +65,7 @@ test('create writes a fresh state file in a private run dir', async (t) => {
   assert.equal(updated_at, created_at)
   assert.deepEqual(rest, {
     schema: 2,
-    repo: 'contract-hero/hero-pocock',
+    repo: 'contract-hero/hero-forge',
     pr: 13,
     mode: 'single',
     base_ref: 'main',
