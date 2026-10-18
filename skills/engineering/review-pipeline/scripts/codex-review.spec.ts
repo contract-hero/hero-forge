@@ -251,6 +251,9 @@ test('a spec-less run (no --issue) starts only Standards reviewers, and its walk
 })
 
 test('no Standards brief contains spec-handling text, with or without a spec', async (t) => {
+  // The smell baseline names the smell "Speculative Generality", which says
+  // nothing about the spec under review: the check masks that one smell.
+  const smell = /^- \*\*Speculative Generality\*\*:.*$/m
   for (const issue of [[], ['--issue', '2']]) {
     const s = await setup(t)
     const { code, stderr } = await s.review(...issue)
@@ -261,8 +264,32 @@ test('no Standards brief contains spec-handling text, with or without a spec', a
       const brief = (await readFile(join(s.runDir, `reviewer-p${k}-standards.md`), 'utf8'))
         .replaceAll(SKILL, '<skill>').replaceAll(s.runDir, '<run dir>')
       assert.match(brief, /Standards reviewer of pair/)
-      assert.doesNotMatch(brief, /spec|acceptance criteria|review mode/i, `pair ${k}, ${issue.length === 0 ? 'no spec' : 'spec'}`)
+      assert.match(brief, smell)
+      assert.doesNotMatch(brief.replace(smell, '<smell>'), /spec|acceptance criteria|review mode/i, `pair ${k}, ${issue.length === 0 ? 'no spec' : 'spec'}`)
     }
+  }
+})
+
+test('the reviewer briefs embed the prompts of the review-pipeline skill, and need no file outside it', async (t) => {
+  const s = await setup(t)
+  assert.equal((await s.review('--issue', '2')).code, 0)
+  const prompt = async (file: string) => (await readFile(join(SKILL, file), 'utf8')).trim()
+  const [standardsPrompt, smellBaseline, bugAxis, specPrompt] = await Promise.all(
+    ['standards-prompt.md', 'smell-baseline.md', 'standards-bug-axis.md', 'spec-prompt.md'].map(prompt))
+  for (const k of [1, 2]) {
+    const standards = await readFile(join(s.runDir, `reviewer-p${k}-standards.md`), 'utf8')
+    const spec = await readFile(join(s.runDir, `reviewer-p${k}-spec.md`), 'utf8')
+    for (const [text, name] of [[standardsPrompt, 'Standards prompt'], [smellBaseline, 'smell baseline'], [bugAxis, 'bug axis']] as const) {
+      assert.ok(standards.includes(text!), `pair ${k}: the Standards brief has no ${name}`)
+      assert.ok(!spec.includes(text!), `pair ${k}: the Spec brief has the ${name}`)
+    }
+    assert.ok(spec.includes(specPrompt!), `pair ${k}: the Spec brief has no Spec prompt`)
+    assert.ok(!standards.includes(specPrompt!), `pair ${k}: the Standards brief has the Spec prompt`)
+    assert.match(standards, /Report, per file\/hunk where relevant/)
+    assert.match(standards, /- \*\*Refused Bequest\*\*:/)
+    assert.match(standards, /## Silent failures \(`category: silent-failure`\)/)
+    assert.match(spec, /Quote the spec line for each finding/)
+    for (const brief of [standards, spec]) assert.doesNotMatch(brief, /\.\.\//)
   }
 })
 
