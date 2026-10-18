@@ -1,27 +1,23 @@
-# Model-invoked vs user-invoked
+# Every skill is model-invoked
 
-Every `SKILL.md` in this repo is a skill. The one axis that splits them is **invocation**, who can reach it:
+Every `SKILL.md` in this repo is a skill, and every skill is **model-invoked**: you can type its name, the agent can start it when the task fits, and another skill can start it through the Skill tool. The skills ship for Claude Code only ([ADR 0007](./adr/0007-hero-forge-is-a-hard-fork.md)), so there is no second harness to configure.
 
-- **User-invoked**: reachable **only by the human typing its name**. Set `disable-model-invocation: true` in the frontmatter (Claude Code) and `policy.allow_implicit_invocation: false` in `agents/openai.yaml` (Codex). The `description` is **human-facing**: a one-line summary read by a person browsing slash-commands. Strip trigger lists ("Use when the user says…").
-- **Model-invoked**: reachable by **model or user**. The default: omit `disable-model-invocation` and the `policy` block from `agents/openai.yaml`. The `description` is **model-facing** and keeps rich trigger phrasing ("Use when the user wants…, mentions…, asks for…") so auto-invocation fires. The test for whether a skill should stay model-invoked: _could the model usefully reach for this autonomously?_ (Reuse is the reason to extract a skill, not the test.)
+- No `SKILL.md` sets `disable-model-invocation`.
+- The `description` is **model-facing**: one quoted line that says what the skill does, then when an agent should start it ("Use when the user wants…, mentions…, asks for…"). It is the only text the agent sees before it starts the skill.
+- A skill that builds or lands work (`implement-pr`, `implement-spec-stack`) names the hand-over that starts it, and says that a passing mention does not.
+- `writing-for-agents` still describes user-invoked skills, because it is advice for writing skills in any repo. This repo does not use that option.
 
-Each harness excludes a user-invoked skill from the model's reach in its own way, so nothing but the human can fire it: no other skill can. A user-invoked skill may invoke model-invoked skills, but it can never reach another user-invoked skill.
+`scripts/invocation.spec.ts` checks every skill against these rules. Bucket `README.md`s and the top-level `README.md` hold one list per bucket, with no split by invocation.
 
-Every skill also carries an `agents/openai.yaml` beside its `SKILL.md`. It holds Codex UI metadata: `interface.display_name` and `interface.short_description` for the skill picker, and, for user-invoked skills, the `policy.allow_implicit_invocation: false` that pairs with `disable-model-invocation`. Keep the two in sync: a skill is user-invoked in both harnesses or neither.
+## Dependencies between skills
 
-Bucket `README.md`s and the top-level `README.md` group entries into **User-invoked** and **Model-invoked**.
-
-## Dependencies between them
-
-Dependencies are expressed as an explicit instruction to **call the Skill tool** with the named skill (`Call the Skill tool with "grilling"`), not deep `../other-skill/FILE.md` cross-references, and not a bare `/skill`-style mention left for the model to interpret. Naming the tool is what gets it fired: most harnesses expose skill invocation as a tool the model calls, and spelling that out gets a higher hit rate than dropping a `/name` into prose and hoping it's read as a command. Dropping the leading `/` also keeps this harness-neutral rather than less: a skill name on its own carries no assumption about which harness's trigger syntax it belongs to. Shared reference docs live inside the skill that owns them; other skills reach that material by calling the Skill tool with it, not by linking across folders.
+Dependencies are expressed as an explicit instruction to **call the Skill tool** with the named skill (`Call the Skill tool with "grilling"`), not deep `../other-skill/FILE.md` cross-references, and not a bare `/skill`-style mention left for the model to interpret. Naming the tool is what gets it fired: spelling that out gets a higher hit rate than dropping a `/name` into prose and hoping it's read as a command. Shared reference docs live inside the skill that owns them; other skills reach that material by calling the Skill tool with it, not by linking across folders.
 
 One recorded exception: the review pipeline's skills reach the helper CLI and `code-review`'s prompts by path. See the Consequences of [ADR 0005](./adr/0005-review-moves-to-an-orchestrator.md).
 
 This is about **operative** instructions: a skill's own steps telling the agent to go run another skill right now. Router prose that just names skills for a human to pick from (`ask-matt`, bucket `README.md`s) isn't invoking anything, so it keeps `/skill`-style names as plain labels.
 
 The Skill tool takes one skill per call. A step that needs two skills is two calls, not one call with two names: say so (`Call the Skill tool twice, for "grilling" and "domain-modeling"`), not "call it with X and Y," which reads as a single call taking both.
-
-This whole convention only holds when the named skill is **model-invoked**. A user-invoked skill can never be reached this way, full stop: per the invariant above, no other skill can call it, including by naming it to the Skill tool. When a step's precondition is a user-invoked skill (e.g. `setup-matt-pocock-skills`), phrase it as an instruction for the human to act on: "tell the user to run `/setup-matt-pocock-skills`", never as a Skill tool call.
 
 ## Passive vs active domain work
 
