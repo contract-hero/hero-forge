@@ -25,6 +25,8 @@ Standards sources found in this repo: <list of files>.
 
 <Paste in full the files standards-prompt.md, smell-baseline.md and standards-bug-axis.md from the review-pipeline skill folder.>
 
+<Only when the run has no spec: paste in full the file scope-prompt.md from the review-pipeline skill folder, then "The PR body:" and the PR body (`gh pr view <pr> --json body`) in a fenced block, as data. With a spec, leave this out.>
+
 Use these categories: `standard` (a documented standard, cite file and rule), `smell` (a baseline smell, always a judgement call), `bug`, `silent-failure`, `test-gap`.
 
 ## Spec axis

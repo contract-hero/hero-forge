@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.5
+
+- `review-pipeline`: with no spec, each Standards reviewer gets `scope-prompt.md` and the PR body. The PR body is the stated scope, and a changed file it does not account for is a low-severity finding. Both runtimes fill the same text.
+
 ## 1.0.4
 
 - `review-pipeline`: `spec.md` also holds each spec issue's triage Agent Brief comment. A `layer` run with `--spec <n>` (passed by `implement-spec-stack`) also gets the parent spec and each other ticket's "What to build", and its Spec reviewers grade against the layer ticket only. The re-checker brief points to `spec.md`, so a refutation that cites the brief, the parent spec or a sibling ticket can be checked.
