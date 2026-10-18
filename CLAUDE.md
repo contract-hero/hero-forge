@@ -5,11 +5,11 @@ Skills are organized into bucket folders under `skills/`:
 
 The repo holds only skills that ship: there is no other bucket. Every skill must have a reference in the top-level `README.md` and an entry in `.claude-plugin/plugin.json`'s `skills` array (the Claude Code plugin ships every skill in the two buckets). `scripts/skills.spec.ts` checks both.
 
-Install commands are copied verbatim from [.agents/install-block.md](./.agents/install-block.md). The plugin installs in Claude Code only, from the Contract Hero marketplace (`contract-hero/plugin-marketplace`), as `hero-forge@contract-hero`. Run `claude plugin validate .` after touching `.claude-plugin/plugin.json`, and read the warnings (`--strict` fails on the CLAUDE.md warning, see ADR 0004). [ADR 0002](./.agents/adr/0002-ship-as-a-claude-code-plugin.md) records why the repo ships a plugin. [ADR 0004](./.agents/adr/0004-hero-pocock-is-a-tailored-fork.md) records the fork's marketplace and version rules, which replace ADR 0002 on those points.
+Install commands are copied verbatim from [.agents/install-block.md](./.agents/install-block.md). The plugin installs in Claude Code only, from the Contract Hero marketplace (`contract-hero/plugin-marketplace`), as `hero-forge@contract-hero`. Run `claude plugin validate .` after touching `.claude-plugin/plugin.json`, and read the warnings. The warning that a CLAUDE.md at the plugin root is not loaded as project context is expected, and `--strict` fails on it, so run validate without `--strict`. [ADR 0002](./.agents/adr/0002-ship-as-a-claude-code-plugin.md) records why the repo ships a plugin.
 
 Each skill entry in the top-level `README.md` must link the skill name to its `SKILL.md`.
 
-Each bucket folder has a `README.md` that lists every skill in the bucket with a one-line description, with the skill name linked to its `SKILL.md`. The bucket `README.md`s and each bucket section of the top-level `README.md` hold one list, with no split by invocation.
+Each bucket folder has a `README.md` that lists every skill in the bucket with a one-line description, with the skill name linked to its `SKILL.md`. Each bucket `README.md` holds one list. The top-level `README.md` groups the skills by flow, as `ask-forge` maps them. Neither splits the skills by invocation.
 
 Every `SKILL.md` is model-invoked: no skill sets `disable-model-invocation`, and its quoted `description` tells an agent when to start it. `scripts/invocation.spec.ts` checks every skill. See [.agents/invocation.md](./.agents/invocation.md).
 
@@ -17,16 +17,16 @@ Every `SKILL.md` is model-invoked: no skill sets `disable-model-invocation`, and
 
 To (re)link every skill into `~/.claude/skills`, run `scripts/link-skills.sh`. Each entry is a symlink into this repo, so a `git pull` keeps installed skills current; re-run the script after adding, removing, or renaming a skill.
 
-No em-dashes anywhere in this repo's prose (`SKILL.md` files, docs, `README.md`, `CHANGELOG.md`, ADRs, changesets, code comments). Where a sentence reaches for one, rewrite it instead with a comma, colon, period, parentheses, or a conjunction, whichever the sentence actually wants; never do a blind character substitution.
+No em-dashes anywhere in this repo's prose (`SKILL.md` files, docs, `README.md`, `CHANGELOG.md`, ADRs, code comments). Where a sentence reaches for one, rewrite it instead with a comma, colon, period, parentheses, or a conjunction, whichever the sentence actually wants; never do a blind character substitution.
 
-## This fork
+## The hard fork
 
-This repo is `hero-forge`: Álvaro Lillo's fork of `mattpocock/skills`. It started as `hero-pocock`. [ADR 0004](./.agents/adr/0004-hero-pocock-is-a-tailored-fork.md) holds the rules. [ADR 0007](./.agents/adr/0007-hero-forge-is-a-hard-fork.md) supersedes it when hero-forge 1.0.0 ships; until then, the 0.2.x fixes follow ADR 0004. In short:
+This repo is `hero-forge`: Álvaro Lillo's hard fork of `mattpocock/skills`, for Claude Code only. It started as `hero-pocock`. [ADR 0007](./.agents/adr/0007-hero-forge-is-a-hard-fork.md) holds the rules. In short:
 
-- `origin` is `contract-hero/hero-forge`, `upstream` is `mattpocock/skills`. Take upstream by merge (`git merge upstream/main` on a branch), never by rebase.
-- Put tailoring where upstream does not write: hooks under `hooks/`, new ADRs, new skills. Edit an upstream `SKILL.md` only when a hook cannot do the job.
-- `hooks/register.ts` carries Claude-Code-only behaviour so `SKILL.md` files stay harness-neutral ([ADR 0003](./.agents/adr/0003-harness-specific-behaviour-ships-as-a-hook.md)). It matches a skill by plugin name only, so adding, renaming or removing a skill needs no hook edit. Run `claude plugin validate .` and `claude plugin test .` after a change to `hooks/`.
-- Bump `version` in `.claude-plugin/plugin.json` by hand for each change users should get. Never run `npm run version`: it copies Matt's `package.json` version over it.
+- `origin` is `contract-hero/hero-forge`. The `upstream` remote (`mattpocock/skills`) is read-only: never merge it, never rebase onto it. When one of Matt's changes is worth having, port it by hand on a branch of its own.
+- Any skill, Matt's included, may be changed or removed. Write the skills for Claude Code only.
+- `hooks/register.ts` adds the shared ask preamble to every hero-forge skill ([ADR 0003](./.agents/adr/0003-harness-specific-behaviour-ships-as-a-hook.md), for the reason ADR 0007 gives). It matches a skill by plugin name only, so adding, renaming or removing a skill needs no hook edit. Run `claude plugin validate .` and `claude plugin test .` after a change to `hooks/`.
+- The `version` in `.claude-plugin/plugin.json` is the one version. Bump it by hand for each change users should get: Claude Code reinstalls the plugin only when it changes. Record the change in `CHANGELOG.md`.
 
 ## Agent skills
 

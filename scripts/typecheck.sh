@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Strict type-check of the review-pipeline helper CLI.
 #
-# The repo has no dependencies (ADR 0004), so TypeScript and Node's types are
-# installed into a temp prefix, removed on exit, and never into the repo.
+# The repo has no dependencies, so TypeScript and Node's types are installed
+# into a temp prefix, removed on exit, and never into the repo.
 # Node 22 types: the oldest Node the CLI supports.
 #
 # Usage: scripts/typecheck.sh [project-dir]

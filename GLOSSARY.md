@@ -1,4 +1,4 @@
-# Matt Pocock Skills
+# hero-forge
 
 A collection of agent skills (slash commands and behaviors) loaded by Claude Code. Skills are organized into buckets and consumed by per-repo configuration emitted by `/setup-forge`.
 

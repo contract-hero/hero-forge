@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Installer problems with `npx skills` belong at skills.sh.
+        hero-forge runs in Claude Code only, as the `hero-forge@contract-hero` plugin.
   - type: input
     id: skill
     attributes:
@@ -16,8 +16,8 @@ body:
   - type: input
     id: harness
     attributes:
-      label: Harness and version
-      description: e.g. Claude Code 2.3.1, Codex CLI 0.40, Cursor. Say how you installed (plugin or skills.sh) and which skills version.
+      label: Claude Code and plugin version
+      description: e.g. Claude Code 2.1.301 and hero-forge 1.0.0 (`claude plugin list` shows the plugin version).
     validations:
       required: true
   - type: input
