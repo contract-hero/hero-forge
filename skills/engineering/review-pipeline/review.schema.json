@@ -50,6 +50,6 @@
         }
       }
     },
-    "report": { "type": "string", "description": "Kept and dropped counts with reasons, and the failed reviewers." }
+    "report": { "type": "string", "description": "Kept and dropped counts with reasons." }
   }
 }

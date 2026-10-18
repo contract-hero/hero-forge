@@ -27,10 +27,10 @@ Read the sections **Review round**, **Consolidation** and **Posting** of `<skill
 
 1. **Prepare.** Gather the changed files, the standards sources and the spec. Write the 2N reviewer briefs from `<skill dir>/reviewer-brief.md` to `<run dir>/reviewer-p<k>-<standards|spec>.md`, each with its own focus order. If you found no spec, write only the N Standards briefs and no Spec brief: there are N reviewers in this round, and the walkthrough says "no spec available". A Standards brief never says anything about the spec.
 2. **Dispatch.** Start all 2N reviewers (N with no spec) in parallel, in the foreground, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`: start them all at once, and never in the background. Give each one its brief file's contents. Wait until every reviewer is done. A reviewer is done when it returned its final message, when it failed to start, or when it ended with no final message. A reviewer that failed to start or ended with no final message is a failed reviewer for step 3. A reviewer that still runs is not a failed reviewer: keep waiting for it. Do not go to step 3, and do not end your turn, while any reviewer still runs. If you cannot start sub-agents at all, stop here: write `<run dir>/orchestrator-report.md` saying so, and post nothing.
-3. **Collect.** Write each reviewer's final message verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. A missing or unparseable output is a failed reviewer: name it, never invent its findings. If every reviewer failed, post nothing. If the Implementer resumes you with a message that names missing reviewer outputs, continue from this step with the outputs you now have. Do not dispatch again a reviewer that already returned.
+3. **Collect.** Write each reviewer's final message verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. If the message is one JSON object inside one code fence, remove that fence and write only the JSON. Then check every reviewer you had to start: its output must exist, parse as JSON, and match `<skill dir>/findings.schema.json`. If any output is missing or invalid (a failed reviewer, prose, or JSON that breaks the schema), stop: do not consolidate, post nothing, and go to step 6 with the names of those reviewers. Never invent a reviewer's findings. If the Implementer resumes you with a message that names missing reviewer outputs, continue from this step with the outputs you now have. Do not dispatch again a reviewer that already returned.
 4. **Consolidate.** Group, verify against the code at `<head_sha>`, split, and score the findings. Drop what you cannot verify. Write the ledger to `<run dir>/findings.json`.
 5. **Post.** Write the payload to `<run dir>/review-payload.json` and post it once with `post-review --kind review --round <round>`. On a 422, fix the anchor GitHub names (move that finding into the walkthrough) and post once more.
-6. **Report.** Only when every reviewer is done as step 2 says (or after step 2 stopped you), write `<run dir>/orchestrator-report.md`: the post-review output (or why nothing was posted), the kept and dropped counts, and the failed reviewers. Your final message is the same report.
+6. **Report.** Only when every reviewer is done as step 2 says (or after step 2 or step 3 stopped you), write `<run dir>/orchestrator-report.md`: the post-review output, the kept and dropped counts, or why nothing was posted (with the name of each reviewer whose output is missing or invalid). Your final message is the same report.
 
 ## Hard limits
 
@@ -56,19 +56,19 @@ You are the Orchestrator for PR #{{pr}} of {{repo}}, review round {{round}}, on 
 - Review-pipeline skill folder: `{{skill_dir}}`
 - Config: runtime codex, {{pairs}} Reviewer pairs, reviewers on `{{reviewer_model}}` at `{{reviewer_effort}}` effort, you on `{{orchestrator_model}}` at `{{orchestrator_effort}}` effort
 - Spec: {{spec}}
-- Reviewer outputs (each one already matches `findings.schema.json`):
+- Reviewer outputs (`review.ts` checked that each expected one exists and matches `findings.schema.json`):
 {{reviewers}}
 
 ## Steps
 
 Read the sections **Consolidation** and **Posting** of `{{skill_dir}}/SKILL.md` first. Do what they say, with two changes: you write no files, and you do not run `post-review`.
 
-1. **Collect.** Read each reviewer output marked `ok`. Name each `failed` reviewer in the walkthrough; never invent its findings.
+1. **Collect.** Read each reviewer output. Never invent findings that no output holds.
 2. **Consolidate.** Group, verify against the code at `{{head_sha}}`, split, score and anchor. Drop what you cannot verify, with a one-line reason.
 3. **Return.** Your final message is one JSON object that matches `{{skill_dir}}/review.schema.json`:
    - `payload`: the review of **Posting**, with `event` `COMMENT`. Set `start_line` and `start_side` to `null` for a one-line anchor.
    - `ledger`: the entries of `findings.json` from **Consolidation**, with `decision` and `reason` empty.
-   - `report`: the kept and dropped counts with the reasons, and the failed reviewers.
+   - `report`: the kept and dropped counts with the reasons.
 
 `review.ts` checks your object against the schema, moves an anchor that is not in the diff into the walkthrough, writes `review-payload.json`, `findings.json` and `orchestrator-report.md`, and posts the review. An object that breaks the schema posts nothing.
 

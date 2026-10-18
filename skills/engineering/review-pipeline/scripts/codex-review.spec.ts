@@ -289,19 +289,17 @@ test('a layer-mode run tells its Spec reviewers the review mode, and a single-mo
   assert.doesNotMatch(await specBrief(), /Review mode/)
 })
 
-test('a relaunch after a failed Orchestrator reuses each reviewer output for the same brief and runs only the failed ones', async (t) => {
+test('a relaunch after a stopped round reuses each valid reviewer output for the same brief and runs only the failed ones', async (t) => {
   const s = await setup(t, { codex: { routes: [
     { match: 'reviewer-p2-spec', out: null, exit: 1 },
+    { match: 'reviewer-p1-spec', out: `\`\`\`json\n${FINDINGS}\n\`\`\`\n` },
     { match: 'reviewer-p', out: FINDINGS },
-    { match: 'orchestrator-output', out: null, exit: 1 },
+    { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
   ] } })
   const first = await s.review('--issue', '2')
   assert.equal(first.code, 1)
   assert.match(first.stderr, /reviewer-p2-spec failed/)
-  assert.match(first.stderr, /the Orchestrator failed, so nothing was posted/)
-  const brief = (await s.execs()).find((c) => flag(c, '-o').includes('orchestrator-output'))!.stdin
-  assert.match(brief, /reviewer-p2-spec\.json`: failed/)
-  assert.match(brief, /reviewer-p1-spec\.json`: ok/)
+  assert.ok(!(await s.execs()).some((c) => flag(c, '-o').includes('orchestrator-output')))
 
   await writeFile(join(s.dir, 'codex-spec.json'), JSON.stringify({ routes: [
     { match: 'reviewer-p', out: FINDINGS },
@@ -315,11 +313,76 @@ test('a relaunch after a failed Orchestrator reuses each reviewer output for the
   assert.equal(JSON.parse(again.stdout).posted, true)
 })
 
-test('when every reviewer fails, the Orchestrator never runs and nothing is posted', async (t) => {
+test('the reviewer brief asks for bare JSON with no code fence', async (t) => {
+  const s = await setup(t)
+  assert.equal((await s.review('--issue', '2')).code, 0)
+  for (const name of ['p1-standards', 'p2-spec']) {
+    assert.match(await readFile(join(s.runDir, `reviewer-${name}.md`), 'utf8'),
+      /Your final message is the findings JSON object and nothing else: bare JSON, with no code fence around it\./)
+  }
+})
+
+test('a fenced reviewer output is unwrapped and accepted: the Orchestrator reads bare JSON and the review posts', async (t) => {
+  const s = await setup(t, { codex: { routes: [
+    { match: 'reviewer-p1-standards', out: `\`\`\`json\n${FINDINGS}\n\`\`\`\n` },
+    { match: 'reviewer-p', out: FINDINGS },
+    { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
+  ] } })
+  const { code, stdout, stderr } = await s.review('--issue', '2')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.equal(JSON.parse(stdout).posted, true)
+  assert.deepEqual(JSON.parse(await readFile(join(s.runDir, 'reviewer-p1-standards.json'), 'utf8')), JSON.parse(FINDINGS))
+  assert.equal((await s.posts()).length, 1)
+})
+
+// One reviewer's output is missing or invalid: the round stops before the
+// Orchestrator, names that reviewer, and posts nothing.
+for (const [name, broken, why] of [
+  ['missing', { out: null }, /codex exec wrote no output/],
+  ['from a failed codex exec', { out: null, exit: 1 }, /codex exec failed \(exit 1\)/],
+  ['prose', { out: 'No findings here.' }, /is not JSON/],
+  ['prose around a fence', { out: `Here:\n\`\`\`json\n${FINDINGS}\n\`\`\`\n` }, /is not JSON/],
+  ['JSON that breaks the findings schema', { out: '{"axis":"standards","pair":1,"findings":[]}' }, /\$: missing "notes"/],
+] as const) {
+  test(`a reviewer output that is ${name} stops the round, names the reviewer, and posts nothing`, async (t) => {
+    const s = await setup(t, { codex: { routes: [
+      { match: 'reviewer-p2-standards', ...broken },
+      { match: 'reviewer-p', out: FINDINGS },
+      { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
+    ] } })
+    const { code, stdout, stderr } = await s.review('--issue', '2')
+    assert.equal(code, 1)
+    assert.equal(stdout, '')
+    assert.match(stderr, why)
+    assert.match(stderr, /the round stops and nothing was posted: no valid output from reviewer-p2-standards\./)
+    for (const ok of ['p1-standards', 'p1-spec', 'p2-spec']) assert.doesNotMatch(stderr, new RegExp(`reviewer-${ok}`))
+    assert.ok(!(await s.execs()).some((c) => flag(c, '-o').includes('orchestrator-output')))
+    assert.deepEqual(await s.posts(), [])
+    await assert.rejects(access(join(s.runDir, 'review-payload.json')))
+    await assert.rejects(access(join(s.runDir, 'findings.json')))
+    assert.match(await readFile(join(s.runDir, 'orchestrator-report.md'), 'utf8'), /reviewer-p2-standards/)
+  })
+}
+
+test('a spec-less run expects only the Standards reviewers, and stops on a missing one', async (t) => {
+  const s = await setup(t, { codex: { routes: [
+    { match: 'reviewer-p1-standards', out: null },
+    { match: 'reviewer-p', out: FINDINGS },
+    { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
+  ] } })
+  const { code, stderr } = await s.review()
+  assert.equal(code, 1)
+  assert.match(stderr, /no valid output from reviewer-p1-standards\./)
+  assert.doesNotMatch(stderr, /-spec/)
+  assert.deepEqual(await s.posts(), [])
+})
+
+test('when every reviewer fails, the Orchestrator never runs, every reviewer is named, and nothing is posted', async (t) => {
   const s = await setup(t, { codex: { exec: { out: null, exit: 1 } } })
   const { code, stderr } = await s.review()
   assert.equal(code, 1)
-  assert.match(stderr, /every reviewer failed, so nothing was posted/)
+  assert.match(stderr, /no valid output from reviewer-p1-standards, reviewer-p2-standards\./)
   assert.ok(!(await s.execs()).some((c) => flag(c, '-o').includes('orchestrator-output')))
   assert.deepEqual(await s.posts(), [])
 })

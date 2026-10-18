@@ -95,6 +95,10 @@ Run it again on the same PR. The run state records the last completed step and t
 
 On Claude, the Orchestrator starts its reviewers in the foreground and waits for all of them, so this should not happen. If it ends anyway with reviewer outputs missing, the Implementer resumes the same Orchestrator with a message and does not start a new one, because a new one would lose the reviewers that still run. If outputs are still missing after that one resume, the pipeline stops and names the missing reviewers.
 
+**What if a reviewer returns broken output?**
+
+The round stops before any consolidation and posts nothing. The report names each reviewer whose output is missing, is not JSON, or does not match the findings schema. A review that lost one reviewer could look cleaner than it is, so the pipeline never posts a partial one. One code fence around otherwise good JSON is a common slip: it is removed and the output counts. On Codex, a re-run starts only the reviewers that failed and keeps the others.
+
 **Does it post as a bot?**
 
 Only with a reviewer GitHub App. Run `/setup-review-pipeline` and choose the App: the config then has `app: enabled`, and every review, re-check and verdict shows the App's `<slug>[bot]` name. The helper CLI mints the App's token itself for each post, so no agent sees it. Without the App, the reviews post from your own `gh` account as COMMENT reviews, which never approve or block the PR, and the recorded re-check gate decides the merge.

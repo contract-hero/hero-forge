@@ -51,3 +51,17 @@ export function schemaProblem(schema: Schema, value: unknown, at = '$'): string 
   }
   return undefined
 }
+
+// One agent output as JSON: the bare text, or the text inside one code fence
+// that wraps all of it (an optional language tag, whitespace around it). Any
+// other text is not JSON. It returns the value and the JSON text without
+// the fence, or why the text is not JSON.
+export function parseOutput(text: string): { ok: true; value: unknown; json: string } | { ok: false; problem: string } {
+  const fenced = /^\s*```[\w-]*[ \t]*\r?\n([^]*?)\r?\n[ \t]*```\s*$/.exec(text)
+  const json = fenced === null ? text : (fenced[1] as string)
+  try {
+    return { ok: true, value: JSON.parse(json), json }
+  } catch {
+    return { ok: false, problem: 'is not JSON' }
+  }
+}

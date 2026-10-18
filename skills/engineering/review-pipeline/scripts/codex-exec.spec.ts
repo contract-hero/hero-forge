@@ -175,6 +175,36 @@ test('a reviewer whose output is missing or not JSON exits 1', async (t) => {
   assert.match(bad.stderr, /output in .*r\.json is not JSON/)
 })
 
+test('an output in one surrounding code fence is unwrapped, checked, and saved as bare JSON', async (t) => {
+  for (const fenced of [
+    `\`\`\`json\n${FINDINGS}\n\`\`\`\n`,
+    `\n\`\`\`\n${FINDINGS}\n\`\`\``,
+    // CRLF line ends, tagged and untagged.
+    `\`\`\`json\r\n${FINDINGS}\r\n\`\`\`\r\n`,
+    `\`\`\`\r\n${FINDINGS}\r\n\`\`\``,
+  ]) {
+    const { dir, brief, exec } = await setup(t, { spec: { exec: { out: fenced } } })
+    const out = join(dir, 'r.json')
+    const { code, stderr } = await exec('--role', 'reviewer', '--brief', brief, '--out', out)
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    assert.deepEqual(JSON.parse(await readFile(out, 'utf8')), JSON.parse(FINDINGS))
+  }
+})
+
+test('a fence with text around it, or two fences, is not JSON', async (t) => {
+  for (const out of [
+    `Here you go:\n\`\`\`json\n${FINDINGS}\n\`\`\`\n`,
+    `\`\`\`json\n${FINDINGS}\n\`\`\`\nDone.`,
+    `\`\`\`json\n${FINDINGS}\n\`\`\`\n\`\`\`json\n${FINDINGS}\n\`\`\`\n`,
+  ]) {
+    const s = await setup(t, { spec: { exec: { out } } })
+    const bad = await s.exec('--role', 'reviewer', '--brief', s.brief, '--out', join(s.dir, 'r.json'))
+    assert.equal(bad.code, 1, out)
+    assert.match(bad.stderr, /output in .*r\.json is not JSON/)
+  }
+})
+
 test('a config whose runtime is claude refuses to call codex', async (t) => {
   const { dir, codex, brief, exec } = await setup(t, { config: '# Review pipeline\n\n```yaml\nruntime: claude\n```\n' })
   const { code, stdout, stderr } = await exec('--role', 'reviewer', '--brief', brief, '--out', join(dir, 'r.json'))

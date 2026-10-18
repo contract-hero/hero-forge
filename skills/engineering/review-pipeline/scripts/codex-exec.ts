@@ -4,17 +4,18 @@
 // read-only (no writes, no network) and gets an allowlisted environment with an
 // empty HOME, so no gh token or other credential reaches it: the agents read
 // untrusted PR text, so only review.ts itself posts. The brief goes in on
-// stdin; Codex's final message goes to --out and must match --schema; its
-// output goes to --log (default: --out with its extension replaced by .log).
+// stdin; Codex's final message goes to --out and must match --schema (one
+// code fence around it is removed first); its output goes to --log (default:
+// --out with its extension replaced by .log).
 import { spawn, spawnSync } from 'node:child_process'
 import { closeSync, mkdtempSync, openSync, rmSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Failure, parse, runMain, usageFor } from './cli.ts'
 import { loadConfig, type ResolvedConfig } from './config.ts'
-import { schemaProblem } from './schema.ts'
+import { parseOutput, schemaProblem } from './schema.ts'
 
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 export const SCHEMAS = {
@@ -143,12 +144,12 @@ export async function execRole(config: ResolvedConfig, call: CodexCall): Promise
   } catch {
     return { ok: false, message: `codex exec wrote no output to ${outPath}. See ${log}.`, code: 1 }
   }
-  let output: unknown
-  try {
-    output = JSON.parse(text)
-  } catch {
-    return { ok: false, message: `the output in ${outPath} is not JSON. See ${log}.`, code: 1 }
-  }
+  // One code fence around the JSON is a formatting slip, not a failure: the
+  // file keeps only the JSON, so whoever reads it next gets bare JSON.
+  const parsed = parseOutput(text)
+  if (!parsed.ok) return { ok: false, message: `the output in ${outPath} ${parsed.problem}. See ${log}.`, code: 1 }
+  const output = parsed.value
+  if (parsed.json !== text) await writeFile(outPath, `${parsed.json.trim()}\n`)
   const problem = schemaProblem(schema, output)
   if (problem !== undefined) return { ok: false, message: `the output in ${outPath} does not match ${schemaPath}: ${problem}`, code: 1 }
   return { ok: true, role, model, effort, sandbox: SANDBOX, out: outPath, log, output }

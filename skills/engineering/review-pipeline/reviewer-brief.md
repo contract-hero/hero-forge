@@ -51,7 +51,7 @@ Stack version rule: in a stack, only the top layer bumps the plugin or package v
 
 ## Output
 
-Ignore the word limit in the pasted brief: return findings as JSON, not prose. Your final message is one JSON object and nothing else, matching `findings.schema.json` in the review-pipeline skill folder:
+Ignore the word limit in the pasted brief: return findings as JSON, not prose. Your final message is one JSON object and nothing else, matching `findings.schema.json` in the review-pipeline skill folder. Return bare JSON: no prose before or after it, and no code fence around it. The fence below only shows the shape.
 
 ```json
 {
