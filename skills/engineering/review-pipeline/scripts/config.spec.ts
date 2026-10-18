@@ -24,7 +24,7 @@ test('a missing config file exits 3 and points at setup', async (t) => {
   const { code, stdout, stderr } = await runCli(['config', '--config', path])
   assert.equal(code, 3)
   assert.equal(stdout, '')
-  assert.equal(stderr, `review.ts config: no review config at ${path}. Tell the user to run /setup-review-pipeline.\n`)
+  assert.equal(stderr, `review.ts config: no review config at ${path}. Tell the user to run /setup-forge.\n`)
 })
 
 test('a minimal codex file resolves to the codex defaults', async (t) => {
@@ -195,7 +195,7 @@ for (const [name, text, line, reason] of invalid) {
     const { code, stdout, stderr, path } = await config(t, text)
     const where = line === null ? path : `${path}:${line}`
     assert.equal(stdout, '')
-    assert.equal(stderr, `review.ts config: ${where}: ${reason}. Edit the file or re-run /setup-review-pipeline.\n`)
+    assert.equal(stderr, `review.ts config: ${where}: ${reason}. Edit the file or re-run /setup-forge.\n`)
     assert.equal(code, 4)
   })
 }

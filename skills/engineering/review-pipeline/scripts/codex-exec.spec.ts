@@ -119,7 +119,7 @@ test('an output that is JSON but breaks the schema is a failed call', async (t) 
   assert.match(stderr, /does not match .*findings\.schema\.json: \$: missing "notes"/)
 })
 
-const SETUP_HINT = /Codex CLI is missing or broken.*\/setup-review-pipeline/
+const SETUP_HINT = /Codex CLI is missing or broken.*\/setup-forge/
 
 test('a missing codex CLI stops with exit 4 and points at setup', async (t) => {
   const { dir, brief } = await setup(t)
@@ -160,7 +160,7 @@ test('an effort the model rejects exits 1 and points at setup to fix the effort'
   const { code, stderr } = await exec('--role', 'reviewer', '--brief', brief, '--out', join(dir, 'r.json'))
   assert.equal(code, 1)
   assert.match(stderr, /codex exec failed \(exit 1\)/)
-  assert.match(stderr, /Codex rejected reviewer\.effort "xhigh" for model gpt-6\.1-sol\. Fix the effort in docs\/agents\/review\.md or re-run \/setup-review-pipeline\./)
+  assert.match(stderr, /Codex rejected reviewer\.effort "xhigh" for model gpt-6\.1-sol\. Fix the effort in docs\/agents\/review\.md or re-run \/setup-forge\./)
 })
 
 test('a reviewer whose output is missing or not JSON exits 1', async (t) => {
@@ -222,7 +222,7 @@ test('a missing review config exits 3 and points at setup', async (t) => {
     { cwd: dir, env: codex.env },
   )
   assert.equal(code, 3)
-  assert.match(stderr, /\/setup-review-pipeline/)
+  assert.match(stderr, /\/setup-forge/)
 })
 
 test('a brief that does not exist exits 1 without calling codex exec', async (t) => {
