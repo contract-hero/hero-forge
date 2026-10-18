@@ -1,6 +1,6 @@
 # Reviewer brief template
 
-The Orchestrator fills this template once per reviewer: 2N briefs for N pairs, one Standards and one Spec per pair. Replace every `<...>` placeholder and keep only the axis section that applies. Every pair gets the same text except the focus order. Save each filled brief as `<run dir>/reviewer-p<k>-<axis>.md` before dispatching it.
+The Orchestrator fills this template once per reviewer: 2N briefs for N pairs, one Standards and one Spec per pair. With no spec, it writes only the N Standards briefs: a run with no spec has no Spec reviewers. Replace every `<...>` placeholder and keep only the axis section that applies. A Standards brief says nothing about the spec. Every pair gets the same text except the focus order. Save each filled brief as `<run dir>/reviewer-p<k>-<axis>.md` before dispatching it.
 
 ---
 
@@ -48,8 +48,6 @@ Use these categories: `spec-missing` (asked for, missing or partial), `spec-cree
 Review mode: <the run's mode, `layer` or `stack-final`; leave this line out in `single` mode>.
 
 Stack version rule: in a stack, only the top layer bumps the plugin or package version, with one bump for the whole stack. In `layer` mode, do not flag a missing version bump: the `stack-final` review checks the top layer's bump.
-
-If there is no spec, return no findings and put `no spec available` in `notes`.
 
 ## Output
 

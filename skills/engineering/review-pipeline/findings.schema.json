@@ -36,6 +36,6 @@
         }
       }
     },
-    "notes": { "type": "string", "description": "Anything the Orchestrator should know, e.g. no spec available. Empty string if none." }
+    "notes": { "type": "string", "description": "Anything the Orchestrator should know, e.g. a file it could not read. Empty string if none." }
   }
 }

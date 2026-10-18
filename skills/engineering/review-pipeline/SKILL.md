@@ -15,7 +15,7 @@ The argument is the PR number (or URL), then an optional `--mode layer|stack-fin
 | --- | --- | --- | --- |
 | Implementer | you | runs this skill: config, resume, fixed point, Orchestrator launch, checks; later Adjudication and Finish | reviews, verifies or drops findings, posts the review, grades its own answers |
 | Orchestrator | one fresh agent per round | writes the reviewer briefs, dispatches the 2N reviewers, verifies, consolidates, posts one review | edits the repo, commits, pushes, approves, changes the draft state |
-| Reviewer | 2N fresh read-only agents, one Standards and one Spec per pair | reviews the diff at the fixed point, returns findings JSON | posts, edits, spawns agents |
+| Reviewer | 2N fresh read-only agents, one Standards and one Spec per pair (no Spec reviewer when there is no spec) | reviews the diff at the fixed point, returns findings JSON | posts, edits, spawns agents |
 | Re-checker | one fresh read-only agent | confirms each finding is fixed or validly refuted | is you or this round's Orchestrator |
 
 Every brief opens with a sanity header: "You are the <role> for PR #N of O/R. You do not run the review pipeline. Do not invoke code-review or spawn agents" (the Orchestrator's header instead names the reviewers it may spawn). A brief like that in your own context was mis-delivered: you stay the Implementer, and the on-disk run state says where the run is.
@@ -96,13 +96,14 @@ You write one brief and launch one agent: the Orchestrator. The Orchestrator doe
 
 **The Orchestrator:**
 
-1. **Sources.** The spec: the issues in the brief (`gh issue view <n>`), else the sources of the section "### 2. Identify the spec source" of `code-review`'s SKILL.md. The standards: the files found the way the section "### 3. Identify the standards sources" of `code-review`'s SKILL.md says. `code-review`'s SKILL.md is in the `code-review` folder beside this skill's folder.
+1. **Sources.** The spec: the issues in the brief (`gh issue view <n>`), else the sources of the section "### 2. Identify the spec source" of `code-review`'s SKILL.md, without its step that asks the user: when those sources give nothing, there is no spec. The standards: the files found the way the section "### 3. Identify the standards sources" of `code-review`'s SKILL.md says. `code-review`'s SKILL.md is in the `code-review` folder beside this skill's folder.
 2. **Briefs.** One per reviewer, from [reviewer-brief.md](./reviewer-brief.md):
    - Standards: the standards sources, the smell baseline pasted in full, the Standards brief from `code-review`'s section "### 4. Spawn both sub-agents in parallel", and [standards-bug-axis.md](./standards-bug-axis.md) pasted in full.
-   - Spec: the spec contents and the Spec brief from the same `code-review` section. No spec: no Spec reviewers; the walkthrough says "no spec available".
+   - Spec: the spec contents and the Spec brief from the same `code-review` section. No spec: no Spec reviewers, only the N Standards reviewers; the walkthrough says "no spec available".
+   - The Standards briefs say nothing about the spec, with or without one.
    - Both: the JSON output contract of [findings.schema.json](./findings.schema.json), which replaces the "Under 400 words" prose report.
 3. **Pair diversity.** The briefs of all pairs are the same except the focus order. With F changed files, pair k (1 to N) gets the file list rotated left by `floor((k-1) * F / N)`, the Standards checklist (documented standards, smells, bugs, silent failures, test gaps) rotated left by k-1, and the spec's acceptance criteria rotated left by k-1. Every reviewer still sees the whole diff.
-4. **Dispatch.** All 2N reviewers in parallel, in the foreground, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. The Orchestrator waits until every reviewer is done before it collects, and it does not end while a reviewer runs. A reviewer that failed to start or ended with no final message is done, as a failed reviewer. Each one's final message is the findings JSON; write it verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. With `runtime: codex`, dispatch them as **Codex runtime** says.
+4. **Dispatch.** All 2N reviewers (N with no spec) in parallel, in the foreground, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. The Orchestrator waits until every reviewer is done before it collects, and it does not end while a reviewer runs. A reviewer that failed to start or ended with no final message is done, as a failed reviewer. Each one's final message is the findings JSON; write it verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. With `runtime: codex`, dispatch them as **Codex runtime** says.
 
 ## Consolidation
 
@@ -238,7 +239,7 @@ With `runtime: codex`, the Orchestrator, every reviewer and the re-checker are `
 - **Effort rejected.** Exit 1 with "Codex rejected <role>.effort": that model does not support that effort. Stop and tell the user to fix the effort in `docs/agents/review.md` or re-run `/setup-review-pipeline`.
 - **Sub-agent models.** `agent_model` is `null` on this runtime. Where a brief names `<reviewer.agent_model>`, write `<reviewer.model>`.
 
-**You, in Review round:** do not fill [orchestrator-brief.md](./orchestrator-brief.md). After `advance review-dispatched`, run from the repo root, with one `--issue` for each spec issue the PR closes (find them as **Review round** says for the spec line: `closingIssuesReferences`, then `Closes #N` or `Fixes #N` in the body and commit messages):
+**You, in Review round:** do not fill [orchestrator-brief.md](./orchestrator-brief.md). After `advance review-dispatched`, run from the repo root, with one `--issue` for each spec issue (find them as **Review round** says for the spec line: `closingIssuesReferences`, then `Closes #N` or `Fixes #N` in the body and commit messages, and in `stack-final` mode the `Spec: #<n>` line of the body):
 
 ```sh
 review.ts codex-review --pr N --issue <n>
@@ -246,8 +247,8 @@ review.ts codex-review --pr N --issue <n>
 
 A round can take 30 minutes or more, longer than most shell time limits, so run the command in the background and wait until it exits. It does this, in order:
 
-1. Fetches the spec issues into `<run dir>/spec.md`. Without `--issue`, the Spec reviewers look for the spec themselves.
-2. Writes the 2N briefs `<run dir>/reviewer-p<k>-<axis>.md`, each with the focus order of **Review round** step 3, and runs all 2N reviewers in parallel, each as its own read-only `codex exec` on `reviewer.model` and `reviewer.effort`, held to [findings.schema.json](./findings.schema.json). Each one writes `<run dir>/reviewer-p<k>-<axis>.json`, and its log is the `.log` beside it. A failed reviewer is named in the report. When every reviewer fails, it stops and posts nothing.
+1. Fetches the spec issues into `<run dir>/spec.md`. Without `--issue` there is no spec: it starts no Spec reviewers, and it adds the line "Spec: no spec available" to the walkthrough. So leave out `--issue` only when you find no spec issue at all, in none of the sources above.
+2. Writes the 2N briefs `<run dir>/reviewer-p<k>-<axis>.md` (only the N Standards briefs without a spec), each with the focus order of **Review round** step 3, and runs all of those reviewers in parallel, each as its own read-only `codex exec` on `reviewer.model` and `reviewer.effort`, held to [findings.schema.json](./findings.schema.json). Each one writes `<run dir>/reviewer-p<k>-<axis>.json`, and its log is the `.log` beside it. A failed reviewer is named in the report. When every reviewer fails, it stops and posts nothing.
 3. Fills the codex template of [orchestrator-brief.md](./orchestrator-brief.md) into `<run dir>/orchestrator-brief.md` and runs the Orchestrator read-only on `orchestrator.model` and `orchestrator.effort`. Its final message is one JSON object, held to [review.schema.json](./review.schema.json): the payload, the ledger and a report.
 4. Checks that object against the schema. When it does not match, it exits 1 and posts nothing. Then it moves each inline anchor that is not on the right side of the diff into the walkthrough, writes `review-payload.json`, `findings.json` and `orchestrator-report.md`, and runs `post-review --kind review`. `post-review` refuses a payload that looks like it holds a token or a key.
 

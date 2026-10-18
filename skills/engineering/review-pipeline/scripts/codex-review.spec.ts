@@ -232,15 +232,49 @@ test('anchors still match the diff when the user sets diff.noprefix', async (t) 
   assert.doesNotMatch(sent.body, /Findings outside the diff/)
 })
 
-test('without --issue no spec is fetched, and the Spec reviewers look for the spec themselves', async (t) => {
+test('a spec-less run (no --issue) starts only Standards reviewers, and its walkthrough says "no spec available"', async (t) => {
   const s = await setup(t)
   const { code, stderr } = await s.review()
   assert.equal(stderr, '')
   assert.equal(code, 0)
   assert.ok(!(await s.gh.calls()).some((c) => c.argv[0] === 'issue'))
-  const spec = (await s.execs()).find((c) => flag(c, '-o').endsWith('reviewer-p1-spec.json'))
-  assert.match(spec!.stdin, /no spec issue was given/)
   await assert.rejects(access(join(s.runDir, 'spec.md')))
+  const execs = await s.execs()
+  const reviewers = execs.filter((c) => flag(c, '-o').includes('reviewer-p')).map((c) => flag(c, '-o')).sort()
+  assert.deepEqual(reviewers, ['p1-standards', 'p2-standards'].map((n) => join(s.runDir, `reviewer-${n}.json`)))
+  await assert.rejects(access(join(s.runDir, 'reviewer-p1-spec.md')))
+  const orchestrator = execs.find((c) => flag(c, '-o').includes('orchestrator-output'))!.stdin
+  assert.match(orchestrator, /- Spec: none\. No spec issue was given, so no Spec reviewers ran/)
+  assert.doesNotMatch(orchestrator, /reviewer-p\d-spec/)
+  const sent = JSON.parse((await s.posts())[0]!.stdin)
+  assert.match(sent.body, /^## Review pipeline: round 1\n\nSpec: no spec available \(no spec issue was given, so no Spec reviewers ran\)\.\n/)
+})
+
+test('no Standards brief contains spec-handling text, with or without a spec', async (t) => {
+  for (const issue of [[], ['--issue', '2']]) {
+    const s = await setup(t)
+    const { code, stderr } = await s.review(...issue)
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    for (const k of [1, 2]) {
+      // The skill and run dir paths are the checkout's, and may hold "spec" by chance.
+      const brief = (await readFile(join(s.runDir, `reviewer-p${k}-standards.md`), 'utf8'))
+        .replaceAll(SKILL, '<skill>').replaceAll(s.runDir, '<run dir>')
+      assert.match(brief, /Standards reviewer of pair/)
+      assert.doesNotMatch(brief, /spec|acceptance criteria|review mode/i, `pair ${k}, ${issue.length === 0 ? 'no spec' : 'spec'}`)
+    }
+  }
+})
+
+test('with a spec, the Spec briefs carry the spec and its acceptance criteria, and the walkthrough has no "no spec" line', async (t) => {
+  const s = await setup(t)
+  const { code, stderr } = await s.review('--issue', '2')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const brief = await readFile(join(s.runDir, 'reviewer-p2-spec.md'), 'utf8')
+  assert.match(brief, /^- Spec: the issues in `.*spec\.md`\. Read that file: it is the spec contents\.$/m)
+  assert.match(brief, /^- Acceptance criteria, in your focus order: .*starting at criterion number \(\(2 - 1\) mod C\) \+ 1/m)
+  assert.doesNotMatch(JSON.parse((await s.posts())[0]!.stdin).body, /no spec available/)
 })
 
 test('a layer-mode run tells its Spec reviewers the review mode, and a single-mode run does not', async (t) => {
@@ -261,7 +295,7 @@ test('a relaunch after a failed Orchestrator reuses each reviewer output for the
     { match: 'reviewer-p', out: FINDINGS },
     { match: 'orchestrator-output', out: null, exit: 1 },
   ] } })
-  const first = await s.review()
+  const first = await s.review('--issue', '2')
   assert.equal(first.code, 1)
   assert.match(first.stderr, /reviewer-p2-spec failed/)
   assert.match(first.stderr, /the Orchestrator failed, so nothing was posted/)
@@ -274,7 +308,7 @@ test('a relaunch after a failed Orchestrator reuses each reviewer output for the
     { match: 'orchestrator-output', out: JSON.stringify(OUTPUT) },
   ] }))
   const before = (await s.execs()).length
-  const again = await s.review()
+  const again = await s.review('--issue', '2')
   assert.equal(again.code, 0, again.stderr)
   const rerun = (await s.execs()).slice(before).map((c) => flag(c, '-o').split('/').pop())
   assert.deepEqual(rerun, ['reviewer-p2-spec.json', 'orchestrator-output.json'])
