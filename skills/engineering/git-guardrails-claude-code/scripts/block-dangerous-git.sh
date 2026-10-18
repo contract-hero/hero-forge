@@ -18,8 +18,7 @@ VALUE="(\"[^\"]*\"|'[^']*'|[^ ]+)"
 GLOBAL="-[Cc] ?$VALUE|--(git-dir|work-tree|namespace|super-prefix|exec-path|config-env) $VALUE|--[a-z-]+(=$VALUE)?|-p|-P"
 ONE_LINE=$(printf '%s' "$COMMAND" | tr '\t\n' '  ' | tr -s ' ')
 
-# The shell drops quotes and backslashes before git reads its arguments, so
-# `git "reset" \--hard` is `git reset --hard`.
+# The shell drops quotes and backslashes before git reads its arguments.
 unquote() { tr -d "\"'\\\\" | tr -s ' '; }
 
 # `[^;&|]*` keeps a match inside one command of a `&&` or `;` chain.
@@ -43,15 +42,15 @@ expand_prefixes() {
     -e 'ta'
 }
 
-# Strip the global options again after unquoting, for a quoted option name
-# (`git "-C" . push`).
-strip_globals() { sed -E "s/git( ($GLOBAL))+ /git /g"; }
-NORMALIZED=$(printf '%s' "$ONE_LINE" | strip_globals | unquote | strip_globals | expand_prefixes)
+# The text view keeps the quotes, so a blocked command inside quoted text
+# (`sh -c 'git push'`) still matches.
+NORMALIZED=$(printf '%s' "$ONE_LINE" | sed -E "s/git( ($GLOBAL))+ /git /g" | expand_prefixes)
 
-# The same command split into words the way the shell splits it: quotes group
-# a word, a backslash escapes the next character, and ; & | ( ) end a word. A
-# space inside a word becomes \001, so a quoted option value
-# (`git "-C" "/tmp/a b" push`) stays one word when the global options go.
+# The word view splits the command the way the shell does: quotes group a
+# word, a backslash escapes the next character, and ; & | ( ) end a word, so
+# `git "reset" \--hard` is `git reset --hard`. A space inside a word becomes
+# \001: a quoted option value (`git "-C" "/tmp/a b" push`) stays one word when
+# the global options go, and a quoted message never reads as a command.
 shell_words() {
   local s=$1 out='' word='' quote='' c i
   for ((i = 0; i < ${#s}; i++)); do

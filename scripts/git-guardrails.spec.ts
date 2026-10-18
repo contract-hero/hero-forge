@@ -105,6 +105,7 @@ const ALLOWED = [
   'git log --oneline',
   'git diff',
   'git commit -m "push the button"',
+  `git commit -m 'guard git "push" commands'`,
   'git branch -d merged-topic',
   'git branch --del merged-topic',
   'git branch --delete merged-topic',
