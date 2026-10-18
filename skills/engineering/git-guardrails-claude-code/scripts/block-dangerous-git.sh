@@ -25,10 +25,11 @@ unquote() { tr -d "\"'\\\\" | tr -s ' '; }
 # `[^;&|]*` keeps a match inside one command of a `&&` or `;` chain.
 ARGS="( [^;&|]*)?"
 
-# An alias defined inline (`git -c alias.p=push p`) can run any blocked
-# command under a name no pattern knows.
-if printf '%s' "$ONE_LINE" | unquote | grep -qE "git$ARGS (-c ?|--config-env[ =])alias\."; then
-  block "'$COMMAND' defines a git alias inline."
+# An alias defined inline (`git -c alias.p=push p`), or loaded by an include,
+# can run any blocked command under a name no pattern knows. Git config
+# section names ignore case.
+if printf '%s' "$ONE_LINE" | unquote | grep -qiE "git$ARGS (-c ?|--config-env[ =])(alias|include|includeif)\."; then
+  block "'$COMMAND' defines a git alias or include inline."
 fi
 
 # Git takes a long option by any unique prefix, so `--fo` is `--force` and
@@ -42,7 +43,11 @@ expand_prefixes() {
     -e 'ta'
 }
 
-NORMALIZED=$(printf '%s' "$ONE_LINE" | sed -E "s/git( ($GLOBAL))+ /git /g" | unquote | expand_prefixes)
+# Strip the global options again after unquoting, for a quoted option name
+# (`git "-C" . push`).
+strip_globals() { sed -E "s/git( ($GLOBAL))+ /git /g"; }
+NORMALIZED=$(printf '%s' "$ONE_LINE" | strip_globals | unquote | strip_globals | expand_prefixes)
+
 DANGEROUS_PATTERNS=(
   "git push"
   "git reset$ARGS --ha"

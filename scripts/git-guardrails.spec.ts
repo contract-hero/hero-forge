@@ -79,11 +79,18 @@ const BLOCKED = [
   'git "reset" --hard',
   "git 'push' origin main",
   'git -C "/tmp/a b" "push"',
+  'git "-C" . push',
+  'git "--no-pager" "push"',
   // An alias defined inline can run any git command.
   "git -c alias.x='push --force' x",
   'git -c alias.p=push p',
   'git -calias.p=push p',
   'git --no-pager -c alias.p=push p',
+  // Git config section names ignore case, and an include can load an alias.
+  'git -c ALIAS.p=push p',
+  'git -c Alias.p=push p',
+  'git -c include.path=/tmp/aliases p',
+  'git -c includeIf.onbranch:main.path=/tmp/aliases p',
 ]
 
 const ALLOWED = [
