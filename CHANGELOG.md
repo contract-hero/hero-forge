@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.1
+
+- `git-guardrails-claude-code`: the hook also blocks quoted or escaped forms (`git "reset" \--hard`), abbreviated long options (`git clean --fo`, `git branch --del --forc x`) and any inline `git -c alias.*=`. `SKILL.md` now says the hook guards against accidents, not a hostile agent.
+
 ## 1.0.0
 
 hero-forge is the hard fork of mattpocock/skills that replaces the `hero-pocock` plugin ([ADR 0007](./.agents/adr/0007-hero-forge-is-a-hard-fork.md)). It is a clean break: nothing reads the old names.

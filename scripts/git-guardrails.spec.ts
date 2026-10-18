@@ -63,6 +63,27 @@ const BLOCKED = [
   'git checkout .',
   'git restore .',
   'cd /tmp && git push',
+  // Git takes a long option by any unique prefix.
+  'git push --fo',
+  'git push --forc',
+  'git clean --fo',
+  'git clean --f',
+  'git branch --del --force topic',
+  'git branch --del -f topic',
+  'git branch -d --forc topic',
+  // Quotes and backslashes are gone by the time git reads its arguments.
+  'git push "--force"',
+  'git push \\--force',
+  'git reset "--hard"',
+  'git reset \\--hard',
+  'git "reset" --hard',
+  "git 'push' origin main",
+  'git -C "/tmp/a b" "push"',
+  // An alias defined inline can run any git command.
+  "git -c alias.x='push --force' x",
+  'git -c alias.p=push p',
+  'git -calias.p=push p',
+  'git --no-pager -c alias.p=push p',
 ]
 
 const ALLOWED = [
@@ -71,6 +92,11 @@ const ALLOWED = [
   'git diff',
   'git commit -m "push the button"',
   'git branch -d merged-topic',
+  'git branch --del merged-topic',
+  'git branch --delete merged-topic',
+  'git branch --format=%(refname)',
+  'git log --format="%h %s"',
+  'git -c core.editor=vim commit',
   'git clean -n',
   'git clean -dn',
   'git checkout main',

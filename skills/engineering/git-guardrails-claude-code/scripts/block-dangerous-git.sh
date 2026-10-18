@@ -16,11 +16,33 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/nul
 # joined (-C/tmp), separate, or quoted.
 VALUE="(\"[^\"]*\"|'[^']*'|[^ ]+)"
 GLOBAL="-[Cc] ?$VALUE|--(git-dir|work-tree|namespace|super-prefix|exec-path|config-env) $VALUE|--[a-z-]+(=$VALUE)?|-p|-P"
-NORMALIZED=$(printf '%s' "$COMMAND" | tr '\t\n' '  ' | tr -s ' ' | sed -E "s/git( ($GLOBAL))+ /git /g")
+ONE_LINE=$(printf '%s' "$COMMAND" | tr '\t\n' '  ' | tr -s ' ')
 
-# `[^;&|]*` keeps a match inside one command of a `&&` or `;` chain. Git takes
-# a long option by any unique prefix, so `--ha` is `--hard`.
+# The shell drops quotes and backslashes before git reads its arguments, so
+# `git "reset" \--hard` is `git reset --hard`.
+unquote() { tr -d "\"'\\\\" | tr -s ' '; }
+
+# `[^;&|]*` keeps a match inside one command of a `&&` or `;` chain.
 ARGS="( [^;&|]*)?"
+
+# An alias defined inline (`git -c alias.p=push p`) can run any blocked
+# command under a name no pattern knows.
+if printf '%s' "$ONE_LINE" | unquote | grep -qE "git$ARGS (-c ?|--config-env[ =])alias\."; then
+  block "'$COMMAND' defines a git alias inline."
+fi
+
+# Git takes a long option by any unique prefix, so `--fo` is `--force` and
+# `--del` is `--delete`. A prefix git finds ambiguous fails in git anyway.
+# `--ha` is `--hard` through the reset pattern below.
+expand_prefixes() {
+  sed -E \
+    -e ':a' \
+    -e 's/(^| )--f(o|or|orc)?( |[;&|]|$)/\1--force\3/' \
+    -e 's/(^| )--d(e|el|ele|elet)?( |[;&|]|$)/\1--delete\3/' \
+    -e 'ta'
+}
+
+NORMALIZED=$(printf '%s' "$ONE_LINE" | sed -E "s/git( ($GLOBAL))+ /git /g" | unquote | expand_prefixes)
 DANGEROUS_PATTERNS=(
   "git push"
   "git reset$ARGS --ha"
