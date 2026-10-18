@@ -17,11 +17,14 @@ function files(dir: string): string[] {
   })
 }
 
-test('no file under skills/ names hero-pocock', () => {
+// The old plugin name, built from parts so that this file does not name it.
+const OLD_NAME = new RegExp(['hero', 'pocock'].join('-'), 'i')
+
+test('no file under skills/ names the old plugin', () => {
   const hits = files(join(REPO, 'skills')).flatMap((file) =>
     readFileSync(file, 'utf8')
       .split('\n')
-      .flatMap((line, index) => (/hero-pocock/i.test(line) ? [`${relative(REPO, file)}:${index + 1}: ${line.trim()}`] : [])),
+      .flatMap((line, index) => (OLD_NAME.test(line) ? [`${relative(REPO, file)}:${index + 1}: ${line.trim()}`] : [])),
   )
   assert.deepEqual(hits, [])
 })

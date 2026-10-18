@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import { appKey, baseEnv, fakeGitHubApi, runCli, tempDir, type FakeApiRoute } from './test-helpers.ts'
 
@@ -178,12 +179,26 @@ test('the old App env names and the LFG_ credentials are ignored: the hero-forge
   assert.deepEqual(s.api.requests, [])
 })
 
-test('the old HERO_POCOCK_GITHUB_API_URL is ignored', async (t) => {
+test('the old HERO_POCOCK_GITHUB_API_URL is ignored, also when HERO_FORGE_GITHUB_API_URL is unset', async (t) => {
   const s = await setup(t, { env: (dir) => `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${join(dir, 'reviewer-app.pem')}\n` })
-  const env = { ...baseEnv(), HERO_FORGE_REVIEWER_APP_ENV: s.envFile, HERO_POCOCK_GITHUB_API_URL: s.api.url }
+  // With no HERO_FORGE_GITHUB_API_URL the CLI uses its default endpoint. A
+  // preload stubs fetch in the child so that call fails at once and never
+  // reaches the real api.github.com.
+  const preload = join(dirname(s.envFile), 'no-default-api.mjs')
+  await writeFile(
+    preload,
+    "const real = globalThis.fetch\nglobalThis.fetch = (url, init) => String(url).startsWith('https://api.github.com/') ? Promise.reject(new Error('stubbed default endpoint')) : real(url, init)\n",
+  )
+  const env: Record<string, string | undefined> = {
+    ...baseEnv(),
+    HERO_FORGE_REVIEWER_APP_ENV: s.envFile,
+    HERO_POCOCK_GITHUB_API_URL: s.api.url,
+    NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+  }
+  delete env.HERO_FORGE_GITHUB_API_URL
   const { code, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, '--check'], { env })
   assert.equal(code, 4)
-  assert.match(stderr, /find the App installation: cannot reach the GitHub API at http:\/\/127\.0\.0\.1:9/)
+  assert.match(stderr, /find the App installation: cannot reach the GitHub API at https:\/\/api\.github\.com/)
   assert.deepEqual(s.api.requests, [])
 })
 
