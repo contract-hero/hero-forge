@@ -48,6 +48,40 @@ expand_prefixes() {
 strip_globals() { sed -E "s/git( ($GLOBAL))+ /git /g"; }
 NORMALIZED=$(printf '%s' "$ONE_LINE" | strip_globals | unquote | strip_globals | expand_prefixes)
 
+# The same command split into words the way the shell splits it: quotes group
+# a word, a backslash escapes the next character, and ; & | ( ) end a word. A
+# space inside a word becomes \001, so a quoted option value
+# (`git "-C" "/tmp/a b" push`) stays one word when the global options go.
+shell_words() {
+  local s=$1 out='' word='' quote='' c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    if [[ -n $quote && $c == "$quote" ]]; then
+      quote=''
+    elif [[ $quote != "'" && $c == '\' ]]; then
+      i=$((i + 1))
+      c=${s:i:1}
+      word+=${c/ /$'\001'}
+    elif [[ -n $quote ]]; then
+      word+=${c/ /$'\001'}
+    elif [[ $c == "'" || $c == '"' ]]; then
+      quote=$c
+    elif [[ $c == ' ' ]]; then
+      out+=" $word"
+      word=''
+    elif [[ $c == [\;\&\|\(\)] ]]; then
+      out+=" $word $c"
+      word=''
+    else
+      word+=$c
+    fi
+  done
+  printf '%s' "$out $word" | tr -s ' ' | sed -E 's/^ //; s/ $//'
+}
+
+WORD_GLOBAL="-[Cc] ?[^ ]+|--(git-dir|work-tree|namespace|super-prefix|exec-path|config-env) [^ ]+|--[a-z-]+(=[^ ]+)?|-p|-P"
+WORDS=$(shell_words "$ONE_LINE" | sed -E "s/git( ($WORD_GLOBAL))+ /git /g" | expand_prefixes)
+
 DANGEROUS_PATTERNS=(
   "git push"
   "git reset$ARGS --ha"
@@ -63,7 +97,7 @@ DANGEROUS_PATTERNS=(
 )
 
 for pattern in "${DANGEROUS_PATTERNS[@]}"; do
-  if printf '%s' "$NORMALIZED" | grep -qE "$pattern"; then
+  if printf '%s\n%s' "$NORMALIZED" "$WORDS" | grep -qE "$pattern"; then
     block "'$COMMAND' matches dangerous pattern '$pattern'."
   fi
 done

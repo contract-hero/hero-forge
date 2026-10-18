@@ -81,6 +81,13 @@ const BLOCKED = [
   'git -C "/tmp/a b" "push"',
   'git "-C" . push',
   'git "--no-pager" "push"',
+  'git "-C" "/tmp/a b" push',
+  'git "-C/tmp/a b" push',
+  "git '-C' '/tmp/a b' 'push'",
+  'git -C /tmp/a\\ b push',
+  // Quoted text can be a command another shell runs, so the hook checks it.
+  "sh -c 'git push'",
+  'bash -c "git reset --hard"',
   // An alias defined inline can run any git command.
   "git -c alias.x='push --force' x",
   'git -c alias.p=push p',
