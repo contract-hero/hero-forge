@@ -23,13 +23,14 @@ claude plugin install hero-forge@contract-hero
 
 Updates itself when the marketplace has auto-update on. If `mattpocock-skills` is also installed, uninstall it (`claude plugin uninstall mattpocock-skills`): both plugins ship the same skills.
 
-### 2. Run `/setup-matt-pocock-skills`
+### 2. Run `/setup-forge`
 
 In your agent, run it once per repo. It will:
 
 - Ask you which issue tracker you want to use (GitHub, GitLab, local files, or anything else you describe)
 - Ask you what labels you apply to tickets when you triage them (`/triage` uses labels)
 - Ask you where you want to save any docs we create
+- Ask you how pull requests get reviewed (`/review-pipeline`): the runtime, the number of reviewer pairs, the models, the round limit, and whether a reviewer GitHub App posts the reviews
 
 ### 3. Bam - you're ready to go.
 
@@ -156,11 +157,11 @@ Every skill is model-invoked: you can type it (e.g. `/grill-me`), or the agent s
 
 Skills I use daily for code work.
 
-- **[ask-matt](./skills/engineering/ask-matt/SKILL.md)**: Ask which skill or flow fits your situation. A router over the skills in this repo.
+- **[ask-forge](./skills/engineering/ask-forge/SKILL.md)**: Ask which skill or flow fits your situation. A router over the skills in this repo.
 - **[grill-with-docs](./skills/engineering/grill-with-docs/SKILL.md)**: Grilling session that also builds your project's domain model, sharpening terminology and updating `GLOSSARY.md` and ADRs inline.
 - **[triage](./skills/engineering/triage/SKILL.md)**: Move issues through a state machine of triage roles.
 - **[improve-codebase-architecture](./skills/engineering/improve-codebase-architecture/SKILL.md)**: Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
-- **[setup-matt-pocock-skills](./skills/engineering/setup-matt-pocock-skills/SKILL.md)**: Configure this repo for the engineering skills (issue tracker, triage labels, domain doc layout). Run once per repo before using the other engineering skills.
+- **[setup-forge](./skills/engineering/setup-forge/SKILL.md)**: Configure this repo for the engineering skills in one run: issue tracker, triage labels, domain doc layout, and how it reviews pull requests (runtime, number of reviewer pairs, model and effort per role, round limit, reviewer App), written to `docs/agents/`. Run once per repo before using the other engineering skills; re-run one part alone when it changes.
 - **[to-spec](./skills/engineering/to-spec/SKILL.md)**: Turn the current conversation into a spec and publish it to the issue tracker. No interview, just synthesizes what you've already discussed.
 - **[to-tickets](./skills/engineering/to-tickets/SKILL.md)**: Break any plan, spec, or conversation into a set of tracer-bullet tickets, each declaring its blocking edges, written as text in a local file, or as native blocking links on a real tracker.
 - **[wayfinder](./skills/engineering/wayfinder/SKILL.md)**: Plan a huge chunk of work, more than one agent session can hold, as a shared map of decision tickets on the issue tracker, and resolve them one at a time until the way to the destination is clear.
@@ -172,10 +173,9 @@ Skills I use daily for code work.
 - **[domain-modeling](./skills/engineering/domain-modeling/SKILL.md)**: Actively build and sharpen a project's domain model: challenge terms against the glossary, stress-test with edge-case scenarios, and update `GLOSSARY.md` and ADRs inline.
 - **[codebase-design](./skills/engineering/codebase-design/SKILL.md)**: Shared discipline and vocabulary for designing deep modules: a lot of behaviour behind a small interface, placed at a clean seam, testable through that interface.
 - **[code-review](./skills/engineering/code-review/SKILL.md)**: Two-axis review of the diff since a fixed point: **Standards** (does it follow the repo's coding standards, plus a Fowler smell baseline?) and **Spec** (does it faithfully implement the originating issue/spec?), run as parallel sub-agents so neither pollutes the other.
-- **[review-pipeline](./skills/engineering/review-pipeline/SKILL.md)**: Take one pull request through an independent review: an Orchestrator runs Reviewer pairs (Standards with a bug axis, plus Spec), verifies and consolidates their findings, and posts one GitHub review with inline suggestions. Configure it once with `/setup-review-pipeline`.
-- **[setup-review-pipeline](./skills/engineering/setup-review-pipeline/SKILL.md)**: Configure how this repo reviews pull requests (runtime, number of reviewer pairs, model and effort per role, round limit, reviewer App) and write it to `docs/agents/review.md`. Run once per repo before the first review-pipeline run.
-- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd` at pre-agreed seams, open a draft pull request whose body follows `/pr` and closes the ticket, then hand the PR to `/review-pipeline` for review and merge. Needs `/setup-review-pipeline` first. Starts when you or an agent hands it a ready ticket to build.
-- **[implement-spec-stack](./skills/engineering/implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket along the `blocked_by` graph. Each layer goes through `/review-pipeline` against its parent layer, then one final review of the whole stack runs against the spec, and the stack lands bottom-up by squash merge. Needs `/setup-review-pipeline` first. Starts when you or an agent hands it a spec with ready tickets to build.
+- **[review-pipeline](./skills/engineering/review-pipeline/SKILL.md)**: Take one pull request through an independent review: an Orchestrator runs Reviewer pairs (Standards with a bug axis, plus Spec), verifies and consolidates their findings, and posts one GitHub review with inline suggestions. Configure it once with `/setup-forge`.
+- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd` at pre-agreed seams, open a draft pull request whose body follows `/pr` and closes the ticket, then hand the PR to `/review-pipeline` for review and merge. Needs `/setup-forge` first. Starts when you or an agent hands it a ready ticket to build.
+- **[implement-spec-stack](./skills/engineering/implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket along the `blocked_by` graph. Each layer goes through `/review-pipeline` against its parent layer, then one final review of the whole stack runs against the spec, and the stack lands bottom-up by squash merge. Needs `/setup-forge` first. Starts when you or an agent hands it a spec with ready tickets to build.
 - **[pr](./skills/engineering/pr/SKILL.md)**: The shape a pull request body should take: a summary as the smallest visual that makes the change clear, before/after evidence that it works, and a merge-danger call (one-way or two-way door, plus blast radius).
 - **[wizard](./skills/engineering/wizard/SKILL.md)**: Generate an interactive bash wizard that walks a human through steps only they can perform: provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover.
 - **[git-guardrails-claude-code](./skills/engineering/git-guardrails-claude-code/SKILL.md)**: Set up Claude Code hooks to block dangerous git commands (push, reset --hard, clean, branch -D, and more) before they execute.

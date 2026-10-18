@@ -16,7 +16,7 @@ const cases = [
   ['a skill moved into productivity/ gets the general addendum only', { skill: `${PLUGIN}:loop-me`, source: 'plugin', pluginName: PLUGIN }, ASK],
   ['an agent starting implement-pr through the Skill tool gets the general addendum only', { skill: `${PLUGIN}:implement-pr`, source: 'plugin', pluginName: PLUGIN }, ASK],
   ['an agent starting implement-spec-stack through the Skill tool gets the general addendum only', { skill: `${PLUGIN}:implement-spec-stack`, source: 'plugin', pluginName: PLUGIN }, ASK],
-  ['an agent starting setup-review-pipeline through the Skill tool gets the general addendum only', { skill: `${PLUGIN}:setup-review-pipeline`, source: 'plugin', pluginName: PLUGIN }, ASK],
+  ['an agent starting setup-forge through the Skill tool gets the general addendum only', { skill: `${PLUGIN}:setup-forge`, source: 'plugin', pluginName: PLUGIN }, ASK],
   ["another plugin's skill of the same name is left alone", { skill: 'grilling', source: 'plugin', pluginName: 'someone-else' }, ''],
   ["another plugin's namespaced grilling is left alone", { skill: 'mattpocock-skills:grilling', source: 'plugin', pluginName: 'mattpocock-skills' }, ''],
   ['a loose grilling in the user skills folder is left alone', { skill: 'grilling', source: 'userSettings' }, ''],

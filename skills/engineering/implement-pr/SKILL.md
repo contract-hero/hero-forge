@@ -14,7 +14,7 @@ The helper CLI lives in the `review-pipeline` skill folder, a sibling of the fol
 Run `review.ts config` before anything else.
 
 - Exit 0: continue.
-- Exit 3 (no `docs/agents/review.md`) or exit 4 (the file is invalid): show the message, tell the user to run `/setup-review-pipeline`, and stop. Build nothing.
+- Exit 3 (no `docs/agents/review.md`) or exit 4 (the file is invalid): show the message, tell the user to run `/setup-forge`, and stop. Build nothing.
 - Any other failure (for example, Node is older than 22.18): show the message and stop.
 
 ## 2. Fetch the ticket

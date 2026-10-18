@@ -210,7 +210,7 @@ export async function loadConfig(
     text = await readFile(file, 'utf8')
   } catch (error) {
     if ((error as { code?: string }).code === 'ENOENT') {
-      return { ok: false, code: 3, message: `no review config at ${file}. Tell the user to run /setup-review-pipeline.` }
+      return { ok: false, code: 3, message: `no review config at ${file}. Tell the user to run /setup-forge.` }
     }
     return { ok: false, code: 1, message: `cannot read ${file}: ${(error as Error).message}` }
   }
@@ -219,7 +219,7 @@ export async function loadConfig(
   } catch (error) {
     if (!(error instanceof Invalid)) throw error
     const where = error.line === undefined ? file : `${file}:${error.line}`
-    return { ok: false, code: 4, message: `${where}: ${error.message}. Edit the file or re-run /setup-review-pipeline.` }
+    return { ok: false, code: 4, message: `${where}: ${error.message}. Edit the file or re-run /setup-forge.` }
   }
 }
 

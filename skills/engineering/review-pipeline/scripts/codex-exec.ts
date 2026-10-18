@@ -99,7 +99,7 @@ export async function checkCodex(config: ResolvedConfig): Promise<{ message: str
   if (version.error !== undefined || version.status !== 0) {
     const why = version.error?.message ?? (version.stderr.trim() || `codex --version exited ${version.status}`)
     return {
-      message: `the Codex CLI is missing or broken (${why}). Install or repair codex, or re-run /setup-review-pipeline to pick runtime claude.`,
+      message: `the Codex CLI is missing or broken (${why}). Install or repair codex, or re-run /setup-forge to pick runtime claude.`,
       code: 4,
     }
   }
@@ -134,7 +134,7 @@ export async function execRole(config: ResolvedConfig, call: CodexCall): Promise
     let message = `codex exec failed (exit ${status}). See ${log}.`
     const text = await readFile(log, 'utf8').catch(() => '')
     if (text.includes('unsupported_value') && text.includes('reasoning.effort')) {
-      message += ` Codex rejected ${role}.effort "${effort}" for model ${model}. Fix the effort in docs/agents/review.md or re-run /setup-review-pipeline.`
+      message += ` Codex rejected ${role}.effort "${effort}" for model ${model}. Fix the effort in docs/agents/review.md or re-run /setup-forge.`
     }
     return { ok: false, message, code: 1 }
   }
