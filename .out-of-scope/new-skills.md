@@ -8,14 +8,16 @@ The catalog is the set of skills I use myself every day, and it's deliberately s
 
 The rule I apply to my own ideas applies here too: if you can compose the behaviour from existing skills, it doesn't get a new skill. Most proposals are a specific workflow built out of grilling, `to-spec`, `to-tickets`, `implement-pr` and friends, and that composition belongs in your own prompts or your own skills.
 
-You're very welcome to publish a skill yourself. skills.sh makes that straightforward, and nothing here needs to know about it.
+You're very welcome to publish a skill yourself. Put it in your own `~/.claude/skills` folder, or ship it as a Claude Code plugin of your own. Nothing here needs to know about it.
 
 This covers *new* skills only. A concrete failure in an existing skill is judged against the bar in [`SCOPE.md`](../SCOPE.md) like any other issue.
 
 ## Prior requests
 
-- #101: "Any skill to iteratively build CONTEXT.md (and ADRs) for a brownfield codebase?"
-- #414: "Add a `handoff-to-pro` skill for generating one-shot prompts for external frontier chat models"
-- #727: "new skill - teach pr"
-- #1051: "Contribution ready: /red-team, the optional pre-implementation spec review from #633"
-- #1166: "Skill proposal: agent-chat-ux for productivity (branch ready on fork)"
+These were filed on `mattpocock/skills`, before the hard fork.
+
+- mattpocock/skills#101: "Any skill to iteratively build CONTEXT.md (and ADRs) for a brownfield codebase?"
+- mattpocock/skills#414: "Add a `handoff-to-pro` skill for generating one-shot prompts for external frontier chat models"
+- mattpocock/skills#727: "new skill - teach pr"
+- mattpocock/skills#1051: "Contribution ready: /red-team, the optional pre-implementation spec review from #633"
+- mattpocock/skills#1166: "Skill proposal: agent-chat-ux for productivity (branch ready on fork)"
