@@ -13,7 +13,7 @@ Reach for it when the build is too big for one agent [session](https://www.aiher
 | Where you are | What to run |
 | --- | --- |
 | You haven't decided anything yet | [grill-with-docs](https://aihero.dev/skills-grill-with-docs) first |
-| Decided, and the work fits one [context window](https://www.aihero.dev/ai-coding-dictionary/context-window) | [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) on a single ticket: skip the spec |
+| Decided, and the work fits one [context window](https://www.aihero.dev/ai-coding-dictionary/context-window) | [implement-pr](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-pr.md) on a single ticket: skip the spec |
 | Decided, and the work spans several sessions | `/to-spec`, then [to-tickets](https://aihero.dev/skills-to-tickets) |
 | A [wayfinder](https://aihero.dev/skills-wayfinder) map has cleared | `/to-spec #<map_issue>` |
 
@@ -78,4 +78,4 @@ A tracker issue may not return a very large spec in full, and there is no local 
 grill-with-docs → to-spec → to-tickets → implement-pr → review-pipeline → retro
 ```
 
-Upstream, [grill-with-docs](https://aihero.dev/skills-grill-with-docs) makes the decisions that this skill only records, and a finished [wayfinder](https://aihero.dev/skills-wayfinder) map joins the chain here. Downstream, [to-tickets](https://aihero.dev/skills-to-tickets) cuts the spec into tracer-bullet tickets for [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) or [implement-spec-stack](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-spec-stack.md) to build. When you're unsure which skill or flow fits, [ask-matt](https://aihero.dev/skills-ask-matt) routes you.
+Upstream, [grill-with-docs](https://aihero.dev/skills-grill-with-docs) makes the decisions that this skill only records, and a finished [wayfinder](https://aihero.dev/skills-wayfinder) map joins the chain here. Downstream, [to-tickets](https://aihero.dev/skills-to-tickets) cuts the spec into tracer-bullet tickets for [implement-pr](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-pr.md) or [implement-spec-stack](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-spec-stack.md) to build. When you're unsure which skill or flow fits, [ask-matt](https://aihero.dev/skills-ask-matt) routes you.

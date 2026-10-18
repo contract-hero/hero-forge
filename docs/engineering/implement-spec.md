@@ -1,4 +1,4 @@
-> **Archived.** This skill was removed from the plugin in hero-pocock v0.2.0. It still lives in the repo under `skills/misc/` and takes upstream changes, but the plugin no longer ships it. Use [implement-spec-stack](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-spec-stack.md) instead: it lands a spec as a stack of reviewed pull requests, one per ticket. The page stays up for reference.
+> **Archived.** This skill was removed from the plugin in hero-pocock v0.2.0. It still lives in the repo under `skills/misc/` and takes upstream changes, but the plugin no longer ships it. Use [implement-spec-stack](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-spec-stack.md) instead: it lands a spec as a stack of reviewed pull requests, one per ticket. The page stays up for reference.
 
 ## What it does
 

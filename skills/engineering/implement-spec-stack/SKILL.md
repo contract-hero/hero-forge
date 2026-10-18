@@ -26,7 +26,7 @@ The helper CLI lives in the `review-pipeline` skill folder, a sibling of the fol
 | Subcommand | Does |
 | --- | --- |
 | `stack order --repo O/R --spec N` | prints the stack plan as JSON: `layers` (parents first, each with `ticket`, `title`, `branch`, `parent`, `depth`, `blockers`, `children`), `rewired` and `excluded` |
-| `stack path --spec N` | prints the stack dir, `<git common dir>/hero-pocock/stack-<N>/` |
+| `stack path --spec N` | prints the stack dir, `<git common dir>/hero-forge/stack-<N>/` |
 | `stack restack --from <sha> --onto <ref> --pr <N>` | in a layer's worktree: rebases the checked-out layer onto `<ref>` from its parent's pre-landing tip, and passes only when `git range-diff` shows no content change; otherwise it puts the branch back. With `--pr N` it first checks that the branch is PR N's head and that `<ref>` is the default branch (`origin/HEAD`), and it records a pass of the head the run pinned in PR N's run dir (`recorded`) |
 | `stack merge-layer --repo O/R --pr N --base <default branch> --stack-pr S` | squash-merges a reviewed layer at its re-checked head, through the same gate as `review.ts merge`, and only once the `stack-final` run of the stack PR S is `complete` |
 

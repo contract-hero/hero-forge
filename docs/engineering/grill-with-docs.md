@@ -58,7 +58,7 @@ Into the conversation only. This is the most serious open complaint about the sk
 Yes. This is the right skill for a codebase with no ADRs, no domain language and no design principles: invoke it and say "help me document my repo". Users often pair it with [improve-codebase-architecture](https://aihero.dev/skills-improve-codebase-architecture) for building or repairing a `GLOSSARY.md`. Expect to steer it. It reads code and asks you about what it finds, and you decide which of the words already in the codebase are the right ones.
 
 **What should I do when the session ends?**
-The skill's closing message is often open-ended, which is a known problem. In the main flow the answer is [to-spec](https://aihero.dev/skills-to-spec), in the same conversation. If the change is small enough to build immediately, go straight to [implement-pr](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/implement-pr.md) instead.
+The skill's closing message is often open-ended, which is a known problem. In the main flow the answer is [to-spec](https://aihero.dev/skills-to-spec), in the same conversation. If the change is small enough to build immediately, go straight to [implement-pr](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/implement-pr.md) instead.
 
 **Why is it called that?**
 Nobody is happy with the name. There is an open suggestion to rename it `grill-domain-model`, which describes the behaviour more accurately. Nothing has moved on it. If a rename ever lands, the docs page moves with it and the URL changes.

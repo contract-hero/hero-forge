@@ -8,7 +8,7 @@ One runtime runs every role. The Orchestrator and its reviewers are all Codex (`
 
 Type `/setup-review-pipeline`, or an [agent](https://www.aihero.dev/ai-coding-dictionary/agent) or router asks for `setup-review-pipeline` by name through the Skill tool, so setup can run as part of an orchestrated flow. It does not fire only because the config is missing.
 
-Reach for it once per repo, before the first pull request goes through [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md). If `review-pipeline` stops and tells you to run setup, the repo has no `docs/agents/review.md` yet, or the file is broken. For the issue tracker, triage labels and domain docs instead, use [setup-matt-pocock-skills](https://aihero.dev/skills-setup-matt-pocock-skills).
+Reach for it once per repo, before the first pull request goes through [review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/review-pipeline.md). If `review-pipeline` stops and tells you to run setup, the repo has no `docs/agents/review.md` yet, or the file is broken. For the issue tracker, triage labels and domain docs instead, use [setup-matt-pocock-skills](https://aihero.dev/skills-setup-matt-pocock-skills).
 
 ## Prerequisites
 
@@ -24,7 +24,6 @@ It writes into the repo you run it in:
 | --- | --- |
 | `review.md`: a few lines of prose, then one YAML block | `docs/agents/` |
 | A `### Review` entry | the `## Agent skills` block of whichever of `CLAUDE.md` or `AGENTS.md` already exists |
-| The App credentials, only when you copy them from `/lfg` | `~/.config/hero-pocock/` on your machine, never the repo |
 
 ## One runtime, two roles
 
@@ -47,11 +46,7 @@ No. Setup offers one runtime for both roles, and the `config` check rejects a fi
 
 **Does the review post as a bot?**
 
-Only if you choose the reviewer App. The App's credentials live in `~/.config/hero-pocock/` (an env file and a private key), never in the repo. Setup checks that the App can post on this repo before it writes `app: enabled`, so a broken App never reaches the config. Without the App, every review posts from your own `gh` account as a COMMENT review, and the re-checker's verdict is the merge gate.
-
-**I already use `/lfg`. Do I set the App up again?**
-
-No. When `~/.config/lfg/reviewer-app.env` exists, setup offers to copy it. The helper CLI copies the private key and writes a new env file with this plugin's names, and it shows you only the two paths. It never overwrites credentials that are already in `~/.config/hero-pocock/` unless you say so.
+Only if you choose the reviewer App. The App's credentials live in `~/.config/hero-forge/` (an env file and a private key), never in the repo. Setup checks that the App can post on this repo before it writes `app: enabled`, so a broken App never reaches the config. Without the App, every review posts from your own `gh` account as a COMMENT review, and the re-checker's verdict is the merge gate.
 
 **Can I edit `docs/agents/review.md` by hand?**
 
@@ -71,4 +66,4 @@ A later `setup-matt-pocock-skills` run rewrites the `## Agent skills` block from
 
 ## Where it fits
 
-`setup-review-pipeline` is a **run-once setup**, the precondition of [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md), which reads this config at the start of every run. It sits beside [setup-matt-pocock-skills](https://aihero.dev/skills-setup-matt-pocock-skills), which configures the issue tracker the pipeline's Spec reviewers read from. For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.
+`setup-review-pipeline` is a **run-once setup**, the precondition of [review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/review-pipeline.md), which reads this config at the start of every run. It sits beside [setup-matt-pocock-skills](https://aihero.dev/skills-setup-matt-pocock-skills), which configures the issue tracker the pipeline's Spec reviewers read from. For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.

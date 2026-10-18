@@ -1,6 +1,6 @@
 ## What it does
 
-`implement-pr` builds one [ticket](https://www.aihero.dev/ai-coding-dictionary/ticket) and takes it to a reviewed pull request. It fetches the ticket, builds it with [tdd](https://aihero.dev/skills-tdd) at the pre-agreed seams the way upstream `implement` does, pushes a branch, and opens a **draft** PR whose body follows [pr](https://aihero.dev/skills-pr) and closes the ticket. Then it hands the PR to [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) with no question in between.
+`implement-pr` builds one [ticket](https://www.aihero.dev/ai-coding-dictionary/ticket) and takes it to a reviewed pull request. It fetches the ticket, builds it with [tdd](https://aihero.dev/skills-tdd) at the pre-agreed seams the way upstream `implement` does, pushes a branch, and opens a **draft** PR whose body follows [pr](https://aihero.dev/skills-pr) and closes the ticket. Then it hands the PR to [review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/review-pipeline.md) with no question in between.
 
 The [agent](https://www.aihero.dev/ai-coding-dictionary/agent) that writes the code never reviews it. Upstream `implement` runs `code-review` in its own session and commits to the current branch. `implement-pr` never commits on the default branch and runs no review of its own: the review comes from the pipeline's Orchestrator and lands on the PR.
 
@@ -11,14 +11,14 @@ Type `/implement-pr <ticket>`, or an agent or router asks for `implement-pr` by 
 | The work is... | Reach for |
 | --- | --- |
 | A ticket that should reach `main` through a reviewed PR | `/implement-pr #42` |
-| A PR that is already open, built by hand or by another tool | [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md) directly |
+| A PR that is already open, built by hand or by another tool | [review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/review-pipeline.md) directly |
 | A spec, not yet split up | [to-tickets](https://aihero.dev/skills-to-tickets) first, then `/implement-pr` per ticket |
 
 ## Prerequisites
 
 | It needs | Why |
 | --- | --- |
-| `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md) | the pipeline reads it; without it, `implement-pr` stops before it builds anything and points you to setup |
+| `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/setup-review-pipeline.md) | the pipeline reads it; without it, `implement-pr` stops before it builds anything and points you to setup |
 | Node 22.18 or newer, and `gh` logged in | the config check is the pipeline's helper CLI, and the PR opens through `gh` |
 | A ticket on the issue tracker that [setup-matt-pocock-skills](https://aihero.dev/skills-setup-matt-pocock-skills) configured | it fetches the ticket from there, and a GitHub issue gets closed by the merge |
 
@@ -64,4 +64,4 @@ Only when the review passes and CI is green. The pipeline stops and asks you whe
 
 ## Where it fits
 
-`implement-pr` is the build step of the PR chain: `to-tickets → implement-pr → review-pipeline`. It consumes the tickets [to-tickets](https://aihero.dev/skills-to-tickets) produces, drives [tdd](https://aihero.dev/skills-tdd) at each seam, and hands the PR to [review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/review-pipeline.md), which needs the run-once [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md). For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.
+`implement-pr` is the build step of the PR chain: `to-tickets → implement-pr → review-pipeline`. It consumes the tickets [to-tickets](https://aihero.dev/skills-to-tickets) produces, drives [tdd](https://aihero.dev/skills-tdd) at each seam, and hands the PR to [review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/review-pipeline.md), which needs the run-once [setup-review-pipeline](https://github.com/contract-hero/hero-forge/blob/main/docs/engineering/setup-review-pipeline.md). For which skill to reach for next, [ask-matt](https://aihero.dev/skills-ask-matt) routes the whole set.
