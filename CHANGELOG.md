@@ -11,7 +11,7 @@ hero-forge is the hard fork of mattpocock/skills that replaces the `hero-pocock`
 
    ```bash
    mv ~/.config/hero-pocock ~/.config/hero-forge
-   perl -pi -e 's/^HERO_POCOCK_REVIEWER_APP_/HERO_FORGE_REVIEWER_APP_/; s#/\.config/hero-pocock/#/.config/hero-forge/#' ~/.config/hero-forge/reviewer-app.env
+   perl -pi -e 's/^(\s*(?:export\s+)?)HERO_POCOCK_REVIEWER_APP_/${1}HERO_FORGE_REVIEWER_APP_/; s#/\.config/hero-pocock/#/.config/hero-forge/#' ~/.config/hero-forge/reviewer-app.env
    ```
 
    The file must then hold `HERO_FORGE_REVIEWER_APP_ID=...` and `HERO_FORGE_REVIEWER_APP_KEY=<path under ~/.config/hero-forge/>`.
