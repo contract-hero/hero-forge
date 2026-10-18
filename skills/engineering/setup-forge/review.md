@@ -8,7 +8,7 @@ Every pull request in this repo goes through `review-pipeline`: an Orchestrator 
 - Failed re-check rounds before the pipeline stops and asks: <max_rounds>.
 - Reviewer identity: <the reviewer GitHub App, which also approves the PR or requests changes (credentials in `~/.config/hero-forge/`, never in this repo) | your own `gh` account, COMMENT reviews only>.
 
-Edit the block below, or re-run `/setup-review-pipeline`. Agents read only the block.
+Edit the block below, or re-run `/setup-forge`. Agents read only the block.
 
 ```yaml
 runtime: <codex | claude>

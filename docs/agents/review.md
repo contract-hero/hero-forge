@@ -8,7 +8,7 @@ Every pull request in this repo goes through `review-pipeline`: an Orchestrator 
 - Failed re-check rounds before the pipeline stops and asks: 2.
 - Reviewer identity: the `contract-reviewer` GitHub App (`contract-reviewer[bot]`). It approves the PR or requests changes.
 
-Edit the block below, or re-run `/setup-review-pipeline`. Agents read only the block.
+Edit the block below, or re-run `/setup-forge`. Agents read only the block.
 
 ```yaml
 runtime: codex
