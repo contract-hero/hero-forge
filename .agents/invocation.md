@@ -5,6 +5,7 @@ Every `SKILL.md` in this repo is a skill, and every skill is **model-invoked**: 
 - No `SKILL.md` sets `disable-model-invocation`.
 - The `description` is **model-facing**: one quoted line that says what the skill does, then when an agent should start it ("Use when the user wants…, mentions…, asks for…"). It is the only text the agent sees before it starts the skill.
 - A skill that builds or lands work (`implement-pr`, `implement-spec-stack`) names the hand-over that starts it, and says that a passing mention does not.
+- `writing-for-agents` still describes user-invoked skills, because it is advice for writing skills in any repo. This repo does not use that option.
 
 `scripts/invocation.spec.ts` checks every skill against these rules. Bucket `README.md`s and the top-level `README.md` hold one list per bucket, with no split by invocation.
 
