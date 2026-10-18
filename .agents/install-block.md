@@ -1,6 +1,6 @@
 # The canonical install block
 
-One install story, one wording. `README.md` and `.changeset/*` must say **this** and nothing else. Change it here first, then propagate.
+One install story, one wording. `README.md` must say **this** and nothing else. Change it here first, then propagate.
 
 ## One route: the Contract Hero marketplace
 
@@ -15,6 +15,6 @@ claude plugin marketplace add contract-hero/plugin-marketplace
 claude plugin install hero-forge@contract-hero
 ```
 
-Updates itself when the marketplace has auto-update on. If `mattpocock-skills` is also installed, uninstall it (`claude plugin uninstall mattpocock-skills`): both plugins ship the same skills.
+Updates itself when the marketplace has auto-update on. If `mattpocock-skills` is also installed, uninstall it (`claude plugin uninstall mattpocock-skills`): both plugins ship skills with the same names.
 
 </canonical-block>

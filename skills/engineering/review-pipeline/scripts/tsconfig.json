@@ -1,6 +1,6 @@
-// The strict type-check of the helper CLI. The root tsconfig.json keeps the
-// shape of the plugin layer that can go back upstream (ADR 0004), so the
-// scripts have their own config on top of it, with Node's types.
+// The strict type-check of the helper CLI. The root tsconfig.json covers the
+// plugin hooks with no Node types, so the scripts have their own config on
+// top of it, with Node's types.
 //
 // Run it with scripts/typecheck.sh from the repo root. The repo has no
 // dependencies, so the script brings TypeScript and @types/node from a temp
