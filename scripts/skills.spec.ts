@@ -56,3 +56,18 @@ test('each bucket README links every skill in its bucket to its SKILL.md', () =>
   })
   assert.deepEqual(missing, [])
 })
+
+// Claude Code commands the README may name that are not skills.
+const BUILT_INS = ['clear', 'compact']
+
+test('the top-level README names no skill that is gone', () => {
+  const readme = read('README.md')
+  const names = shipped().map((skill) => skill.split('/')[1])
+  const linked = [...readme.matchAll(/\]\(\.\/skills\/([^)]+)\/SKILL\.md\)/g)].map((match) => match[1] ?? '')
+  const commands = [...readme.matchAll(/`\/([a-z][a-z0-9-]*)/g)].map((match) => match[1] ?? '')
+  const gone = [
+    ...linked.filter((skill) => !shipped().includes(skill)),
+    ...commands.filter((name) => !names.includes(name) && !BUILT_INS.includes(name)),
+  ]
+  assert.deepEqual([...new Set(gone)], [])
+})
