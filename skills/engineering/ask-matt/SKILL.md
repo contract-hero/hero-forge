@@ -1,7 +1,6 @@
 ---
 name: ask-matt
-description: Ask which skill or flow fits your situation. A router over the skills in this repo.
-disable-model-invocation: true
+description: "Ask which skill or flow fits your situation. A router over the skills in this repo. Use when the user asks which skill to use, where to start, or what comes next in a flow."
 ---
 
 # Ask Matt
@@ -27,7 +26,7 @@ The route most work travels. You have an idea and want it built.
      - **`/implement-spec-stack`** for the whole spec in one run, as reviewed pull requests, one per ticket. It reads the tickets as a **task graph** and stacks them along their blocking edges (each **layer** is a draft PR on its parent layer's branch), runs implementer subagents across the ready **frontier** in parallel, runs `/review-pipeline` on each layer, then one final review of the whole stack against the spec, with the only explainer, and lands the stack bottom-up. Reach for it when you'd rather orchestrate the build than drive each ticket yourself. It needs GitHub Issues and `/setup-review-pipeline` first (see Precondition).
    - **No** → **`/implement-pr`** right here, in the same context window. It builds a ticket, so put the plan in a short issue first and pass that.
 
-   Either way, the code gets built by driving **`/tdd`** (one red-green slice at a time) and closes out with **`/review-pipeline`** on the pull request. `/implement-pr` drives `/tdd` itself; `/implement-spec-stack`'s implementers each drive `/tdd`. Both are model-invoked, but only by name: you type them, or an agent or router asks for one through the Skill tool, so an orchestrated or AFK run can start them. Neither fires on a passing mention of a ticket or a spec. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want a two-axis review (Standards + Spec) of a branch or PR against a fixed point, reported in your own session.
+   Either way, the code gets built by driving **`/tdd`** (one red-green slice at a time) and closes out with **`/review-pipeline`** on the pull request. `/implement-pr` drives `/tdd` itself; `/implement-spec-stack`'s implementers each drive `/tdd`. Both are model-invoked: you type them, or an agent or router starts one when a ready ticket or spec is handed over for building, so an orchestrated or AFK run can start them. Neither fires on a passing mention of a ticket or a spec. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want a two-axis review (Standards + Spec) of a branch or PR against a fixed point, reported in your own session.
 
    When the work goes up as a pull request, **`/pr`** shapes the body: the smallest visual that shows the change, before/after evidence that it works, and a one-way or two-way door call. It's model-invoked, so the agent reaches for it whenever it writes a PR.
 
@@ -101,4 +100,4 @@ Off the main flow entirely.
 
 **`/setup-matt-pocock-skills`**: run before your first engineering flow to configure the issue tracker, triage labels, and doc layout the other skills assume. Custom issue trackers also work.
 
-**`/setup-review-pipeline`**: run once per repo before the first pull request goes through `review-pipeline`, `/implement-pr` or `/implement-spec-stack`. It writes `docs/agents/review.md`: the runtime (Codex or Claude sub-agents), the number of reviewer pairs, the model and effort of each role, and the round limit. It is model-invoked by name in the same way, so an orchestrated flow can run it, but it never fires only because the config is missing.
+**`/setup-review-pipeline`**: run once per repo before the first pull request goes through `review-pipeline`, `/implement-pr` or `/implement-spec-stack`. It writes `docs/agents/review.md`: the runtime (Codex or Claude sub-agents), the number of reviewer pairs, the model and effort of each role, and the round limit. It is model-invoked: you type it, or an agent starts it when you ask to set up or change how the repo reviews pull requests. It never fires only because the config is missing.

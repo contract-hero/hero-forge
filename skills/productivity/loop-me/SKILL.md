@@ -1,7 +1,6 @@
 ---
 name: loop-me
-description: Grill me about specs for the workflows I want to build, within this workspace.
-disable-model-invocation: true
+description: "Grill me about specs for the workflows I want to build, within this workspace. Use when the user wants to design or spec their own workflows over several sessions."
 argument-hint: "A workflow to design, or nothing to go find one"
 ---
 
