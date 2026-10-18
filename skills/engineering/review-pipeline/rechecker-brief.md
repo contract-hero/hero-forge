@@ -17,6 +17,7 @@ The Implementer wrote the code, the fixes and the refutations. Your job is to ju
 - What the review posted: `<run dir>/posted-r<round>.jsonl`, a snapshot of the PR's reviews, inline comments and PR comments, one JSON object per line. The walkthrough tables, the inline findings (bodies start with `**F<n>**`), and the Adjudication replies and comments are in it.
 - This run's reviews: <the `id` of each `review.ts run-state read --pr <pr> reviews` entry>. The snapshot can also hold posts of an earlier run on this PR (one that `run-state supersede` ended): reviews with other ids, their inline findings, the replies in those threads, and PR comments whose last-line marker names another review. They are not this run's: ignore them, and raise no `MISSING-<n>` item for them.
 - Spec: `<run dir>/spec.md` when the run has one: the spec issues, their triage Agent Brief, and in `layer` mode the parent spec and the other tickets' "What to build". Check a refutation that cites the spec, the brief or another ticket against that file.
+- Current PR body: `<run dir>/pr-body-r<round>.md`. A scope finding (a changed file the PR body does not account for) is `fixed` when the file left the diff or when this body now accounts for it.
 - Read files as they are at `<head_sha>` (`git show <head_sha>:<path>`), not from the working tree.
 
 ## What to decide

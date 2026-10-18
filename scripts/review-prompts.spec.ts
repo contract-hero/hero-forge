@@ -54,3 +54,13 @@ test("the re-checker brief points the re-checker to the run's spec file", () => 
   const brief = readFileSync(join(PIPELINE, 'rechecker-brief.md'), 'utf8')
   assert.match(brief, /^- Spec: `<run dir>\/spec\.md` when the run has one/m)
 })
+
+test('with no spec, the Standards brief template on runtime claude pastes the same scope prompt that codex-review embeds', () => {
+  const template = readFileSync(join(PIPELINE, 'reviewer-brief.md'), 'utf8')
+  const standards = template.slice(template.indexOf('## Standards axis'), template.indexOf('## Spec axis'))
+  assert.match(standards, /Only when the run has no spec: paste in full the file scope-prompt\.md/)
+  assert.match(standards, /Never paste the body itself into the brief/)
+  assert.match(readFileSync(join(PIPELINE, 'rechecker-brief.md'), 'utf8'), /^- Current PR body: `<run dir>\/pr-body-r<round>\.md`/m)
+  assert.match(readFileSync(join(PIPELINE, 'scripts', 'codex-review.ts'), 'utf8'), /'scope-prompt\.md'/)
+  assert.ok(existsSync(join(PIPELINE, 'scope-prompt.md')))
+})

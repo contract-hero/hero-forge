@@ -1,3 +1,5 @@
 node_modules
 .claude
 .claude-plugin/types/
+# The repo has no dependencies: `pnpm test` can leave an empty lockfile.
+pnpm-lock.yaml
