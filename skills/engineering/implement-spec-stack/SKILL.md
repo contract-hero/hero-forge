@@ -17,7 +17,7 @@ Each ticket becomes one **layer**: a branch and a draft PR. A layer branches fro
 
 Communication to and from subagents should be sparse. Communicate primarily through **context pointers**: to the spec, tickets, the stack plan, research notes, and previous commits. Don't duplicate information already available via pointers.
 
-**Implementer subagents** should be run in the background where possible for maximum concurrency.
+**Foreground rule.** A subagent whose result your next step needs runs in the foreground: you wait for it before that step, and you never end your turn while it runs. That covers the **exploration subagent** (step 3), whose notes the implementers read, the **implementer subagents** (step 4), whose reports start step 5, and any subagent you give a merge or a landing step, whose result the next layer waits on. Get concurrency from parallel starts, not from the background: start every ready layer's **implementer subagent** at once, and wait for all of them.
 
 ## Helper CLI
 

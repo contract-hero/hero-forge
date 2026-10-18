@@ -21,7 +21,7 @@ Type `/implement-spec-stack <spec>`, or an agent or router asks for `implement-s
 | `docs/agents/review.md`, written by [setup-review-pipeline](https://github.com/contract-hero/hero-pocock/blob/main/docs/engineering/setup-review-pipeline.md) | every layer and the final review go through the pipeline; without the config, the skill stops before it builds anything |
 | GitHub Issues, with the tickets as sub-issues of the spec and the edges as native `blocked_by` dependencies | the stack order comes from that graph; on any other tracker the skill stops |
 | Node 22.18 or newer, and `gh` logged in | the stack steps run through the pipeline's helper CLI and `gh` |
-| A [harness](https://www.aihero.dev/ai-coding-dictionary/harness) that runs subagents in the background, each in its own git worktree | independent tickets build at the same time |
+| A [harness](https://www.aihero.dev/ai-coding-dictionary/harness) that runs subagents in parallel, each in its own git worktree | independent tickets build at the same time. The skill waits for each subagent whose result its next step needs, so the run never ends while an implementer still works |
 
 ## The stack
 

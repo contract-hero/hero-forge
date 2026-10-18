@@ -87,6 +87,10 @@ No. The Implementer writes the fixes and the refutations, so a fresh re-checker 
 
 Run it again on the same PR. The run state records the last completed step and the id of the posted review, so a re-run on the same PR and commit resumes and does not post a second review. If the state file is lost, the pipeline still finds its own review on GitHub by a hidden marker, and it trusts that marker only in a review from the same account on the same commit.
 
+**What if the Orchestrator ends before its reviewers report?**
+
+On Claude, the Orchestrator starts its reviewers in the foreground and waits for all of them, so this should not happen. If it ends anyway with reviewer outputs missing, the Implementer resumes the same Orchestrator with a message and does not start a new one, because a new one would lose the reviewers that still run. If outputs are still missing after that one resume, the pipeline stops and names the missing reviewers.
+
 **Does it post as a bot?**
 
 Only with a reviewer GitHub App. Run `/setup-review-pipeline` and choose the App: the config then has `app: enabled`, and every review, re-check and verdict shows the App's `<slug>[bot]` name. The helper CLI mints the App's token itself for each post, so no agent sees it. Without the App, the reviews post from your own `gh` account as COMMENT reviews, which never approve or block the PR, and the recorded re-check gate decides the merge.

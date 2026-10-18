@@ -20,7 +20,9 @@ The argument is the PR number (or URL), then an optional `--mode layer|stack-fin
 
 Every brief opens with a sanity header: "You are the <role> for PR #N of O/R. You do not run the review pipeline. Do not invoke code-review or spawn agents" (the Orchestrator's header instead names the reviewers it may spawn). A brief like that in your own context was mis-delivered: you stay the Implementer, and the on-disk run state says where the run is.
 
-If the Orchestrator cannot do its job (it dies, or it cannot start sub-agents), relaunch it once. If it fails again, stop and tell the user. Never dispatch the reviewers or verify findings yourself: that breaks the independence the pipeline exists for.
+If the Orchestrator ends with reviewer outputs missing (on `runtime: claude`, it returned and posted no review, and fewer `<run dir>/reviewer-p<k>-<axis>.json` files exist than the reviewers it had to start), its reviewers can still be running. Do not start a new Orchestrator: a new one loses those reviewers. Resume the same Orchestrator with a message that names the missing outputs and tells it to wait for every reviewer, then finish its brief from **Collect**. Do this once. If it ends with outputs still missing, or it cannot be resumed, stop and tell the user, with the names of the missing reviewers. Never start a replacement Orchestrator in this session while its reviewers can still run.
+
+If the Orchestrator cannot do its job and none of its reviewers can still run (it cannot start sub-agents, or every reviewer output is in the run dir and it posted no review), relaunch it once. If it fails again, stop and tell the user. Never dispatch the reviewers or verify findings yourself: that breaks the independence the pipeline exists for.
 
 ## Helper CLI
 
@@ -62,7 +64,7 @@ Run `review.ts run-state read --pr N`.
 | `phase` | Next step |
 | --- | --- |
 | `created` | **Review round** |
-| `review-dispatched` | the Orchestrator was launched and may have posted. Run **Posting**'s check first; if the review is there, `advance review-posted`; if not, relaunch the Orchestrator (reviewer outputs in the run dir that parse are reused) |
+| `review-dispatched` | the Orchestrator was launched and may have posted. Run **Posting**'s check first; if the review is there, `advance review-posted`. If not, and this session launched that Orchestrator, apply **Who does what**: resume it once when reviewer outputs are missing, and stop and tell the user when they are still missing after that. In a new session the old Orchestrator is gone: relaunch it (reviewer outputs in the run dir that parse are reused) |
 | `review-posted` | **Adjudication** for the recorded `round`. In round 2 and later, that means only what `recheck-r<round-1>.json` left open |
 | `adjudicated` | **Re-check**. A `recheck-r<round>.json` that parses is reused: do not dispatch the re-checker again |
 | `rechecked` | run **Re-check** step 4's `post-review` again: it posts nothing new and prints the same `gate`. Then step 5 or 6 |
@@ -100,7 +102,7 @@ You write one brief and launch one agent: the Orchestrator. The Orchestrator doe
    - Spec: the spec contents and the Spec brief from the same `code-review` section. No spec: no Spec reviewers; the walkthrough says "no spec available".
    - Both: the JSON output contract of [findings.schema.json](./findings.schema.json), which replaces the "Under 400 words" prose report.
 3. **Pair diversity.** The briefs of all pairs are the same except the focus order. With F changed files, pair k (1 to N) gets the file list rotated left by `floor((k-1) * F / N)`, the Standards checklist (documented standards, smells, bugs, silent failures, test gaps) rotated left by k-1, and the spec's acceptance criteria rotated left by k-1. Every reviewer still sees the whole diff.
-4. **Dispatch.** All 2N reviewers in parallel, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. Each one's final message is the findings JSON; write it verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. With `runtime: codex`, dispatch them as **Codex runtime** says.
+4. **Dispatch.** All 2N reviewers in parallel, in the foreground, as fresh read-only sub-agents with model `<reviewer.agent_model>` and effort `<reviewer.effort>`. The Orchestrator waits until every reviewer is done before it collects, and it does not end while a reviewer runs. A reviewer that failed to start or ended with no final message is done, as a failed reviewer. Each one's final message is the findings JSON; write it verbatim to `<run dir>/reviewer-p<k>-<axis>.json`. With `runtime: codex`, dispatch them as **Codex runtime** says.
 
 ## Consolidation
 
@@ -139,7 +141,7 @@ The Orchestrator posts once per round, with one payload for all pairs. Payload `
 - The walkthrough body: `## Review pipeline: round <R>`; one line naming the runtime, the models and efforts, N, and the fixed point `<sha7>`; a table `ID | Where | Axis | Severity | Pairs | Finding`; the findings without an inline anchor; the dropped count with reasons; the failed reviewers.
 - Post: `review.ts post-review --repo O/R --pr N --commit <head_sha> --round <R> --kind review --payload <run dir>/review-payload.json`. It adds a hidden marker, records the review id in the run state, and refuses to post a second review for the same round. Exit 1 on a 422: move the finding GitHub names into the walkthrough and post once more.
 
-**You, after the Orchestrator returns:** confirm the review exists. `review.ts run-state read --pr N reviews` lists a `kind: review` entry for this round, and `gh api repos/O/R/pulls/N/reviews` shows that id. Then `review.ts run-state advance --pr N review-posted`. If there is no review, read `<run dir>/orchestrator-report.md` and apply **Who does what**: relaunch once, then stop and tell the user.
+**You, after the Orchestrator returns:** confirm the review exists. `review.ts run-state read --pr N reviews` lists a `kind: review` entry for this round, and `gh api repos/O/R/pulls/N/reviews` shows that id. Then `review.ts run-state advance --pr N review-posted`. If there is no review, read `<run dir>/orchestrator-report.md`, count the reviewer outputs in the run dir, and apply **Who does what**: when reviewer outputs are missing, resume the Orchestrator once, and stop and tell the user, with the missing reviewers, when they are still missing after that. Otherwise relaunch once, then stop and tell the user.
 
 ## Adjudication
 
