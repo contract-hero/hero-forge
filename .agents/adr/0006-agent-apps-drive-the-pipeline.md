@@ -1,6 +1,6 @@
 # Two GitHub Apps drive the pipeline from webhooks, and the skills keep the logic
 
-The **Review pipeline** (ADR 0005) still needs a person to start each run: `/implement-pr`, `/implement-spec-stack` or `/review-pipeline`. We want the user's job to end at the ticket: grill, write the spec and tickets, then add the `ready-for-agent` label. We decided that two GitHub Apps start the runs from GitHub events, through T3 Code webhook tasks. `contract-implementer` (new) is the **Implementer**: it builds tickets and adjudicates reviews. `contract-reviewer` (the existing reviewer App) runs the review pipeline and merges. The Apps are only identities and event sources. The skills keep all the logic and stay harness-neutral, and the slash commands still work by hand.
+The **Review pipeline** (ADR 0005) still needs a person to start each run: `/implement-pr`, `/implement-spec-stack` or `/review-pipeline`. We want the user's job to end at the ticket: grill, write the spec and tickets, then add the `ready-for-agent` label. We decided that two GitHub Apps start the runs from GitHub events, through T3 Code webhook tasks. `contract-implementer` (new) is the **Implementer**: it builds tickets and adjudicates reviews. `contract-reviewer` (the existing reviewer App) runs the review pipeline and merges. The Apps are only identities and event sources. The skills keep all the logic, and the slash commands still work by hand.
 
 ## Decision
 
@@ -11,7 +11,7 @@ The **Review pipeline** (ADR 0005) still needs a person to start each run: `/imp
 - **Stacks.** The reviewer merges each layer after the final stack review passes. The Implementer restacks the next layer and pushes. Neither App does the other's job.
 - **Routing.** Each App has one webhook URL, so it has one T3 router task. The router finds or clones the target repo as a T3 project and starts a fresh thread in a new worktree there. A per-pull-request lock in the run state serializes events, and a repeat event exits at once.
 - **Limits.** Per-ticket attempt cap, a daily run cap for each App, `max_rounds` for review, and `paused: true` in the config as the kill switch. T3 Connect holds webhook requests for 24 hours while the machine is offline, and an hourly reconcile sweep starts any run it missed.
-- **Setup.** `setup-review-pipeline` grows: it writes the `implementer:` block and the caps, guides the user through the App settings and then verifies them through the API, and creates the T3 tasks. It does not create the Apps.
+- **Setup.** `setup-forge` grows: it writes the `implementer:` block and the caps, guides the user through the App settings and then verifies them through the API, and creates the T3 tasks. It does not create the Apps.
 
 ## Considered options
 
