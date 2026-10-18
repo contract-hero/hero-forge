@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.4
+
+- `review-pipeline`: `spec.md` also holds each spec issue's triage Agent Brief comment. A `layer` run with `--spec <n>` (passed by `implement-spec-stack`) also gets the parent spec and each other ticket's "What to build", and its Spec reviewers grade against the layer ticket only. The re-checker brief points to `spec.md`, so a refutation that cites the brief, the parent spec or a sibling ticket can be checked.
+
 ## 1.0.3
 
 - `review-pipeline`: a new `run-state supersede --pr N` ends a run whose PR head moved after a review. It marks the run `superseded` and moves its run dir aside, so a new run starts clean at the new head. `create` and `merge-gate` name it when they stop on a moved head, and SKILL.md's **Resume** and **Finish** describe the case.

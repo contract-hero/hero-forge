@@ -14,7 +14,7 @@ const SUBCOMMANDS: [string, string][] = [
     'codex-exec',
     'usage: review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file> [--schema <file>] [--log <file>] [--config <path>]',
   ],
-  ['codex-review', 'usage: review.ts codex-review --pr N [--issue <n>]... [--config <path>]'],
+  ['codex-review', 'usage: review.ts codex-review --pr N [--issue <n>]... [--spec <parent spec issue, layer runs>] [--config <path>]'],
   ['merge-gate', 'usage: review.ts merge-gate --repo O/R --pr N [--config <path>]'],
   ['merge', 'usage: review.ts merge --repo O/R --pr N [--config <path>]'],
   ['explainer', 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>'],

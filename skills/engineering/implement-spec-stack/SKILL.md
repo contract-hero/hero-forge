@@ -50,7 +50,7 @@ The plan follows two rules. A ticket with more than one open blocker branches fr
    - calls the Skill tool with `pr` to write the body for `git diff origin/<base>...HEAD`, ending with `Closes #<ticket>` on its own line, saves it to a file outside the repo, and opens the draft PR: `gh pr create --draft --base <base> --head <branch> --title "<ticket title>" --body-file <file>`;
    - never calls `review-pipeline`, merges, or rebases. It reports the branch, the worktree path, the PR number, and the head SHA.
 
-5. **Review each layer.** When an implementer reports, go to that layer's worktree and call the Skill tool with `review-pipeline`, with `<PR> --mode layer`. Run these reviews here, one at a time, never inside a subagent: the pipeline starts its own Orchestrator subagent. The review sees `git diff origin/<parent layer branch>...<head>`, only this layer's diff. In `layer` mode the pipeline ends after the ready flip (and, with the App, its approval), with no explainer and no merge. When the run is `complete` (`review.ts run-state read --pr <PR> phase`), the layer's children are ready: go back to step 4 for them. They branch from the reviewed tip, with its fixes.
+5. **Review each layer.** When an implementer reports, go to that layer's worktree and call the Skill tool with `review-pipeline`, with `<PR> --mode layer --spec <N>`, where N is the spec issue, so the layer's spec input also holds the parent spec and the other tickets. Run these reviews here, one at a time, never inside a subagent: the pipeline starts its own Orchestrator subagent. The review sees `git diff origin/<parent layer branch>...<head>`, only this layer's diff. In `layer` mode the pipeline ends after the ready flip (and, with the App, its approval), with no explainer and no merge. When the run is `complete` (`review.ts run-state read --pr <PR> phase`), the layer's children are ready: go back to step 4 for them. They branch from the reviewed tip, with its fixes.
    - If a layer run stops (the rounds ran out, the re-checker failed twice, or the App broke), start no new layers. Let the implementers in flight finish, then stop and ask the user, with the layer and the pipeline's message.
 
 6. **Review the whole stack.** When every layer is `complete`:
@@ -83,7 +83,7 @@ After an interrupted session, keep `<stack dir>/order.json` and read where each 
 | You find | Next step |
 | --- | --- |
 | a layer with no PR (`gh pr list --head <branch> --state all --json number,state`) | step 4 for it, when its parent is complete |
-| a layer PR whose run is not `complete` | step 5: `review-pipeline` with `<PR> --mode layer` resumes the run |
+| a layer PR whose run is not `complete` | step 5: `review-pipeline` with `<PR> --mode layer --spec <N>` resumes the run |
 | every layer `complete`, and no stack PR | step 6 |
 | a stack PR whose run is not `complete` | step 6: `review-pipeline` with `<stack PR> --mode stack-final` resumes it |
 | a merged layer PR | step 7.7 for each child whose PR still targets the merged layer's branch, using `<stack dir>/tip-<ticket>`; then the next layer |

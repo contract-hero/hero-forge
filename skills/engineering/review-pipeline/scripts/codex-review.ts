@@ -15,6 +15,7 @@
 // review-dispatched and before this round's review is posted, so a re-run
 // never replaces the ledger of a review that is already on the PR.
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,13 +88,73 @@ function anchorable(diff: string): Record<Side, Map<string, Set<number>>> {
   return sides
 }
 
-async function fetchSpec(repo: string, issues: string[], path: string): Promise<void> {
+type Issue = { number: number; title: string; body: string | null; comments?: { body: string; authorAssociation?: string }[] }
+
+// Who may write a triage Agent Brief that the reviewers grade against: anyone
+// else could steer them with a comment on a public issue.
+const BRIEF_AUTHORS = ['OWNER', 'MEMBER', 'COLLABORATOR']
+
+async function viewIssue(repo: string, n: string): Promise<Issue> {
+  const viewed = await gh(['issue', 'view', n, '--repo', repo, '--json', 'number,title,body,comments'])
+  if (viewed.code !== 0) throw new Failure(`cannot read issue #${n}: ${oneLine(viewed.stderr)}`, 1)
+  return json<Issue>(viewed.stdout, `issue #${n}`)
+}
+
+// The body of a ticket's "What to build": the `## What to build` section of
+// the issue template, up to the next heading of the same or a higher level,
+// or the `**What to build:**` paragraph of the local one, up to its next
+// field (`**Blocked by:**`, `**Status:**`), its checklist, or a heading.
+export function whatToBuild(body: string): string | undefined {
+  const lines = body.split('\n')
+  const heading = /^(#{1,6})\s+What to build\s*$/i
+  const label = /^\*\*What to build:?\*\*:?\s*/i
+  const start = lines.findIndex((l) => heading.test(l.trim()) || label.test(l.trim()))
+  if (start === -1) return undefined
+  const first = (lines[start] as string).trim()
+  const level = heading.exec(first)?.[1]?.length
+  const end =
+    level === undefined
+      ? (l: string) => /^#{1,6}\s/.test(l) || /^\*\*(Blocked by|Status):?\*\*/i.test(l.trim()) || /^- \[[ xX]\]/.test(l.trim())
+      : (l: string) => new RegExp(`^#{1,${level}}\\s`).test(l)
+  const section = [level === undefined ? first.replace(label, '') : '']
+  for (const line of lines.slice(start + 1)) {
+    if (end(line)) break
+    section.push(line)
+  }
+  return section.join('\n').trim() || undefined
+}
+
+// `<run dir>/spec.md`: each spec issue's title and body, and its triage Agent
+// Brief comment by a repo owner, member or collaborator when it has one (the
+// brief holds the decisions, the acceptance criteria and the out-of-scope list
+// the reviewers grade against).
+// A layer run with the spec number also gets the parent spec and the "What
+// to build" of each other ticket in the stack, so a reviewer or the
+// re-checker can check a claim that cites them, with no network.
+async function fetchSpec(repo: string, issues: string[], parent: string | undefined, path: string): Promise<void> {
   const parts: string[] = []
   for (const n of issues) {
-    const viewed = await gh(['issue', 'view', n, '--repo', repo, '--json', 'number,title,body'])
-    if (viewed.code !== 0) throw new Failure(`cannot read issue #${n}: ${oneLine(viewed.stderr)}`, 1)
-    const issue = json<{ number: number; title: string; body: string }>(viewed.stdout, `issue #${n}`)
-    parts.push(`# #${issue.number}: ${issue.title}\n\n${issue.body.trim()}\n`)
+    const issue = await viewIssue(repo, n)
+    parts.push(`# #${issue.number}: ${issue.title}\n\n${(issue.body ?? '').trim()}\n`)
+    for (const c of issue.comments ?? []) {
+      if (BRIEF_AUTHORS.includes(c.authorAssociation ?? '') && /^## Agent Brief\s*$/m.test(c.body)) parts.push(`## Agent Brief of #${issue.number} (triage comment)\n\n${c.body.trim()}\n`)
+    }
+  }
+  if (parent !== undefined) {
+    const spec = await viewIssue(repo, parent)
+    parts.push(`# Parent spec #${spec.number}: ${spec.title}\n\n${(spec.body ?? '').trim()}\n`)
+    const listed = await gh(['api', '--paginate', '--jq', '.[] | {number, title, body}', `repos/${repo}/issues/${parent}/sub_issues`])
+    if (listed.code !== 0) throw new Failure(`cannot read the sub-issues of #${parent}: ${oneLine(listed.stderr)}`, 1)
+    const own = new Set(issues.map(Number))
+    const others = listed.stdout
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .map((l) => json<Issue>(l, `a sub-issue of #${parent}`))
+      .filter((t) => !own.has(t.number))
+    parts.push('# Other tickets in the stack: What to build\n')
+    for (const t of others) {
+      parts.push(`## #${t.number}: ${t.title}\n\n${whatToBuild(t.body ?? '') ?? '(no What to build section)'}\n`)
+    }
   }
   await writeFile(path, parts.join('\n'))
 }
@@ -110,7 +171,18 @@ function withNoSpecLine(body: string): string {
   return `${heading[0].trimEnd()}\n\n${NO_SPEC_LINE}\n\n${body.slice(heading[0].length)}`.trimEnd()
 }
 
-type Coordinates = { state: State; base: string; files: string[]; dir: string; spec: string | undefined; pairs: number; prompts: Record<Axis, string> }
+type Coordinates = {
+  state: State
+  base: string
+  files: string[]
+  dir: string
+  spec: string | undefined
+  parent: string | undefined
+  own: string
+  specHash: string | undefined
+  pairs: number
+  prompts: Record<Axis, string>
+}
 
 // The prompts each axis's brief embeds in full, from this skill's own folder,
 // so that a read-only reviewer reads no prompt file itself.
@@ -141,7 +213,12 @@ function reviewerBrief(c: Coordinates, k: number, axis: Axis): string {
       ? [`- Acceptance criteria, in your focus order: the spec's acceptance criteria in their own order, starting at criterion number ((${k} - 1) mod C) + 1, where C is their count, and wrapping around to the first.`]
       : []),
     ...(axis === 'spec' ? [`- Spec: the issues in \`${spec}\`. Read that file: it is the spec contents.`] : []),
+    // The spec's fingerprint ties a reused Spec output to the spec it graded.
+    ...(axis === 'spec' && c.specHash !== undefined ? [`- Spec file sha256: ${c.specHash}`] : []),
     ...(axis === 'spec' && state.mode !== 'single' ? [`- Review mode: ${state.mode} (${MODE_NAMES[state.mode]})`] : []),
+    ...(axis === 'spec' && c.parent !== undefined
+      ? [`- The spec file also holds the parent spec and the other tickets' What to build, as context: grade this PR against the acceptance criteria of ${c.own} only. Work the file gives to another ticket is not missing here.`]
+      : []),
     `- Run dir: \`${dir}\``,
   ]
   return `You are the ${name} reviewer of pair ${k} of ${pairs} for PR #${state.pr} of ${state.repo}. You do not run the review pipeline. Do not invoke code-review or spawn agents (reviewers, re-checker): perform this review directly. You are read-only and have no network: do not edit files, commit, push, or post anything to GitHub.
@@ -192,12 +269,15 @@ async function review(argv: string[]): Promise<number> {
   const usage = usageFor('codex-review')
   const { values } = parse(
     argv,
-    { pr: { type: 'string' }, issue: { type: 'string', multiple: true }, config: { type: 'string' } },
+    { pr: { type: 'string' }, issue: { type: 'string', multiple: true }, spec: { type: 'string' }, config: { type: 'string' } },
     usage,
   )
   const pr = positive('pr', values.pr, usage)
   const issues = values.issue ?? []
   for (const n of issues) if (!/^[0-9]+$/.test(n)) throw usage(`--issue must be an issue number, not "${n}"`)
+  const parent = values.spec
+  if (parent !== undefined && !/^[0-9]+$/.test(parent)) throw usage(`--spec must be an issue number, not "${parent}"`)
+  if (parent !== undefined && issues.length === 0) throw usage('--spec needs the layer ticket as --issue')
 
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
@@ -206,6 +286,7 @@ async function review(argv: string[]): Promise<number> {
   if (broken !== undefined) throw new Failure(broken.message, broken.code)
 
   const state = await loadState(pr)
+  if (parent !== undefined && state.mode !== 'layer') throw usage(`--spec goes with a layer run only, but PR #${pr} is a ${state.mode} run`)
   refuse(
     state.phase === 'review-dispatched',
     `codex-review runs at phase review-dispatched, but PR #${pr} is at ${state.phase}`,
@@ -227,14 +308,16 @@ async function review(argv: string[]): Promise<number> {
   let spec: string | undefined
   if (issues.length > 0) {
     spec = join(dir, 'spec.md')
-    await fetchSpec(state.repo, issues, spec)
+    await fetchSpec(state.repo, issues, parent, spec)
   } else {
     const stale = (await readdir(dir)).filter((f) => f === 'spec.md' || /^reviewer-p\d+-spec\.(json|md|log)$/.test(f))
     await Promise.all(stale.map((f) => rm(join(dir, f), { force: true })))
   }
 
   // No spec, no Spec reviewers: they would have nothing to judge.
-  const c: Coordinates = { state, base, files, dir, spec, pairs: config.pairs, prompts: await prompts() }
+  const own = issues.map((n) => `#${n}`).join(', ')
+  const specHash = spec === undefined ? undefined : createHash('sha256').update(await readFile(spec)).digest('hex')
+  const c: Coordinates = { state, base, files, dir, spec, parent, own, specHash, pairs: config.pairs, prompts: await prompts() }
   const expected = expectedReviewers(config.pairs, spec !== undefined)
   const reviewers = await Promise.all(expected.map((e) => reviewer(config, c, e)))
 
