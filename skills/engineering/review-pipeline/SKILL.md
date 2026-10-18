@@ -172,7 +172,7 @@ for endpoint in pulls/N/reviews pulls/N/comments issues/N/comments; do
 done > <run dir>/posted-r<R>.jsonl
 ```
 
-2. **Brief.** Fill the template [rechecker-brief.md](./rechecker-brief.md) and save it to `<run dir>/rechecker-brief-r<R>.md`. The fix commits are the `apply review round <n>` commits of rounds 1 to R.
+2. **Brief.** Fill the template [rechecker-brief.md](./rechecker-brief.md) and save it to `<run dir>/rechecker-brief-r<R>.md`. The fix commits are the `apply review round <n>` commits of rounds 1 to R. This run's reviews are the ids that `review.ts run-state read --pr N reviews` lists, so the re-checker can tell them from the posts of a superseded run.
 3. **Dispatch** one fresh, read-only re-checker on the reviewer's model and effort.
    - `runtime: claude`: one fresh sub-agent with model `<reviewer.agent_model>` and effort `<reviewer.effort>`, given the brief's contents. Write its final message verbatim to `<run dir>/recheck-r<R>.json`.
    - `runtime: codex`: `review.ts codex-exec --role reviewer --brief <run dir>/rechecker-brief-r<R>.md --out <run dir>/recheck-r<R>.json --schema <the folder this SKILL.md is in>/recheck.schema.json`. The re-checker runs read-only, with no network and no gh token, and `codex-exec` exits 1 when its output does not match the schema. **Codex runtime** has the rules for `codex-exec`.

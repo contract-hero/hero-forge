@@ -3,7 +3,7 @@
 ## 1.0.3
 
 - `review-pipeline`: a new `run-state supersede --pr N` ends a run whose PR head moved after a review. It marks the run `superseded` and moves its run dir aside, so a new run starts clean at the new head. `create` and `merge-gate` name it when they stop on a moved head, and SKILL.md's **Resume** and **Finish** describe the case.
-- `review-pipeline`: `reply`'s adjudication comment marker also names the run's review, so a second run on the same PR posts its own comment.
+- `review-pipeline`: `reply`'s adjudication comment marker also names the run's review, so a second run on the same PR posts its own comment. `post-review` never takes a review submitted before the run was created as this run's review, and the re-checker brief names this run's review ids.
 
 ## 1.0.2
 

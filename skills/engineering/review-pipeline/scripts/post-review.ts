@@ -371,7 +371,7 @@ async function post(argv: string[]): Promise<string> {
   const reviewsPath = `repos/${repo}/pulls/${pr}/reviews`
   const entry = (id: number): ReviewRecord => ({ round, kind, id, commit, as: poster.as, event: payload.event })
   const reviews = await listReviews(reviewsPath, pr, poster)
-  const existing = findOwnReview(reviews, mark, poster, commit)
+  const existing = findOwnReview(reviews, mark, poster, commit, state?.created_at)
   // A review the run state records at another commit is not this commit's
   // review, even when GitHub now shows it here: the new head gets a fresh one.
   const movedHere = existing !== undefined && state?.reviews.some((r) => r.id === existing.id && r.commit !== commit)
@@ -407,12 +407,12 @@ async function writeEmptyRecheck(path: string): Promise<void> {
   await writeFile(path, `${JSON.stringify({ items: [] }, null, 2)}\n`)
 }
 
-type GitHubReview = { id: number; state: string; body: string | null; commit_id: string | null; login: string | null }
+type GitHubReview = { id: number; state: string; body: string | null; commit_id: string | null; submitted_at?: string | null; login: string | null }
 
 // The PR's reviews, oldest first, as GitHub lists them.
 function listReviews(reviewsPath: string, pr: number, poster: Identity): Promise<GitHubReview[]> {
   return listLines<GitHubReview>(
-    ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, login: .user.login}', reviewsPath],
+    ['api', '--paginate', '--jq', '.[] | {id, state, body, commit_id, submitted_at, login: .user.login}', reviewsPath],
     `the reviews of PR #${pr}`,
     poster.token,
   )
@@ -423,8 +423,19 @@ function listReviews(reviewsPath: string, pr: number, poster: Identity): Promise
 // App's `<slug>[bot]` when it posts as the App), on `commit`. A marker in
 // anyone else's review, on another commit, or anywhere but the last line,
 // does not count, so nobody can suppress the pipeline's review by copying it.
-function findOwnReview(reviews: GitHubReview[], mark: string, poster: Identity, commit: string): GitHubReview | undefined {
-  return reviews.filter((r) => r.login === poster.login && r.commit_id === commit && hasOwnMarker(r.body, mark)).at(-1)
+// Nor does a review submitted before this run was created: it belongs to an
+// earlier run (one that `run-state supersede` ended), even when GitHub now
+// shows it on this commit.
+function findOwnReview(
+  reviews: GitHubReview[],
+  mark: string,
+  poster: Identity,
+  commit: string,
+  since: string | undefined,
+): GitHubReview | undefined {
+  const thisRun = (r: GitHubReview) =>
+    since === undefined || typeof r.submitted_at !== 'string' || Date.parse(r.submitted_at) >= Date.parse(since)
+  return reviews.filter((r) => r.login === poster.login && r.commit_id === commit && hasOwnMarker(r.body, mark) && thisRun(r)).at(-1)
 }
 
 export const main = runMain('post-review', post)

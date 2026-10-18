@@ -15,6 +15,7 @@ The Implementer wrote the code, the fixes and the refutations. Your job is to ju
 - Fix commits of each round so far: <one line per round: round, SHA, or "no fixes">. Their diffs: `git show <sha>`.
 - Ledger: `<run dir>/findings.json`. One entry per finding: `id`, `where`, `finding`, `decision` (`ACCEPT` or `REFUTE`) and `reason`.
 - What the review posted: `<run dir>/posted-r<round>.jsonl`, a snapshot of the PR's reviews, inline comments and PR comments, one JSON object per line. The walkthrough tables, the inline findings (bodies start with `**F<n>**`), and the Adjudication replies and comments are in it.
+- This run's reviews: <the `id` of each `review.ts run-state read --pr <pr> reviews` entry>. The snapshot can also hold posts of an earlier run on this PR (one that `run-state supersede` ended): reviews with other ids, their inline findings, the replies in those threads, and PR comments whose last-line marker names another review. They are not this run's: ignore them, and raise no `MISSING-<n>` item for them.
 - Read files as they are at `<head_sha>` (`git show <head_sha>:<path>`), not from the working tree.
 
 ## What to decide
