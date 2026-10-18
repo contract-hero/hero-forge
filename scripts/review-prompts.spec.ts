@@ -49,3 +49,8 @@ test("every relative link in code-review's SKILL.md resolves inside the code-rev
     })
   assert.deepEqual(broken, [])
 })
+
+test("the re-checker brief points the re-checker to the run's spec file", () => {
+  const brief = readFileSync(join(PIPELINE, 'rechecker-brief.md'), 'utf8')
+  assert.match(brief, /^- Spec: `<run dir>\/spec\.md` when the run has one/m)
+})

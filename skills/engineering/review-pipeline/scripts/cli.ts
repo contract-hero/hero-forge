@@ -54,7 +54,7 @@ export const COMMANDS = {
   },
   'codex-review': {
     summary: 'Run one review round on runtime codex: the reviewers, the Orchestrator, then post-review.',
-    usage: 'usage: review.ts codex-review --pr N [--issue <n>]... [--config <path>]',
+    usage: 'usage: review.ts codex-review --pr N [--issue <n>]... [--spec <parent spec issue, layer runs>] [--config <path>]',
   },
   'merge-gate': {
     summary: 'Read the PR once and print whether it is safe to squash-merge now.',
