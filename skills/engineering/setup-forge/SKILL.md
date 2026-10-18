@@ -47,7 +47,7 @@ For the review pipeline:
 - `node --version`: the helper CLI needs Node 22.18 or newer. If it is older, tell the user to upgrade Node and stop the review pipeline part: write none of it. The other parts do not need Node.
 - `codex --version`: exit 0 means Codex is installed. This picks the recommended runtime.
 - `docs/agents/review.md`: a previous run's output. If it exists, run `review.ts config` (from the repo root). Exit 0 gives the current answers as JSON: use them as the recommended answers in Section D in place of the defaults. Exit 4 means the file is broken: show the message, and recommend the defaults.
-- `gh repo view --json nameWithOwner`: the repo as `O/R`, for the App check.
+- `gh repo view --json nameWithOwner`: the repo as `O/R`, for the App check. If it fails (no GitHub remote: a local-only or GitLab repo), tell the user that `review-pipeline` reviews GitHub pull requests only, and skip the review pipeline part: write none of it, and add no `### Review` entry. The other parts still run.
 - Reviewer App credentials. Check only that these files exist (`test -f <path>`). Never print, `cat` or read them: they hold the App ID and the path to a private key.
   - `~/.config/hero-forge/reviewer-app.env`: this plugin's credentials.
 
@@ -182,7 +182,7 @@ Then write the docs files using the seed templates in this skill folder as a sta
 - [issue-tracker-local.md](./issue-tracker-local.md): local-markdown issue tracker
 - [triage-labels.md](./triage-labels.md): label mapping (only if `triage` is installed)
 - [domain.md](./domain.md): domain doc consumer rules + layout
-- [review.md](./review.md): review pipeline config
+- [review.md](./review.md): review pipeline config. Write it last, in the **`docs/agents/review.md`** step below: with the App, only after the App check passes.
 
 For "other" issue trackers, write `docs/agents/issue-tracker.md` from scratch using the user's description.
 
