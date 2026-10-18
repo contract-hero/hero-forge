@@ -1,3 +1,7 @@
+---
+status: superseded by ADR 0007
+---
+
 # `hero-pocock` is a tailored fork that follows upstream
 
 `hero-pocock` is Álvaro Lillo's version of [mattpocock/skills](https://github.com/mattpocock/skills), shaped to the Contract Hero work-stream. It is not a pull request in waiting: its changes are not meant to go back upstream. It still wants Matt's new skills and fixes as they land.

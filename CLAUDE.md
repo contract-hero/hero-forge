@@ -26,7 +26,7 @@ No em-dashes anywhere in this repo's prose (`SKILL.md` files, docs, `README.md`,
 
 ## This fork
 
-This repo is `hero-pocock`: Álvaro Lillo's tailored fork of `mattpocock/skills`. [ADR 0004](./.agents/adr/0004-hero-pocock-is-a-tailored-fork.md) holds the rules. In short:
+This repo is `hero-pocock`: Álvaro Lillo's tailored fork of `mattpocock/skills`. [ADR 0004](./.agents/adr/0004-hero-pocock-is-a-tailored-fork.md) holds the rules. [ADR 0007](./.agents/adr/0007-hero-forge-is-a-hard-fork.md) supersedes it when hero-forge 1.0.0 ships; until then, the 0.2.x fixes follow ADR 0004. In short:
 
 - `origin` is `contract-hero/hero-pocock`, `upstream` is `mattpocock/skills`. Take upstream by merge (`git merge upstream/main` on a branch), never by rebase.
 - Put tailoring where upstream does not write: hooks under `hooks/`, new ADRs, new skills. Edit an upstream `SKILL.md` only when a hook cannot do the job.
