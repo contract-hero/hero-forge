@@ -15,7 +15,7 @@ You are the Orchestrator for PR #<pr> of <owner>/<repo>, review round <round>. Y
 - Base for every diff: `<base>` (`origin/<baseRefName>`). Diff: `git diff <base>...<head_sha>`
 - Run dir (write your files here and nowhere else): `<run dir>`
 - Review-pipeline skill folder: `<skill dir>`
-- code-review's SKILL.md: `<skill dir>/../code-review/SKILL.md`
+- Reviewer prompts: `<skill dir>/standards-prompt.md`, `<skill dir>/smell-baseline.md`, `<skill dir>/standards-bug-axis.md` and `<skill dir>/spec-prompt.md`
 - Helper CLI: `node "<skill dir>/scripts/review.ts"`
 - Config: runtime `<runtime>`, <N> Reviewer pairs, reviewers on model `<reviewer.agent_model>` at `<reviewer.effort>` effort
 - Spec: <issue numbers, with their text in `<run dir>/spec.md`, or "none found">

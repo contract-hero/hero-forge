@@ -1,6 +1,6 @@
 # Standards: the bug axis
 
-The Standards reviewer in `review-pipeline` judges correctness as well as the repo's standards and the smell baseline. This file adds three checks to the Standards brief of `code-review`. Each finding from these checks is a hard finding when the reviewer can show the failure from the code, and a judgement call otherwise.
+The Standards reviewer in `review-pipeline` judges correctness as well as the repo's standards and the smell baseline. This file adds three checks to the Standards brief in `standards-prompt.md`. Each finding from these checks is a hard finding when the reviewer can show the failure from the code, and a judgement call otherwise.
 
 ## Bugs (`category: bug`)
 
