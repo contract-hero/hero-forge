@@ -63,6 +63,45 @@ const BLOCKED = [
   'git checkout .',
   'git restore .',
   'cd /tmp && git push',
+  // Git takes a long option by any unique prefix.
+  'git push --fo',
+  'git push --forc',
+  'git clean --fo',
+  'git clean --f',
+  'git branch --del --force topic',
+  'git branch --del -f topic',
+  'git branch -d --forc topic',
+  // Quotes and backslashes are gone by the time git reads its arguments.
+  'git push "--force"',
+  'git push \\--force',
+  'git reset "--hard"',
+  'git reset \\--hard',
+  'git "reset" --hard',
+  "git 'push' origin main",
+  'git -C "/tmp/a b" "push"',
+  'git "-C" . push',
+  'git "--no-pager" "push"',
+  'git "-C" "/tmp/a b" push',
+  'git "-C/tmp/a b" push',
+  "git '-C' '/tmp/a b' 'push'",
+  'git -C /tmp/a\\ b push',
+  // Quoted text can be a command another shell runs, so the hook checks it.
+  "sh -c 'git push'",
+  'bash -c "git reset --hard"',
+  // An alias defined inline can run any git command.
+  "git -c alias.x='push --force' x",
+  'git -c alias.p=push p',
+  'git -calias.p=push p',
+  'git --no-pager -c alias.p=push p',
+  // Git config section names ignore case, and an include can load an alias.
+  'git -c ALIAS.p=push p',
+  'git -c Alias.p=push p',
+  'git -c include.path=/tmp/aliases p',
+  'git -c includeIf.onbranch:main.path=/tmp/aliases p',
+  'git -c core.editor="foo;bar" -c alias.p=push p',
+  // The shell joins a line that ends in a backslash with the next one.
+  'git pu\\\nsh',
+  'git \\\npush',
 ]
 
 const ALLOWED = [
@@ -70,7 +109,13 @@ const ALLOWED = [
   'git log --oneline',
   'git diff',
   'git commit -m "push the button"',
+  `git commit -m 'guard git "push" commands'`,
   'git branch -d merged-topic',
+  'git branch --del merged-topic',
+  'git branch --delete merged-topic',
+  'git branch --format=%(refname)',
+  'git log --format="%h %s"',
+  'git -c core.editor=vim commit',
   'git clean -n',
   'git clean -dn',
   'git checkout main',
@@ -93,6 +138,13 @@ for (const command of ALLOWED) {
     assert.equal(code, 0, stderr)
   })
 }
+
+test('checks a long command quickly', () => {
+  const started = Date.now()
+  const { code, stderr } = hook(bash(`echo ${'a "b" '.repeat(5000)}`))
+  assert.equal(code, 0, stderr)
+  assert.ok(Date.now() - started < 1000, `took ${Date.now() - started} ms`)
+})
 
 test('blocks when the event is not valid JSON', () => {
   const { code, stderr } = hook('not json')

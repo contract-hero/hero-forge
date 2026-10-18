@@ -1,5 +1,5 @@
-// Tests that the repo ships as hero-forge 1.0.0, with the plugin version as
-// the one version, read from the real files.
+// Tests that the repo ships as hero-forge, with the plugin version as the one
+// version, read from the real files.
 //   node --test scripts/release.spec.ts
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -22,10 +22,12 @@ function repoFiles() {
     .filter((path) => path !== '' && existsSync(join(REPO, path)) && statSync(join(REPO, path)).isFile())
 }
 
-test('the plugin manifest names hero-forge at 1.0.0', () => {
+const changelogHeadings = () => read('CHANGELOG.md').match(/^## .*$/gm) ?? []
+
+test('the plugin manifest names hero-forge at the newest changelog version', () => {
   const manifest = JSON.parse(read('.claude-plugin/plugin.json')) as { name: string; version: string }
   assert.equal(manifest.name, 'hero-forge')
-  assert.equal(manifest.version, '1.0.0')
+  assert.equal(`## ${manifest.version}`, changelogHeadings()[0])
 })
 
 // The removed version sync script, built from parts so that this file does
@@ -52,9 +54,10 @@ test('no file outside the ADRs names the removed version sync script', () => {
   assert.deepEqual(hits, [])
 })
 
-test('the changelog starts at 1.0.0', () => {
-  const headings = read('CHANGELOG.md').match(/^## .*$/gm) ?? []
-  assert.equal(headings[0], '## 1.0.0')
+test('the changelog starts with a version heading and keeps the 1.0.0 entry', () => {
+  const headings = changelogHeadings()
+  assert.match(headings[0] ?? '', /^## \d+\.\d+\.\d+$/)
+  assert.ok(headings.includes('## 1.0.0'))
 })
 
 test('the changelog gives the migration step for the config dir and its env file', () => {

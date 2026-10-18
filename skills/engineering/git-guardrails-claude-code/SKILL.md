@@ -17,6 +17,12 @@ Sets up a PreToolUse hook that intercepts and blocks dangerous git commands befo
 
 When blocked, Claude sees a message telling it that it does not have authority to access these commands.
 
+The check reads the command text, so it also catches quoted or escaped forms (`git "reset" \--hard`), abbreviated long options (`git clean --fo`), and any inline `git -c alias.*` or `include.*` (in any case) that could hide a blocked command.
+
+## What it does not stop
+
+The hook guards against accidental destructive commands. It is not a sandbox. A text check cannot see a command that a script file, a shell variable (`g=git; $g push`) or another tool runs, so a determined or hostile agent can still get round it. The other way round, it can block a harmless command whose text names a blocked one, for example a commit message that quotes `git push`.
+
 ## Steps
 
 ### 1. Ask scope
