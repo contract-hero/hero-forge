@@ -9,7 +9,7 @@ body:
         1. **Observed failure**: it describes something that went wrong in a real session, not a hypothetical improvement.
         2. **Fits the philosophy**: it doesn't match anything in [`.out-of-scope/`](https://github.com/mattpocock/skills/tree/main/.out-of-scope), and it isn't a config option, a harness-specific branch, or a personal-workflow tweak.
 
-        New skills are not accepted. `misc/` skills are frozen.
+        New skills are not accepted.
   - type: checkboxes
     id: read-scope
     attributes:
