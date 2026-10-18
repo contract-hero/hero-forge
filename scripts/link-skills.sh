@@ -28,6 +28,21 @@ fi
 
 mkdir -p "$DEST"
 
+# A skill that was renamed or removed leaves its old link behind. Remove each
+# link of ours (it points into this repo's skills/) whose target is gone. The
+# user's own entries point elsewhere, so they stay.
+for link in "$DEST"/*; do
+  [ -L "$link" ] || continue
+  case "$(readlink "$link")" in
+    "$REPO/skills/"*)
+      if [ ! -e "$link" ]; then
+        rm "$link"
+        echo "removed $(basename "$link") (its skill is gone)"
+      fi
+      ;;
+  esac
+done
+
 # Every skill in the repo ships, so every one is linked.
 while IFS= read -r -d '' skill_md; do
   src="$(dirname "$skill_md")"
