@@ -11,8 +11,9 @@ import { parseArgs, type ParseArgsConfig } from 'node:util'
 // nobody should move it mid-run.
 export const SETTABLE = ['round', 'head_sha', 'explainer']
 
-// How long a per-PR lock that `route` takes holds before it is free again,
-// so a crashed run does not block its PR forever. The usage line states it.
+// How long a lock that `route` takes (per PR or per issue) holds before it is
+// free again, so a crashed run does not block its PR or issue forever. The
+// usage line states it.
 export const LOCK_TTL_HOURS = 3
 
 // The usage table: the one place that holds each subcommand's one-line
@@ -91,10 +92,11 @@ export const COMMANDS = {
   review.ts stack merge-layer --repo O/R --pr N --base <default branch> --stack-pr S [--config <path>]`,
   },
   route: {
-    summary: 'Decide whether one GitHub webhook delivery starts a review: print review or ignore, with the reason.',
-    usage: `usage: review.ts route --app reviewer --event <X-GitHub-Event> --delivery <X-GitHub-Delivery> --payload <file>
-  Prints {action, repo, pr, reason} and exits 0 for review and for ignore.
-  A review takes the per-PR lock, which is free again after ${LOCK_TTL_HOURS} hours.`,
+    summary: 'Decide whether one GitHub webhook delivery starts work for an App: print the action or ignore, with the reason.',
+    usage: `usage: review.ts route --app reviewer|implementer --event <X-GitHub-Event> --delivery <X-GitHub-Delivery> --payload <file>
+  Prints {action, repo, pr, issue, reason} and exits 0 for every decision, ignore included.
+  reviewer actions: review, recheck. implementer actions: build-ticket, build-spec, adjudicate, resume.
+  Work takes a lock, per PR (or per issue for a build or a resume on an issue), free again after ${LOCK_TTL_HOURS} hours.`,
   },
 } as const satisfies Record<string, { summary: string; usage: string }>
 
