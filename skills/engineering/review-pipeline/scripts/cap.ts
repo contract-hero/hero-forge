@@ -6,8 +6,10 @@
 //
 // The Implementer's attempt cap: `<cap dir>/implementer-app-attempts.json`, a
 // JSON map from `O/R#N` to the number of builds `route` started for that
-// ticket or spec. It never resets by itself: a ticket at its cap stays
-// ignored until a human lowers its count or removes its entry.
+// ticket or spec. A build reserves its attempt with one check and increment
+// under the file's lock, so two callers can never both take the last one.
+// It never resets by itself: a ticket at its cap stays ignored until a human
+// lowers its count or removes its entry.
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -104,20 +106,32 @@ async function readAttempts(file: string): Promise<Record<string, number>> {
 
 const ticketKey = (repo: string, issue: number) => `${repo}#${issue}`
 
-// How many builds `route` started for ticket `issue` of `repo`.
-export async function attemptsOf(repo: string, issue: number): Promise<number> {
-  return (await readAttempts(attemptsFile()))[ticketKey(repo, issue)] ?? 0
-}
-
-// Count one build of ticket `issue` of `repo`.
-export async function countAttempt(repo: string, issue: number): Promise<void> {
+// Change the count of ticket `issue` of `repo` under the attempts file's
+// lock: `change` gets the count and returns the new one, or null to write
+// nothing. A count of 0 drops the entry. Returns what `change` returned.
+async function changeAttempts(repo: string, issue: number, change: (count: number) => number | null): Promise<number | null> {
   const file = attemptsFile()
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const lock = `${file}.lock`
-  await withLock(lock, LOCK_TTL_MS, LOCK_WAIT_MS, async (token) => {
+  return withLock(lock, LOCK_TTL_MS, LOCK_WAIT_MS, async (token) => {
     const attempts = await readAttempts(file)
     const key = ticketKey(repo, issue)
-    attempts[key] = (attempts[key] ?? 0) + 1
+    const next = change(attempts[key] ?? 0)
+    if (next === null) return null
+    if (next === 0) delete attempts[key]
+    else attempts[key] = next
     await commit(file, `${JSON.stringify(attempts)}\n`, lock, token)
+    return next
   })
+}
+
+// Reserve one build of ticket `issue` of `repo`, under its cap of `limit`.
+// False: the ticket has used every attempt, and nothing is reserved.
+export async function reserveAttempt(repo: string, issue: number, limit: number): Promise<boolean> {
+  return (await changeAttempts(repo, issue, (count) => (count < limit ? count + 1 : null))) !== null
+}
+
+// Give back a reservation that started no build.
+export async function releaseAttempt(repo: string, issue: number): Promise<void> {
+  await changeAttempts(repo, issue, (count) => (count > 0 ? count - 1 : null))
 }

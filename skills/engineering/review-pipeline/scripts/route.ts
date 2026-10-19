@@ -47,9 +47,8 @@
 //  10. the issue's author, or (for a spec) the author of any of its
 //      sub-issues, is not the maintainer: the build agent reads that text
 //                                                   ignore, author (issue: the one at fault)
-//  11. the ticket's builds reached implementer.attempts
-//                                                   ignore, attempts
-//  12. build-spec when it has sub-issues, else build-ticket
+//  11. build-spec when it has sub-issues, else build-ticket, once the issue
+//      lock is held and one of implementer.attempts is reserved (below)
 // --app implementer, an issue_comment event:
 //   3. not created                                  ignore, action:<name>
 //   4, 5 as above
@@ -61,20 +60,23 @@
 //      adjudicate
 //      sender the maintainer: no needs-info label   ignore, not-paused
 //      no pause record for the issue or PR          ignore, no-pause-record
+//      the comment is not later than the record's paused_at (a reply to an
+//      earlier pause)                               ignore, stale-reply
 //      resume
 //      anyone else                                  ignore, sender
 // --app implementer, any other event                ignore, event:<name>
 //
 // Then, for every decision that starts work: a held lock (per PR, or per
-// issue for a build or a resume on an issue) is ignore, locked; the App's
-// daily run cap is ignore, cap. Else take the lock, record the delivery,
-// count the run (and, for a build, the attempt), and print the decision
-// with the lock's owner token (lock_token), for the run to release it.
+// issue for a build or a resume on an issue) is ignore, locked; for a build,
+// a ticket whose builds reached implementer.attempts is ignore, attempts;
+// the App's daily run cap is ignore, cap. Else take the lock, reserve the
+// attempt, record the delivery, count the run, and print the decision with
+// the lock's owner token (lock_token), for the run to release it.
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { APPS, type AppName } from './app-token.ts'
-import { attemptsOf, countAttempt, countRun } from './cap.ts'
+import { countRun, releaseAttempt, reserveAttempt } from './cap.ts'
 import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
 import { resolveConfigText, type ResolvedConfig } from './config.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
@@ -120,8 +122,13 @@ type Decision = {
 }
 
 // What a rule found: an ignore with its reason, or work to start. Work names
-// the lock it takes and, for a build, the ticket whose attempt it counts.
-type Start = { action: Exclude<Action, 'ignore'>; lock: { kind: 'pr' | 'issue'; number: number }; attempt?: number }
+// the lock it takes and, for a build, the ticket whose attempt it reserves
+// under the cap `limit`.
+type Start = {
+  action: Exclude<Action, 'ignore'>
+  lock: { kind: 'pr' | 'issue'; number: number }
+  attempt?: { issue: number; limit: number }
+}
 // An ignore may name another issue than the delivery's: the one at fault.
 type Outcome = { ignore: string; issue?: number } | Start
 
@@ -136,7 +143,7 @@ type Payload = {
   pull_request?: { number?: unknown; draft?: unknown; user?: { login?: unknown } }
   issue?: { number?: unknown; pull_request?: unknown; user?: { login?: unknown }; labels?: unknown }
   label?: { name?: unknown }
-  comment?: { body?: unknown }
+  comment?: { body?: unknown; created_at?: unknown }
 }
 
 const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
@@ -335,8 +342,11 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
     const stranger = (await subIssues(e.repo, e.issue)).find((sub) => !sameLogin(sub.author ?? undefined, maintainer))
     if (stranger !== undefined) return why('author', stranger.number)
   }
-  if ((await attemptsOf(e.repo, e.issue)) >= config.implementer.attempts) return why('attempts')
-  return { action: count > 0 ? 'build-spec' : 'build-ticket', lock: { kind: 'issue', number: e.issue }, attempt: e.issue }
+  return {
+    action: count > 0 ? 'build-spec' : 'build-ticket',
+    lock: { kind: 'issue', number: e.issue },
+    attempt: { issue: e.issue, limit: config.implementer.attempts },
+  }
 }
 
 async function commentRule(e: Event): Promise<Outcome> {
@@ -355,6 +365,10 @@ async function commentRule(e: Event): Promise<Outcome> {
   if (subject === null) throw new Failure('the issue_comment payload has no issue.number', 1)
   const record = await readPause(subject)
   if (record === null || record.repo !== e.repo) return why('no-pause-record')
+  // The record is the current pause. A reply written before it (a late
+  // delivery of the answer to an earlier pause) does not answer it.
+  const written = Date.parse(text(e.payload.comment?.created_at) ?? '')
+  if (!(written > Date.parse(record.paused_at))) return why('stale-reply')
   return { action: 'resume', lock: subject }
 }
 
@@ -420,23 +434,37 @@ async function route(argv: string[]): Promise<string> {
 
   const token = await takeFor(outcome.lock, { app, delivery })
   if (token === null) return decide('ignore', 'locked')
-  // The lock is taken first, so a held lock is reported before the cap. The
-  // delivery is recorded pending before the run is counted, so a failed
-  // record counts nothing, and done after the run (and, for a build, the
-  // attempt) is counted. A call that the cap stops, or that fails, forgets
-  // the delivery and gives the lock back. When the attempt count fails, the
-  // run stays counted, which errs toward the cap.
+  // The lock is taken first, so a held lock is reported before the attempts
+  // and the cap. The delivery is recorded pending before anything is
+  // counted, so a failed record counts nothing, and done after. A build
+  // reserves its attempt (one check and increment under the attempts
+  // file's lock) before the run is counted, so a ticket at its cap counts
+  // no run. A call that the attempts or the cap stops, or that fails, gives
+  // back what it reserved, forgets the delivery and gives the lock back.
+  // When the done record fails, the run stays counted, which errs toward
+  // the cap.
   const limit = app === 'reviewer' ? config.app_daily_runs : config.implementer.daily_runs
+  const attempt = outcome.attempt
+  let reserved = false
+  const stop = async (reason: string): Promise<string> => {
+    if (reserved && attempt !== undefined) {
+      reserved = false
+      await releaseAttempt(repo, attempt.issue)
+    }
+    await releaseFor(outcome.lock, token)
+    await forgetDelivery(app, delivery)
+    return decide('ignore', reason)
+  }
   try {
     await recordDelivery(app, delivery, 'pending', outcome.lock, token)
-    if (!(await countRun(app, limit))) {
-      await releaseFor(outcome.lock, token)
-      await forgetDelivery(app, delivery)
-      return decide('ignore', 'cap')
+    if (attempt !== undefined) {
+      if (!(await reserveAttempt(repo, attempt.issue, attempt.limit))) return await stop('attempts')
+      reserved = true
     }
-    if (outcome.attempt !== undefined) await countAttempt(repo, outcome.attempt)
+    if (!(await countRun(app, limit))) return await stop('cap')
     await recordDelivery(app, delivery, 'done', outcome.lock, token)
   } catch (error) {
+    if (reserved && attempt !== undefined) await releaseAttempt(repo, attempt.issue).catch(() => {})
     await releaseFor(outcome.lock, token)
     // The error that stopped the call is the one to report: when the record
     // itself failed, there may be nothing to forget, or no way to reach it.

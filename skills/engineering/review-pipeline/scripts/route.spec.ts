@@ -88,7 +88,7 @@ type Payload = {
   pull_request: { number: number }
   repository: { full_name: string }
   issue: { number: number; user: { login: string }; labels: { name: string }[]; pull_request?: unknown }
-  comment: { body: string }
+  comment: { body: string; created_at?: string }
   label: { name: string }
 }
 
@@ -441,11 +441,13 @@ test('route: a pending delivery record whose lock expired is decided again', asy
 type Router = Awaited<ReturnType<typeof router>>
 
 // A pause record, as #29 writes it when a run stops at a one-way door.
-async function seedPause(r: Router, kind: 'issue' | 'pr', number: number, repo = REPO): Promise<void> {
+// The recorded reply comments were written at 2026-10-19T10:00:00Z, after
+// this default pause time.
+async function seedPause(r: Router, kind: 'issue' | 'pr', number: number, repo = REPO, pausedAt = '2026-10-19T09:00:00.000Z'): Promise<void> {
   await mkdir(join(r.state, 'pauses'), { recursive: true })
   await writeFile(
     join(r.state, 'pauses', `${kind}-${number}.json`),
-    `${JSON.stringify({ repo, kind, number, reason: 'Add a column to the runs table?', paused_at: '2026-10-19T09:00:00.000Z' })}\n`,
+    `${JSON.stringify({ repo, kind, number, reason: 'Add a column to the runs table?', paused_at: pausedAt })}\n`,
   )
 }
 
@@ -782,7 +784,7 @@ test('route --app implementer: with no daily_runs the Implementer cap is 20 runs
   assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D2, issueNumber(29), 'implementer')), onIssue('ignore', 'cap', 29))
 })
 
-test('route --app implementer: a corrupt attempts file exits 4 and takes no lock', async (t) => {
+test('route --app implementer: a corrupt attempts file exits 4 and gives the issue lock back', async (t) => {
   const r = await router(t, { review: implementerMd() })
   await mkdir(r.caps, { recursive: true })
   await writeFile(join(r.caps, 'implementer-app-attempts.json'), '["not", "a map"]')
@@ -963,4 +965,65 @@ test('route --app reviewer: a done record that 1.0.9 wrote at deliveries/<id> is
   assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), ignore('duplicate'))
   // It is the reviewer's: the Implementer never wrote records there.
   assert.notDeepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('ignore', 'duplicate'))
+})
+
+const replyAt = (at: string | undefined) => (p: Payload) => {
+  if (at === undefined) delete p.comment.created_at
+  else p.comment.created_at = at
+}
+
+test('route --app implementer: a reply to an earlier pause, delivered after a newer pause replaced it, is ignore (stale-reply)', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  // The first pause at 09:00 got a reply at 10:00, whose delivery is late.
+  // The run paused again at 11:00, and the record is the new pause's.
+  await seedPause(r, 'issue', 28, REPO, '2026-10-19T11:00:00.000Z')
+  const late = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T10:00:00Z'), 'implementer'))
+  assert.deepEqual(late, onIssue('ignore', 'stale-reply'))
+  // A reply at the same second as the pause is not later than it.
+  const same = await decision(r.routeChanged('issue_comment.created.resume.json', D2, replyAt('2026-10-19T11:00:00Z'), 'implementer'))
+  assert.deepEqual(same, onIssue('ignore', 'stale-reply'))
+  // The maintainer's answer to the second pause resumes the run.
+  const answer = await decision(r.routeChanged('issue_comment.created.resume.json', D3, replyAt('2026-10-19T11:05:00Z'), 'implementer'))
+  assert.deepEqual(answer, onIssue('resume'))
+})
+
+test('route --app implementer: a reply with no creation time is ignore (stale-reply)', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await seedPause(r, 'pr', 42)
+  assert.deepEqual(await decision(r.routeChanged('issue_comment.created.resume-pr.json', D1, replyAt(undefined), 'implementer')), onPr('ignore', 'stale-reply'))
+})
+
+test('route --app implementer: a delivery that waited while the last attempt ran is ignore (attempts) once the lock is free', async (t) => {
+  const r = await router(t, { review: implementerMd('  attempts: 1') })
+  // A was sent first, but is decided only after B's build released the lock.
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+  await endRun(r, 'issue-28.lock')
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D2, 'implementer')), onIssue('ignore', 'attempts'))
+  // The attempts ignore gave the issue lock back and recorded no delivery.
+  await assert.rejects(readFile(join(r.state, 'locks', 'issue-28.lock')))
+  await assert.rejects(readFile(join(r.state, 'deliveries', 'implementer', D2)))
+  assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 1 })
+})
+
+test('route --app implementer: with one attempt left, deliveries that race the lock give exactly one build-ticket', async (t) => {
+  const r = await router(t, { review: implementerMd('  attempts: 1') })
+  const order: Decision[] = []
+  // Each delivery that finds the lock held waits for the build to end, then tries again.
+  const deliver = async (delivery: string) => {
+    for (;;) {
+      const got = await decision(r.route('issues.labeled.json', delivery, 'implementer'))
+      if (got.reason !== 'locked') return order.push(got)
+      await rm(join(r.state, 'locks', 'issue-28.lock'), { force: true })
+    }
+  }
+  await Promise.all([deliver(D1), deliver(D2), deliver(D3)])
+  assert.deepEqual(order.map((d) => d.action).sort(), ['build-ticket', 'ignore', 'ignore'])
+  assert.deepEqual(order.filter((d) => d.action === 'ignore'), [onIssue('ignore', 'attempts'), onIssue('ignore', 'attempts')])
+})
+
+test('route --app implementer: a daily cap ignore after the attempt was reserved gives the attempt back', async (t) => {
+  const r = await router(t, { review: implementerMd('  attempts: 1', '  daily_runs: 1') })
+  assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D1, issueNumber(29), 'implementer')), onIssue('build-ticket', null, 29))
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D2, 'implementer')), onIssue('ignore', 'cap'))
+  assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#29`]: 1 })
 })
