@@ -19,6 +19,17 @@ Communication to and from subagents should be sparse. Communicate primarily thro
 
 **Foreground rule.** A subagent whose result your next step needs runs in the foreground: you wait for it before that step, and you never end your turn while it runs. That covers the **exploration subagent** (step 3), whose notes the implementers read, the **implementer subagents** (step 4), whose reports start step 5, and any subagent you give a merge or a landing step, whose result the next layer waits on. Get concurrency from parallel starts, not from the background: start every ready layer's **implementer subagent** at once, and wait for all of them.
 
+**AFK run.** The T3 router passes `--afk --lock <token>` with the spec (and `--resume` after a pause); a human never needs them. `<token>` is the `lock_token` that `review.ts route` printed for the spec's issue lock. With `--afk`:
+
+- Nobody is at the keyboard, so you ask no question. Where a step says to stop or ask the user, send a push notification with the message (the PushNotification tool, when the session has one), run `review.ts lock release --issue <spec> --token <token>`, and end.
+- Each **implementer subagent** decides the two-way decisions its ticket and the spec leave open, and logs them in a `## Decisions` section of its layer's PR body (the decision, the options, the reason), as `implement-pr`'s **Decisions in an AFK run** says. At a one-way door (a data shape, a public API, a new dependency, a migration, a destructive action) it decides nothing: it commits and pushes what it has, and reports the question and the options. Let the implementers in flight finish, then pause on the spec issue with `implement-pr`'s pause steps 2 to 6, with `--issue <spec>`.
+- The layer PRs still open as the user, as step 4 says. A PR the Implementer App opens starts the reviewer App's own review in `single` mode, and this skill reviews each layer itself, in `layer` mode.
+- Step 7.7 pushes each restacked layer as the Implementer App.
+- The run ends after step 9 with `review.ts lock release --issue <spec> --token <token>`.
+- With `--resume`, do `implement-pr`'s **Resume after a pause** on the spec issue (`--issue <spec>`) first, then go on from **Resume** below, and give the answer to the layer's implementer.
+
+Without `--afk`, every step works as written.
+
 ## Helper CLI
 
 The helper CLI lives in the `review-pipeline` skill folder, a sibling of the folder this SKILL.md is in. Below, `review.ts` means `node "<the folder this SKILL.md is in>/../review-pipeline/scripts/review.ts"`, run from the root of the worktree you are in. Its exit codes are the ones `review-pipeline` documents (0 success, 1 failed, 2 usage, 3 absent, 4 broken).
@@ -67,7 +78,7 @@ The plan follows two rules. A ticket with more than one open blocker branches fr
    5. **Wait for the gate**: `review.ts merge-gate --repo O/R --pr P`, handled as `review-pipeline`'s **Finish** step 5 says (`go`, `wait`, `stop`, `merged`).
    6. **Merge**: `review.ts stack merge-layer --repo O/R --pr P --base <default branch> --stack-pr <S>`, where `<S>` is in `<stack dir>/stack-pr`. Never `review.ts merge`: it refuses a layer. Exit 1: stop and ask the user, with the message.
    7. **Move each child onto the default branch.** For each ticket C in L's `children`, in C's worktree: `git fetch origin`, `git merge --ff-only origin/<C branch>`, then `review.ts stack restack --from <tip-<L>> --onto origin/<default branch> --pr <C PR>`. It rebases only C's own commits, so no commit of L is duplicated after the squash merge. The tip can be past the point C branched from, when step 6 put a fix on L: restack handles that, because the commits after the tip are still only C's own.
-      - Exit 0: write the output's `old_tip` to `<stack dir>/tip-<C>`. It is C's tip from before the restack, so the children of C branched from it or an earlier commit on it, and step 7.4 of C's landing keeps it. Then `git push --force-with-lease=<C branch>:<old_tip> origin <C branch>`, then `gh pr edit <C PR> --base <default branch>`, then `review.ts run-state set --pr <C PR> head_sha <new_tip>`.
+      - Exit 0: write the output's `old_tip` to `<stack dir>/tip-<C>`. It is C's tip from before the restack, so the children of C branched from it or an earlier commit on it, and step 7.4 of C's landing keeps it. Then `git push --force-with-lease=<C branch>:<old_tip> origin <C branch>` (with `--afk`, as the Implementer App instead: `review.ts implementer push --repo O/R --branch <C branch> --force-with-lease <old_tip>`, which replaces the branch on GitHub only while it still has `old_tip`), then `gh pr edit <C PR> --base <default branch>`, then `review.ts run-state set --pr <C PR> head_sha <new_tip>`.
       - Exit 1 (a conflict or a content change): the branch is back at its old tip and nothing was pushed. Stop and ask the user, with the message.
 
    A layer whose parent landed earlier can be behind the default branch. That is fine for a squash merge, unless GitHub reports `BEHIND`: then `merge-gate` stops, and you ask the user.
