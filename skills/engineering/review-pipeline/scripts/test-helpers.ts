@@ -273,12 +273,14 @@ function checkJwt(auth: string | undefined, publicKey: KeyObject): { ok: boolean
 // A local stand-in for api.github.com. `routes` maps "METHOD /path" to a
 // response; any other request gets a 404. A request whose Bearer JWT does not
 // verify with `publicKey` gets a 401, as GitHub answers a wrong key. Every
-// request is recorded. The server runs in the test process, so spawn the CLI
-// with the async `run`/`runCli`, never with spawnSync.
+// request is recorded, and `onRequest` runs before each answer, so a test can
+// act between two calls. The server runs in the test process, so spawn the
+// CLI with the async `run`/`runCli`, never with spawnSync.
 export async function fakeGitHubApi(
   t: { after: (fn: () => Promise<void>) => void },
   publicKey: KeyObject,
   routes: Record<string, FakeApiRoute>,
+  onRequest?: (request: FakeApiRequest) => Promise<void>,
 ): Promise<FakeGitHubApi> {
   const requests: FakeApiRequest[] = []
   const server = createServer((req, res) => {
@@ -295,7 +297,7 @@ export async function fakeGitHubApi(
         body = raw
       }
       const version = req.headers['x-github-api-version']
-      requests.push({
+      const request: FakeApiRequest = {
         method,
         path,
         iss: jwt.iss,
@@ -303,12 +305,15 @@ export async function fakeGitHubApi(
         accept: req.headers.accept ?? null,
         api_version: typeof version === 'string' ? version : null,
         body,
-      })
+      }
+      requests.push(request)
       const route: FakeApiRoute = !jwt.ok
         ? { status: 401, body: { message: 'A JSON web token could not be decoded' } }
         : (routes[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } })
-      res.writeHead(route.status, { 'content-type': 'application/json' })
-      res.end(JSON.stringify(route.body))
+      void (onRequest?.(request) ?? Promise.resolve()).then(() => {
+        res.writeHead(route.status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(route.body))
+      })
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -328,14 +333,14 @@ export async function implementerApp(
   t: { after: (fn: () => Promise<void>) => void },
   dir: string,
   repo: string,
-  options: { missing?: boolean; broken?: boolean } = {},
+  options: { missing?: boolean; broken?: boolean; onRequest?: (request: FakeApiRequest) => Promise<void> } = {},
 ): Promise<{ env: Record<string, string>; api: FakeGitHubApi }> {
   const key = await appKey(dir, 'implementer-app.pem')
   const api = await fakeGitHubApi(t, key.publicKey, {
     [`GET /repos/${repo}/installation`]: { status: 200, body: { id: 4343 } },
     'POST /app/installations/4343/access_tokens': { status: 201, body: { token: IMPLEMENTER_TOKEN } },
     'GET /app': { status: 200, body: { slug: 'contract-implementer' } },
-  })
+  }, options.onRequest)
   const envFile = join(dir, 'implementer-app.env')
   if (options.broken === true) await writeFile(envFile, 'HERO_FORGE_IMPLEMENTER_APP_ID=777\n')
   else if (options.missing !== true) {
@@ -346,18 +351,25 @@ export async function implementerApp(
 
 // `password` is what the push's own credential config gives a real `git
 // credential fill` for https://github.com, `evil_password` the same for another
-// host (null: no password). `env` holds the variables that keep git from
-// prompting or leaving https.
+// host (null: no password). `config` is the real `git config --list
+// --show-origin` the push would read, its `-c` options included. `env` is
+// the push's whole environment. `landed` is the exit code of the real push
+// to `remote` (null: not run).
 export type FakeGitPush = {
   argv: string[]
+  cwd: string
   password: string | null
   evil_password: string | null
-  env: { GIT_TERMINAL_PROMPT: string | null; GIT_ALLOW_PROTOCOL: string | null; GIT_ASKPASS: string | null }
+  config: string[]
+  env: Record<string, string>
+  landed: number | null
 }
 
 // How the fake answers a push. `{password}` in `stderr` becomes the password
 // the push's credential config gave, as a git that echoed it would print.
-export type FakeGitSpec = { exit?: number; stderr?: string }
+// With `remote` (a bare repo path) and no failing `exit`, the fake also runs
+// the real push there, with the same options and env, over the file protocol.
+export type FakeGitSpec = { exit?: number; stderr?: string; remote?: string }
 
 const fakeGitScript = (realGit: string, log: string, specFile: string) => `import { appendFileSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -376,10 +388,18 @@ const fill = (host) => {
   return /^password=(.*)$/m.exec(r.stdout ?? '')?.[1] ?? null
 }
 const password = fill('github.com')
-const env = process.env
-appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, password, evil_password: fill('evil.example'),
-  env: { GIT_TERMINAL_PROMPT: env.GIT_TERMINAL_PROMPT ?? null, GIT_ALLOW_PROTOCOL: env.GIT_ALLOW_PROTOCOL ?? null, GIT_ASKPASS: env.GIT_ASKPASS ?? null } }) + '\\n')
+const listed = spawnSync(${JSON.stringify(realGit)}, [...configs.flatMap((c) => ['-c', c]), 'config', '--list', '--show-origin'], { encoding: 'utf8' })
+const config = (listed.stdout ?? '').split('\\n').filter((line) => line !== '')
 const spec = JSON.parse(readFileSync(${JSON.stringify(specFile)}, 'utf8'))
+let landed = null
+if (spec.remote !== undefined && (spec.exit ?? 0) === 0) {
+  const real = spawnSync(${JSON.stringify(realGit)}, [...configs.flatMap((c) => ['-c', c]), 'push', '-q', spec.remote, argv.at(-1)],
+    { encoding: 'utf8', env: { ...process.env, GIT_ALLOW_PROTOCOL: 'file' } })
+  landed = real.status
+  if (real.status !== 0) process.stderr.write(real.stderr)
+}
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), password, evil_password: fill('evil.example'), config,
+  env: process.env, landed }) + '\\n')
 process.stderr.write((spec.stderr ?? 'To https://github.com/x/y.git\\n * [new branch] x -> x\\n').replaceAll('{password}', password ?? ''))
 process.exitCode = spec.exit ?? 0
 `

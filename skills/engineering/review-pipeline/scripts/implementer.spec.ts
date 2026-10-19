@@ -1,16 +1,16 @@
 // `review.ts implementer`: the Implementer App pushes, opens the draft PR and
 // comments, each verb minting its own token, so no token reaches the caller.
 import assert from 'node:assert/strict'
-import { writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { fakeGh, fakeGit, IMPLEMENTER_TOKEN, implementerApp, run, runCli, tempDir, type FakeGhResponse, type FakeGitSpec } from './test-helpers.ts'
+import { fakeGh, fakeGit, IMPLEMENTER_TOKEN, implementerApp, run, runCli, tempDir, type FakeApiRequest, type FakeGhResponse, type FakeGitSpec } from './test-helpers.ts'
 
 const REPO = 'contract-hero/hero-forge'
 const WITH_APP = '```yaml\nruntime: claude\napp: enabled\n```\n'
 const NO_APP = '```yaml\nruntime: claude\n```\n'
 
-type Setup = { config?: string; missing?: boolean; responses?: FakeGhResponse[] }
+type Setup = { config?: string; missing?: boolean; responses?: FakeGhResponse[]; onRequest?: (request: FakeApiRequest) => Promise<void> }
 
 // A temp dir with a config, the Implementer App and a fake gh. `cli` runs
 // `review.ts implementer <args> --repo REPO --config <config>`.
@@ -18,7 +18,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await tempDir(t)
   const config = join(dir, 'review.md')
   await writeFile(config, options.config ?? WITH_APP)
-  const app = await implementerApp(t, dir, REPO, { missing: options.missing })
+  const app = await implementerApp(t, dir, REPO, { missing: options.missing, onRequest: options.onRequest })
   const gh = await fakeGh(dir, options.responses ?? [])
   const env = { ...gh.env, ...app.env }
   const file = async (name: string, text: string) => {
@@ -140,45 +140,120 @@ test('GitHub refusing the pull request exits 1 with its message', async (t) => {
 
 // A git repo with a commit on `ticket/27-x`, a user-level git config whose
 // credential helper hands out the user's token for github.com (as
-// `gh auth setup-git` does), and the fake git. `push` runs the push verb in
-// the repo.
+// `gh auth setup-git` does), a bare repo that stands in for GitHub, and the
+// fake git, which also runs each push for real into that bare repo. `push`
+// runs the push verb in the repo.
 async function pushSetup(t: Parameters<typeof tempDir>[0], options: Setup & { git?: FakeGitSpec; env?: Record<string, string> } = {}) {
   const s = await setup(t, options)
   const repo = join(s.dir, 'work')
+  const remote = join(s.dir, 'remote.git')
   const globalConfig = join(s.dir, 'gitconfig')
   await writeFile(globalConfig, `[credential "https://github.com"]\n\thelper =\n\thelper = "!f() { echo username=me; echo password=${USER_TOKEN}; }; f"\n`)
   const env = { ...s.env, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' }
   for (const args of [['init', '-q', '-b', 'main', repo], ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'one'],
-    ['-C', repo, 'branch', 'ticket/27-x']]) {
+    ['-C', repo, 'branch', 'ticket/27-x'], ['init', '-q', '--bare', remote]]) {
     const done = await run('git', args, { env })
     assert.equal(done.code, 0, done.stderr)
   }
   const sha = (await run('git', ['-C', repo, 'rev-parse', 'ticket/27-x'], { env })).stdout.trim()
-  const git = await fakeGit(s.dir, options.git)
+  const git = await fakeGit(s.dir, { remote, ...options.git })
   const pushEnv = { ...env, PATH: `${git.bin}:${s.env.PATH ?? ''}`, GIT_ASKPASS: '/usr/bin/false', ...options.env }
   const push = (...args: string[]) =>
     runCli(['implementer', 'push', ...args, '--repo', REPO, '--config', join(s.dir, 'review.md')], { env: pushEnv, cwd: repo })
-  const gitConfig = async (...args: string[]) => assert.equal((await run('git', ['-C', repo, 'config', ...args], { env })).code, 0)
-  return { ...s, sha, push, pushes: git.pushes, gitConfig }
+  const gitConfig = async (file: string, ...args: string[]) =>
+    assert.equal((await run('git', ['config', '--file', file, ...args], { env })).code, 0)
+  const landed = async () => (await run('git', ['--git-dir', remote, 'rev-parse', '--verify', '--quiet', 'refs/heads/ticket/27-x'], { env })).stdout.trim()
+  return { ...s, repo, sha, push, pushes: git.pushes, gitConfig, globalConfig, landed }
 }
 
 const USER_TOKEN = `gho_${'U5'.repeat(18)}`
 
-test('push sends the branch to GitHub over https with the Implementer App token, never the user credentials, and prints no token', async (t) => {
-  const s = await pushSetup(t)
-  const result = await s.push('--branch', 'ticket/27-x')
+// The only `-c` options the push may carry, in order.
+const PUSH_OPTIONS = [
+  'credential.helper=', 'credential.helper=<the App helper>', 'http.extraHeader=', 'http.sslVerify=true', 'http.proxy=', 'core.askPass=',
+  'core.hooksPath=/dev/null',
+]
+
+// The variables the push may see. A shell between the CLI and the fake git
+// adds PWD, SHLVL and `_`, and macOS adds __CF_USER_TEXT_ENCODING to every
+// process, so those are left out of the check.
+const PUSH_ENV =
+  /^(PATH|TMPDIR|LANG|LC_[A-Z]+|HOME|GIT_DIR|GIT_CONFIG_NOSYSTEM|GIT_CONFIG_GLOBAL|GIT_TERMINAL_PROMPT|GIT_ALLOW_PROTOCOL|HERO_FORGE_GIT_TOKEN|PWD|SHLVL|_|__CF_USER_TEXT_ENCODING)$/
+
+// One push, checked: it ran in a scratch repo that is gone now, with only
+// the allowed env and options and no other config, authenticated with the
+// App token alone, and the branch tip landed in the stand-in for GitHub.
+async function assertIsolatedPush(s: Awaited<ReturnType<typeof pushSetup>>, result: { code: number | null; stdout: string; stderr: string }) {
   assert.equal(result.stderr, '')
   assert.equal(result.code, 0)
   noToken(result)
   assert.deepEqual(JSON.parse(result.stdout), { branch: 'ticket/27-x', commit: s.sha, as: 'contract-implementer[bot]' })
   const pushes = await s.pushes()
   assert.equal(pushes.length, 1)
-  const [push] = pushes
-  assert.deepEqual(push!.argv.slice(-3), ['push', `https://github.com/${REPO}.git`, 'refs/heads/ticket/27-x:refs/heads/ticket/27-x'])
-  assert.ok(!push!.argv.join(' ').includes(IMPLEMENTER_TOKEN), 'the token is in the git argv')
-  assert.equal(push!.password, IMPLEMENTER_TOKEN)
-  assert.equal(push!.evil_password, null)
-  assert.deepEqual(push!.env, { GIT_TERMINAL_PROMPT: '0', GIT_ALLOW_PROTOCOL: 'https', GIT_ASKPASS: null })
+  const push = pushes[0]!
+  assert.deepEqual(push.argv.slice(-3), ['push', `https://github.com/${REPO}.git`, `${s.sha}:refs/heads/ticket/27-x`])
+  assert.ok(!push.argv.join(' ').includes(IMPLEMENTER_TOKEN), 'the token is in the git argv')
+  const options: string[] = []
+  for (let i = 0; push.argv[i] === '-c'; i += 2) options.push(push.argv[i + 1]!.startsWith('credential.helper=!') ? 'credential.helper=<the App helper>' : push.argv[i + 1]!)
+  assert.deepEqual(options, PUSH_OPTIONS)
+  assert.equal(push.password, IMPLEMENTER_TOKEN)
+  assert.equal(push.evil_password, null)
+  const extra = Object.keys(push.env).filter((name) => !PUSH_ENV.test(name))
+  assert.deepEqual(extra, [])
+  assert.equal(push.env.GIT_DIR, push.cwd)
+  assert.equal(push.env.HOME, push.cwd)
+  assert.ok(!push.cwd.startsWith(s.repo), push.cwd)
+  assert.deepEqual(
+    { nosystem: push.env.GIT_CONFIG_NOSYSTEM, global: push.env.GIT_CONFIG_GLOBAL, prompt: push.env.GIT_TERMINAL_PROMPT, protocol: push.env.GIT_ALLOW_PROTOCOL },
+    { nosystem: '1', global: '/dev/null', prompt: '0', protocol: 'https' },
+  )
+  // Only the scratch repo's own config and the push's options: no file of the
+  // user's, the repo's or the system's.
+  const files = push.config.filter((line) => !line.startsWith('command line:'))
+  assert.ok(files.every((line) => line.startsWith(`file:${push.cwd}/config\t`) && /\tcore\.[a-z]+=/.test(line)), files.join('\n'))
+  await assert.rejects(stat(push.cwd), 'the scratch repo is still there')
+  assert.equal(await s.landed(), s.sha)
+}
+
+test('push sends the branch tip to GitHub over https with the Implementer App token, from a scratch repo, and prints no token', async (t) => {
+  const s = await pushSetup(t)
+  await assertIsolatedPush(s, await s.push('--branch', 'ticket/27-x'))
+})
+
+test('no git config or env of the user, the repo or the caller reaches the push', async (t) => {
+  const s = await pushSetup(t, {
+    env: {
+      HTTPS_PROXY: 'http://127.0.0.1:9', https_proxy: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9', GIT_SSL_NO_VERIFY: '1',
+      GIT_SSL_CAINFO: '/tmp/evil-ca.pem', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: 'Authorization: basic eHg=',
+      GIT_CONFIG_PARAMETERS: "'http.proxy'='http://127.0.0.1:9'",
+    },
+  })
+  const local = join(s.repo, '.git', 'config')
+  for (const [key, value] of [
+    ['http.extraHeader', 'Authorization: basic dXNlcjpzZWNyZXQ='],
+    ['http.https://github.com/.extraHeader', 'Authorization: bearer x'],
+    ['url.git@github.com:.insteadOf', 'https://github.com/'],
+    ['url.https://evil.example/.pushInsteadOf', 'https://github.com/'],
+    ['http.proxy', 'http://127.0.0.1:9'],
+    ['http.sslVerify', 'false'],
+    ['http.sslCAInfo', '/tmp/evil-ca.pem'],
+    ['http.cookieFile', '/tmp/cookies'],
+  ] as [string, string][]) await s.gitConfig(local, key, value)
+  await s.gitConfig(s.globalConfig, 'http.extraHeader', 'Authorization: basic Z2xvYmFs')
+  await assertIsolatedPush(s, await s.push('--branch', 'ticket/27-x'))
+})
+
+test('config written to the repo between the mint and the push has no effect: the push never reads it', async (t) => {
+  let local = ''
+  const s = await pushSetup(t, {
+    onRequest: async (request) => {
+      if (request.method !== 'POST') return
+      await writeFile(local, `[http]\n\textraHeader = Authorization: basic bGF0ZQ==\n\tproxy = http://127.0.0.1:9\n[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n`, { flag: 'a' })
+    },
+  })
+  local = join(s.repo, '.git', 'config')
+  await assertIsolatedPush(s, await s.push('--branch', 'ticket/27-x'))
+  assert.match(await readFile(local, 'utf8'), /bGF0ZQ==/)
 })
 
 for (const [name, options, code, message] of [
@@ -224,31 +299,3 @@ test('an unknown verb or a bad option is a usage error (exit 2) that mints nothi
   assert.deepEqual(await s.gh.calls(), [])
   assert.deepEqual(s.api.requests, [])
 })
-
-// Each one could carry another identity than the App past the credential
-// helper: an HTTP header, or a rewrite of the URL to another host or to SSH.
-for (const [name, arrange, key] of [
-  ['an extraHeader in the repo config', { local: ['http.extraHeader', 'Authorization: basic dXNlcjpzZWNyZXQ='] }, 'http.extraheader'],
-  ['a URL-scoped extraHeader', { local: ['http.https://github.com/.extraHeader', 'Authorization: bearer x'] }, 'http.https://github.com/.extraheader'],
-  [
-    'an extraHeader injected through GIT_CONFIG_COUNT',
-    { env: { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: 'Authorization: basic eHg=' } },
-    'http.extraheader',
-  ],
-  ['an insteadOf rewrite', { local: ['url.git@github.com:.insteadOf', 'https://github.com/'] }, 'url.git@github.com:.insteadof'],
-  ['a pushInsteadOf rewrite', { local: ['url.https://evil.example/.pushInsteadOf', 'https://github.com/'] }, 'url.https://evil.example/.pushinsteadof'],
-] as const) {
-  test(`push refuses ${name} before any token is minted, and pushes nothing`, async (t) => {
-    const s = await pushSetup(t, 'env' in arrange ? { env: { ...arrange.env } } : {})
-    if ('local' in arrange) await s.gitConfig(...arrange.local)
-    const result = await s.push('--branch', 'ticket/27-x')
-    assert.equal(result.code, 1)
-    assert.equal(result.stdout, '')
-    assert.equal(
-      result.stderr,
-      `review.ts implementer: the git config sets ${key}, which could push as another identity than the App. Nothing was pushed. Remove it and run again.\n`,
-    )
-    assert.deepEqual(await s.pushes(), [])
-    assert.deepEqual(s.api.requests, [])
-  })
-}

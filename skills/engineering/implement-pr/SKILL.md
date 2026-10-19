@@ -45,7 +45,7 @@ Run typechecking regularly, single test files regularly, and the full test suite
 
 Commit the work to the branch. Then push it: `git push -u origin <branch>`.
 
-With `--afk`, push as the App instead: `review.ts implementer push --repo <owner/repo> --branch <branch>`. It pushes the branch to GitHub over https and prints the branch, the commit and the App's login. Exit 1 with GitHub's message means GitHub refused the push (for example, the App has no permission to change `.github/workflows/`): show the message and stop. Exit 1 that names a git config key (an `http.extraHeader`, or a URL rewrite with `insteadOf` or `pushInsteadOf`) means that key could push as another identity: show the message and stop. Do not remove the key yourself. Exit 4: stop as in step 1. Never push as the user instead.
+With `--afk`, push as the App instead: `review.ts implementer push --repo <owner/repo> --branch <branch>`. It pushes the branch tip to GitHub over https from a scratch repo that reads none of the system's, the user's or the repo's git config, and prints the branch, the commit and the App's login. Exit 1 with GitHub's message means GitHub refused the push (for example, the App has no permission to change `.github/workflows/`): show the message and stop. Exit 4: stop as in step 1. Never push as the user instead.
 
 ## 5. Open the draft PR
 

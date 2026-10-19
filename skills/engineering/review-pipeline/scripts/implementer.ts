@@ -14,7 +14,9 @@
 // Every text it posts goes through the marker refusal and the secret scan
 // first. Errors never carry the token.
 import { spawn } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { loadConfig } from './config.ts'
 import { appIdentity, gh, json, oneLine, type Identity } from './github.ts'
@@ -60,56 +62,60 @@ type GitResult = { code: number | null; stdout: string; stderr: string }
 
 // Run git with stdin closed. git is found through PATH, so the tests' fake
 // git stands in for it.
-function git(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<GitResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+function git(args: string[], env: NodeJS.ProcessEnv = process.env, cwd?: string): Promise<GitResult> {
+  return new Promise((done, reject) => {
+    const child = spawn('git', args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => (stdout += chunk))
     child.stderr.on('data', (chunk) => (stderr += chunk))
     child.on('error', reject)
-    child.on('close', (code) => resolve({ code, stdout, stderr }))
+    child.on('close', (code) => done({ code, stdout, stderr }))
   })
 }
 
 // The credential helper of the push. git runs it with the request on stdin,
 // and it answers only for https://github.com, from an env var that only this
 // git process has: the token is never in argv, in a file, or in git config.
-// The empty `credential.helper=` before it drops every helper the user's and
-// the repo's config set (gh's included), so the push never carries the
-// user's credentials.
+// The push reads no config of the user's (see push), and the empty
+// `credential.helper=` before it drops any helper all the same (gh's
+// included), so the push never carries the user's credentials.
 const TOKEN_VAR = 'HERO_FORGE_GIT_TOKEN'
 const HELPER =
   '!f() { test "$1" = get || exit 0; while IFS= read -r line; do case "$line" in protocol=*) p="${line#protocol=}";; host=*) h="${line#host=}";; esac; done; ' +
   `test "$p" = https && test "$h" = github.com || exit 0; echo username=x-access-token; echo "password=$${TOKEN_VAR}"; }; f`
 
-// git config that could carry another identity than the App past the
-// credential helper: an HTTP header (an Authorization header is sent as is),
-// or a URL rewrite to another host or to SSH. Matched against git's canonical
-// key names, which are lower case outside the URL.
-const TRANSPORT = '^(http\\..*extraheader|url\\..*\\.(insteadof|pushinsteadof))$'
+// The variables the push's git keeps from the caller's environment. Every
+// other one is dropped: no GIT_* variable, proxy or TLS setting of the
+// caller reaches it.
+const KEEP = /^(PATH|TMPDIR|LANG|LC_[A-Z]+)$/
 
-// Config a caller can inject through the environment. The check below sees
-// it; the push's git never gets it.
-const INJECTED = /^GIT_CONFIG_(COUNT|PARAMETERS|KEY_[0-9]+|VALUE_[0-9]+)$/
-
-// Fail closed on any such key in the config the push would read (system,
-// global, the repo, and the env). The message names the key, never its value,
-// which may be a credential.
-async function refuseTransportAuth(): Promise<void> {
-  const found = await git(['config', '--name-only', '--get-regexp', TRANSPORT])
-  refuse(found.code === 0 || found.code === 1, `cannot read the git config: ${oneLine(found.stderr)}`)
-  const key = found.stdout.split('\n').find((line) => line.trim() !== '')
-  refuse(key === undefined, `the git config sets ${key}, which could push as another identity than the App. Nothing was pushed. Remove it and run again.`)
+// The environment of git in the scratch repo: the kept variables, and that
+// repo as GIT_DIR and HOME, with no system or user config, no prompt, and
+// https only.
+function scratchEnv(scratch: string, token?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => KEEP.test(name)))
+  return {
+    ...env,
+    GIT_DIR: scratch,
+    HOME: scratch,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_ALLOW_PROTOCOL: 'https',
+    ...(token === undefined ? {} : { [TOKEN_VAR]: token }),
+  }
 }
 
-// Push the local branch to the same branch on GitHub, over https (an App token
-// does not work over SSH, and `origin` may be an SSH remote). No upstream is
-// set: the remote is a URL, not `origin`. Config that could carry another
-// identity is refused before the token is minted, and the push also clears
-// `http.extraHeader` and drops the env-injected config. Hooks are off, so no
-// hook script runs with the token in its env; no prompt, askpass or other
-// protocol can stand in for the App.
+// Push the branch tip to the same branch on GitHub, over https (an App token
+// does not work over SSH, and `origin` may be an SSH remote). The push runs
+// in a scratch bare repo that borrows the worktree's objects through
+// `objects/info/alternates`, so it reads no config but its own: no setting of
+// the system, the user, the repo or the caller's env (a header, a URL
+// rewrite, a proxy, a TLS setting) can carry another identity or reach the
+// token, also when it is written after the mint. No upstream is set: the
+// remote is a URL, not `origin`. Hooks are off, and no prompt or askpass can
+// stand in for the App.
 async function push(repo: string, values: Values): Promise<string> {
   const branch = values.branch
   if (branch === undefined || branch === '') throw usage('--branch is required')
@@ -117,24 +123,33 @@ async function push(repo: string, values: Values): Promise<string> {
   const local = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])
   refuse(local.code === 0, `no local branch ${branch} in this repo: run push in the worktree that holds it`)
   const commit = local.stdout.trim()
-  await refuseTransportAuth()
+  const common = await git(['rev-parse', '--git-common-dir'])
+  refuse(common.code === 0, `cannot find the git dir of this repo: ${oneLine(common.stderr)}`)
+  const objects = join(resolve(common.stdout.trim()), 'objects')
 
   const me = await app()
   const token = me.token as string
-  const env: NodeJS.ProcessEnv = { ...process.env, [TOKEN_VAR]: token, GIT_TERMINAL_PROMPT: '0', GIT_ALLOW_PROTOCOL: 'https' }
-  for (const name of Object.keys(env)) {
-    if (name === 'GIT_ASKPASS' || name === 'SSH_ASKPASS' || name.startsWith('GIT_TRACE') || INJECTED.test(name)) delete env[name]
+  // mkdtemp makes the directory mode 700: no other user can read it. The
+  // real path, so git and the scratch env name the same directory.
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'hero-forge-push-')))
+  try {
+    const made = await git(['init', '-q', '--bare', '--template=', scratch], scratchEnv(scratch), scratch)
+    refuse(made.code === 0, `cannot make the scratch repo for the push: ${oneLine(made.stderr)}`)
+    await mkdir(join(scratch, 'objects', 'info'), { recursive: true })
+    await writeFile(join(scratch, 'objects', 'info', 'alternates'), `${objects}\n`)
+    const pushed = await git(
+      ['-c', 'credential.helper=', '-c', `credential.helper=${HELPER}`, '-c', 'http.extraHeader=', '-c', 'http.sslVerify=true',
+        '-c', 'http.proxy=', '-c', 'core.askPass=', '-c', 'core.hooksPath=/dev/null',
+        'push', `https://github.com/${repo}.git`, `${commit}:refs/heads/${branch}`],
+      scratchEnv(scratch, token),
+      scratch,
+    )
+    // git prints no credential, but its output is scrubbed of the token anyway.
+    const said = oneLine(pushed.stderr || pushed.stdout).replaceAll(token, '***')
+    refuse(pushed.code === 0, `GitHub refused the push of ${branch}: ${said}`)
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
   }
-  const ref = `refs/heads/${branch}`
-  const pushed = await git(
-    ['-c', 'credential.helper=', '-c', `credential.helper=${HELPER}`, '-c', 'http.extraHeader=', '-c', 'core.askPass=',
-      '-c', 'core.hooksPath=/dev/null',
-      'push', `https://github.com/${repo}.git`, `${ref}:${ref}`],
-    env,
-  )
-  // git prints no credential, but its output is scrubbed of the token anyway.
-  const said = oneLine(pushed.stderr || pushed.stdout).replaceAll(token, '***')
-  refuse(pushed.code === 0, `GitHub refused the push of ${branch}: ${said}`)
   return `${JSON.stringify({ branch, commit, as: me.login })}\n`
 }
 
