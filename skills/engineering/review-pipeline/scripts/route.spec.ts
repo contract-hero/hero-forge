@@ -75,6 +75,8 @@ const cases: [string, string, Remote, Decision][] = [
   ['a draft PR opened by the maintainer', 'pull_request.opened.draft.json', { review: reviewMd() }, ignore('action:opened')],
   ['a PR opened by the maintainer, not a draft', 'pull_request.opened.json', { review: reviewMd() }, review()],
   ['a maintainer PR marked ready for review', 'pull_request.ready_for_review.json', { review: reviewMd() }, review()],
+  ['a maintainer PR reopened, not a draft', 'pull_request.reopened.maintainer.json', { review: reviewMd() }, review()],
+  ['a maintainer draft PR reopened', 'pull_request.reopened.maintainer.draft.json', { review: reviewMd() }, ignore('action:reopened')],
   ['a draft PR opened by contract-implementer[bot]', 'pull_request.opened.implementer.json', { review: reviewMd() }, review()],
   ['a PR by contract-implementer[bot] reopened', 'pull_request.reopened.json', { review: reviewMd() }, review()],
   [
@@ -339,4 +341,40 @@ test('route: a breaker left over from a crash exits 1 with its path, and deletes
   assert.match(stderr, /Remove it by hand/)
   assert.equal(await readFile(`${lock}.guard`, 'utf8'), `${JSON.stringify({ token: 'crashed' })}\n`)
   assert.equal(await readFile(`${lock}.guard.break`, 'utf8'), '')
+})
+
+// A delivery record that a call killed between its record and its count left
+// on disk: pending, with the PR lock token that call held.
+async function pendingRecord(state: string, delivery: string, token: string) {
+  await mkdir(join(state, 'deliveries'), { recursive: true })
+  await writeFile(join(state, 'deliveries', delivery), JSON.stringify({ state: 'pending', pr: 42, token }))
+}
+
+async function heldLock(state: string, token: string) {
+  await mkdir(join(state, 'locks'), { recursive: true })
+  await writeFile(join(state, 'locks', 'pr-42.lock'), JSON.stringify({ pr: 42, token, taken_at: new Date().toISOString() }))
+}
+
+test('route: a pending delivery record whose lock is gone is decided again, and is a duplicate once done', async (t) => {
+  const r = await router(t)
+  await pendingRecord(r.state, D1, 'killed-call')
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), review())
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), ignore('duplicate'))
+})
+
+test('route: a pending delivery record whose token still holds a fresh lock is ignore (locked)', async (t) => {
+  const r = await router(t)
+  await pendingRecord(r.state, D1, 'live-call')
+  await heldLock(r.state, 'live-call')
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), ignore('locked'))
+})
+
+test('route: a pending delivery record whose lock expired is decided again', async (t) => {
+  const r = await router(t)
+  await pendingRecord(r.state, D1, 'killed-call')
+  await heldLock(r.state, 'killed-call')
+  const old = new Date(Date.now() - (3 * 60 + 1) * 60 * 1000)
+  await utimes(join(r.state, 'locks', 'pr-42.lock'), old, old)
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), review())
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), ignore('duplicate'))
 })

@@ -19,7 +19,8 @@
 //                                                   ignore, locked
 //   7. the App's daily run cap is reached           ignore, cap
 //   8. review: take the lock, count the run, record the delivery id
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { countRun } from './cap.ts'
 import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
@@ -88,24 +89,42 @@ async function remoteConfig(repo: string, branch: string | undefined): Promise<R
   return loaded.config
 }
 
-// The delivery ids that started a review: one empty file each, under
-// `<state root>/deliveries/`. An ignored delivery is not recorded, so GitHub
-// may send it again once the reason is gone.
+// The deliveries that started a review: one record each, under
+// `<state root>/deliveries/<id>`, `{state, pr, token}`. A call writes it
+// `pending`, with its PR lock token, before it counts the run, and `done`
+// after. Only a `done` record makes a repeat a duplicate. A `pending` record
+// (a call that was killed between the two, or one still running) is decided
+// again: its lock, while held and fresh, makes the repeat `locked`; once the
+// lock is released or expired, the repeat can review and overwrite it. An
+// ignored delivery is not recorded, so GitHub may send it again once the
+// reason is gone.
+type DeliveryState = 'pending' | 'done'
+
 function deliveryFile(delivery: string): string {
   return join(stateRoot(), 'deliveries', delivery)
 }
 
-async function seenDelivery(delivery: string): Promise<boolean> {
-  return stat(deliveryFile(delivery)).then(
-    () => true,
-    () => false,
-  )
+// Whether a review already came from `delivery`: its record is done. No
+// record, or one that is pending or cannot be read, is not a duplicate.
+async function doneDelivery(delivery: string): Promise<boolean> {
+  try {
+    return (JSON.parse(await readFile(deliveryFile(delivery), 'utf8')) as { state?: unknown }).state === 'done'
+  } catch {
+    return false
+  }
 }
 
-async function recordDelivery(delivery: string): Promise<void> {
+// Write the record whole: a temp file in the same dir, then rename.
+async function recordDelivery(delivery: string, state: DeliveryState, pr: number, token: string): Promise<void> {
   const file = deliveryFile(delivery)
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
-  await writeFile(file, '', { mode: 0o600 })
+  const tmp = `${file}.${randomBytes(6).toString('hex')}`
+  try {
+    await writeFile(tmp, `${JSON.stringify({ state, pr, token })}\n`, { mode: 0o600 })
+    await rename(tmp, file)
+  } finally {
+    await rm(tmp, { force: true })
+  }
 }
 
 async function forgetDelivery(delivery: string): Promise<void> {
@@ -148,7 +167,7 @@ async function route(argv: string[]): Promise<string> {
   const config = repo === null ? null : await remoteConfig(repo, typeof branch === 'string' ? branch : undefined)
 
   if (config?.paused === true) return decide('ignore', 'paused')
-  if (await seenDelivery(delivery)) return decide('ignore', 'duplicate')
+  if (await doneDelivery(delivery)) return decide('ignore', 'duplicate')
   if (event !== 'pull_request') return decide('ignore', `event:${event}`)
   const action = typeof payload.action === 'string' ? payload.action : ''
   const login = payload.pull_request?.user?.login
@@ -163,16 +182,17 @@ async function route(argv: string[]): Promise<string> {
   const lock = await takePrLock(pr, { app: values.app, delivery })
   if (lock === null) return decide('ignore', 'locked')
   // The lock is taken first, so a held lock is reported before the cap. The
-  // delivery is recorded before the run is counted, so a failed record
-  // counts nothing. A call that the cap stops, or that fails, forgets the
-  // delivery and gives the lock back.
+  // delivery is recorded pending before the run is counted, so a failed
+  // record counts nothing, and done after it. A call that the cap stops, or
+  // that fails, forgets the delivery and gives the lock back.
   try {
-    await recordDelivery(delivery)
+    await recordDelivery(delivery, 'pending', pr, lock)
     if (!(await countRun(values.app, config.app_daily_runs))) {
       await releasePrLock(pr, lock)
       await forgetDelivery(delivery)
       return decide('ignore', 'cap')
     }
+    await recordDelivery(delivery, 'done', pr, lock)
   } catch (error) {
     await releasePrLock(pr, lock)
     // The error that stopped the call is the one to report: when the record
