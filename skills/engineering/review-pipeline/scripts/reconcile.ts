@@ -233,7 +233,7 @@ async function handoffItem(repo: string, pull: Pull, comments: Comment[], contex
     repository: { full_name: repo },
     sender: { login: last.author ?? undefined },
     issue: { number: pull.number, user: { login: pull.author ?? undefined }, labels: labelsOf(pull.labels), pull_request: prUrl(repo, pull.number) },
-    comment: { body: last.body },
+    comment: { body: last.body, created_at: last.created_at },
   }
   const delivery = `reconcile-handoff-${pull.number}-${last.id}`
   return { ...(await decide(app, 'issue_comment', delivery, payload, context)), app }
@@ -259,7 +259,7 @@ async function resumeItem(repo: string, paused: Listed, comments: (number: numbe
       labels: labelsOf(paused.labels),
       ...(paused.pull_request ? { pull_request: prUrl(repo, paused.number) } : {}),
     },
-    comment: { body: last.body },
+    comment: { body: last.body, created_at: last.created_at },
   }
   const delivery = `reconcile-resume-${paused.number}-${last.id}`
   return { ...(await decide('implementer', 'issue_comment', delivery, payload, context)), app: 'implementer' }

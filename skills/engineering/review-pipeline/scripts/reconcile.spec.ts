@@ -510,3 +510,17 @@ for (const [name, args, message] of usageErrors) {
     assert.equal(stderr.split('\n')[0], `review.ts reconcile: ${message}`)
   })
 }
+
+test('reconcile: a ticket at its attempt cap is the ignore (attempts) route gives, and counts no run', async (t) => {
+  const used = async (m: { caps: string }) => {
+    await mkdir(m.caps, { recursive: true })
+    await writeFile(join(m.caps, 'implementer-app-attempts.json'), JSON.stringify({ [`${REPO}#28`]: 1 }))
+  }
+  const github = { ...ticket28(), review: reviewMd('  attempts: 1') }
+  const m = await machine(t, github)
+  await used(m)
+  const expected = await routed(t, github, 'implementer', 'issues.labeled.json', used)
+  assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: null, issue: 28, reason: 'attempts', app: 'implementer' })
+  assert.deepEqual(await swept(m.reconcile()), [expected])
+  await assert.rejects(readFile(join(m.caps, 'implementer-app-runs.json')), { code: 'ENOENT' })
+})
