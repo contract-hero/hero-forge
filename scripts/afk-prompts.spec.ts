@@ -30,19 +30,25 @@ function part(label: string): string {
   return SKILL.slice(start, end === -1 ? undefined : end)
 }
 
-test('the router prompt ends by archiving its thread on ignore or started, and marking it unread on stop', () => {
+// Settling this thread waits for the turn to end; archiving it cuts the turn,
+// so the run fails before it writes its line.
+const SETTLE = 'action `settle` (it takes effect when this turn ends; `archive` would cut the turn) for '
+
+test('the router prompt ends by settling its thread on ignore or started, and marking it unread on stop', () => {
   const last = lastStep(ROUTER)
   assert.match(last, /^\d+\. Every exit above: as the last action, before you write its line, call `t3_thread_organize` with no `threadId`/)
-  assert.match(last, /action `archive` for an `ignore: \.\.\.` or `started: \.\.\.` exit/)
+  assert.ok(last.includes(`${SETTLE}an \`ignore: ...\` or \`started: ...\` exit`), 'no settle for ignore or started')
+  assert.doesNotMatch(last, /action `archive`/)
   assert.match(last, /action `mark_unread` for a `stop: \.\.\.` exit/)
   assert.match(last, /A session with no `t3_thread_organize` tool skips this step/)
   assert.match(ROUTER, /Each exit is one line, as each step says, and the last step comes before it/)
 })
 
-test('the reconcile prompt ends by archiving its thread on a clean sweep, and marking it unread on a stop or a failed launch', () => {
+test('the reconcile prompt ends by settling its thread on a clean sweep, and marking it unread on a stop or a failed launch', () => {
   const last = lastStep(RECONCILE)
   assert.match(last, /^\d+\. Every exit above: as the last action, before you write its line, call `t3_thread_organize` with no `threadId`/)
-  assert.match(last, /action `archive` for a `reconcile: started \.\.\.` line with `failed 0` and no message of step 3/)
+  assert.ok(last.includes(`${SETTLE}a \`reconcile: started ...\` line with \`failed 0\` and no message of step 3`), 'no settle for a clean sweep')
+  assert.doesNotMatch(last, /action `archive`/)
   assert.match(last, /action `mark_unread` for a `stop: \.\.\.` exit, and for a `reconcile:` line with a failed launch or a message of step 3/)
   assert.match(last, /A session with no `t3_thread_organize` tool skips this step/)
 })
