@@ -27,9 +27,10 @@ export const COMMANDS = {
                               --runtime codex|claude --reviewer-login <slug[bot]|none>
                               [--mode single|layer|stack-final] [--force]
   review.ts run-state read    --pr N [<key>]
-  review.ts run-state advance --pr N <phase>
+  review.ts run-state advance --pr N <phase> [--config <path>]
   review.ts run-state set     --pr N <key> <value>    (key: ${SETTABLE.join(' | ')})
-  review.ts run-state next-round --pr N --max-rounds M  (after a failed re-check: next round, or stopped)
+  review.ts run-state next-round --pr N --max-rounds M [--config <path>]  (after a failed re-check: next round, or stopped)
+  (with the reviewer App, a stop posts the contract-reviewer/gate failure status at the head)
   review.ts run-state supersede  --pr N    (the PR head moved after a review: archive the run, then create a new one)`,
   },
   'app-token': {
@@ -40,7 +41,8 @@ export const COMMANDS = {
     summary: 'Post one review payload to a PR, at most once per PR, round, kind and commit.',
     usage: `usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R
                              --kind review|recheck|verdict --payload <file> [--config <path>]
-                             [--ledger <findings.json> --recheck <recheck-rN.json>]   (recheck, verdict)`,
+                             [--ledger <findings.json> --recheck <recheck-rN.json>]   (recheck, verdict)
+  (with the reviewer App, the first passing gate at a head posts the contract-reviewer/gate success status there)`,
   },
   reply: {
     summary: 'Post the Adjudication: one reply per inline finding and one PR comment with every answer.',
