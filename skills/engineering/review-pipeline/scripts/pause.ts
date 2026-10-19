@@ -15,7 +15,9 @@ export type PauseSubject = { kind: 'issue' | 'pr'; number: number }
 // `branch` and `tip`, together or not at all: the branch on GitHub that the
 // paused build pushed its work to, and the commit it pushed, so the resumed
 // run starts from that tip.
-export type PauseRecord = PauseSubject & { repo: string; reason: string; paused_at: string; branch?: string; tip?: string }
+// `decisions`: the PR body's Decisions entries made before the pause, as
+// markdown, so the resumed run puts them back.
+export type PauseRecord = PauseSubject & { repo: string; reason: string; paused_at: string; branch?: string; tip?: string; decisions?: string }
 
 const isBranch = (v: unknown) => typeof v === 'string' && v !== '' && !v.startsWith('-') && !/[\s:~^?*[\\]|\.\./.test(v)
 const isSha = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v)
@@ -28,6 +30,7 @@ const FIELDS: Record<keyof PauseRecord, (v: unknown) => boolean> = {
   paused_at: (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v)),
   branch: (v) => v === undefined || isBranch(v),
   tip: (v) => v === undefined || isSha(v),
+  decisions: (v) => v === undefined || (typeof v === 'string' && v.trim() !== ''),
 }
 
 export function pauseFile({ kind, number }: PauseSubject): string {
@@ -75,9 +78,9 @@ export async function writePause(record: PauseRecord): Promise<void> {
   const file = pauseFile(record)
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${randomBytes(6).toString('hex')}`
-  const { kind, number, repo, reason, paused_at, branch, tip } = record
+  const { kind, number, repo, reason, paused_at, branch, tip, decisions } = record
   try {
-    await writeFile(tmp, `${JSON.stringify({ kind, number, repo, reason, paused_at, branch, tip })}\n`, { mode: 0o600 })
+    await writeFile(tmp, `${JSON.stringify({ kind, number, repo, reason, paused_at, branch, tip, decisions })}\n`, { mode: 0o600 })
     await rename(tmp, file)
   } finally {
     await rm(tmp, { force: true })
@@ -104,7 +107,7 @@ async function pause(argv: string[]): Promise<string> {
   if (command !== 'write' && command !== 'read' && command !== 'delete') throw usage(`unknown command "${command ?? ''}"`)
   const { values } = parse(
     rest,
-    { repo: { type: 'string' }, issue: { type: 'string' }, pr: { type: 'string' }, reason: { type: 'string' }, branch: { type: 'string' }, tip: { type: 'string' } },
+    { repo: { type: 'string' }, issue: { type: 'string' }, pr: { type: 'string' }, reason: { type: 'string' }, branch: { type: 'string' }, tip: { type: 'string' }, 'decisions-file': { type: 'string' } },
     usage,
   )
   if ((values.issue === undefined) === (values.pr === undefined)) throw usage(`pause ${command} needs one of --issue and --pr`)
@@ -118,7 +121,21 @@ async function pause(argv: string[]): Promise<string> {
     if ((branch === undefined) !== (tip === undefined)) throw usage('--branch and --tip go together: the branch the work was pushed to, and its tip')
     if (branch !== undefined && !isBranch(branch)) throw usage('--branch must be a branch name')
     if (tip !== undefined && !isSha(tip)) throw usage('--tip must be the full sha of the pushed tip')
-    const record: PauseRecord = { ...subject, repo, reason, paused_at: new Date().toISOString(), ...(branch === undefined ? {} : { branch, tip }) }
+    let decisions: string | undefined
+    const from = values['decisions-file']
+    if (from !== undefined) {
+      try {
+        decisions = await readFile(from, 'utf8')
+      } catch (error) {
+        throw new Failure(`cannot read ${from}: ${(error as Error).message}`, 1)
+      }
+      if (decisions.trim() === '') throw usage(`${from} is empty: leave out --decisions-file when no decision was made yet`)
+    }
+    const record: PauseRecord = {
+      ...subject, repo, reason, paused_at: new Date().toISOString(),
+      ...(branch === undefined ? {} : { branch, tip }),
+      ...(decisions === undefined ? {} : { decisions }),
+    }
     await writePause(record)
     return `${JSON.stringify(record)}\n`
   }

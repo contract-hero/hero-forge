@@ -155,3 +155,35 @@ test('pause record: a record with a bad tip is corrupt', async (t) => {
   await stateDir(t)
   await assert.rejects(writePause({ ...RECORD, branch: 'ticket/28-x', tip: 'nope' }), (error) => error instanceof Failure && error.code === 1)
 })
+
+// A build that paused keeps the Decisions entries it made so far, so the
+// resumed run, in a new session, puts them back into the PR body.
+test('pause write --decisions-file records the Decisions entries so far, and read gives them back', async (t) => {
+  const s = await pauseCli(t)
+  const dir = await tempDir(t)
+  const file = join(dir, 'decisions.md')
+  const text = '- **Cache key.** Options: path, hash. Chose hash: renames keep the entry.\n'
+  await writeFile(file, text)
+  const written = await s.cli('write', '--repo', 'contract-hero/hero-forge', '--issue', '25', '--reason', 'New dependency?', '--decisions-file', file)
+  assert.equal(written.code, 0, written.stderr)
+  assert.equal((JSON.parse(written.stdout) as PauseRecord).decisions, text)
+  assert.equal((await readPause({ kind: 'issue', number: 25 }))?.decisions, text)
+  assert.equal((JSON.parse((await s.cli('read', '--issue', '25')).stdout) as PauseRecord).decisions, text)
+})
+
+test('pause write --decisions-file of a missing or empty file writes nothing', async (t) => {
+  const s = await pauseCli(t)
+  const dir = await tempDir(t)
+  const empty = join(dir, 'empty.md')
+  await writeFile(empty, '  \n')
+  for (const [file, code] of [[join(dir, 'none.md'), 1], [empty, 2]] as const) {
+    const result = await s.cli('write', '--repo', 'contract-hero/hero-forge', '--issue', '25', '--reason', 'Q?', '--decisions-file', file)
+    assert.equal(result.code, code, file)
+  }
+  assert.equal(await readPause({ kind: 'issue', number: 25 }), null)
+})
+
+test('pause record: a decisions field that is not text is corrupt', async (t) => {
+  await stateDir(t)
+  await assert.rejects(writePause({ ...RECORD, decisions: 3 as unknown as string }), (error) => error instanceof Failure && error.code === 1)
+})

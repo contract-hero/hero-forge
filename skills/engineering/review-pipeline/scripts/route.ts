@@ -19,8 +19,10 @@
 //                                                   ignore, no-config
 //   5. the PR author is not the maintainer or contract-implementer[bot]
 //                                                   ignore, author
-//   6. a run state that is not terminal             ignore, locked
-//   7. review
+//   6. a run state of a stack (mode layer or stack-final), terminal or not:
+//      the stack owns the PR                        ignore, stack
+//   7. a run state that is not terminal             ignore, locked
+//   8. review
 // --app reviewer, an issue_comment event:
 //   3. not created (an edit never counts)           ignore, action:<name>
 //   4. not on a PR                                  ignore, not-pull-request
@@ -258,8 +260,13 @@ async function forgetDelivery(app: AppName, delivery: string): Promise<void> {
 // The run state phase of PR `pr`, or null when it has no run state. A
 // corrupt state file exits 4.
 async function phaseOf(pr: number): Promise<Phase | null> {
+  return (await runOf(pr))?.phase ?? null
+}
+
+// The run state of PR `pr`, or null when it has none. Corrupt: exit 4.
+async function runOf(pr: number): Promise<{ phase: Phase; mode: string } | null> {
   try {
-    return (await loadState(pr)).phase
+    return await loadState(pr)
   } catch (error) {
     if (error instanceof Failure && error.code === 3) return null
     throw error
@@ -293,8 +300,11 @@ async function reviewRule(e: Event): Promise<Outcome> {
   if (!sameLogin(author, IMPLEMENTER_BOT) && !sameLogin(author, await e.maintainer())) return why('author')
   // A pull_request event always carries its number: a payload without one is not GitHub's.
   if (e.pr === null) throw new Failure('the pull_request payload has no pull_request.number', 1)
-  const phase = await phaseOf(e.pr)
-  if (phase !== null && !TERMINAL.includes(phase)) return why('locked')
+  const run = await runOf(e.pr)
+  // A stack owns its layers and its stack PR, terminal or not: a late
+  // ready_for_review or opened never starts a single-mode review of one.
+  if (run !== null && run.mode !== 'single') return why('stack')
+  if (run !== null && !TERMINAL.includes(run.phase)) return why('locked')
   return { action: 'review', lock: { kind: 'pr', number: e.pr } }
 }
 

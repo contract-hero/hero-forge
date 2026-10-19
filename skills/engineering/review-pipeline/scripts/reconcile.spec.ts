@@ -251,6 +251,15 @@ test('reconcile: a PR whose run is at another head and not over is the ignore (l
   assert.deepEqual(await swept(m.reconcile()), [expected])
 })
 
+test('reconcile: a completed layer of a stack, at another head, is the ignore (stack) route gives a late ready_for_review', async (t) => {
+  const seed = (m: { state: string }) => seedState(m.state, { pr: 42, phase: 'complete', mode: 'layer' }).then(() => {})
+  const m = await machine(t, pr42(MAINTAINER, false))
+  await seed(m)
+  const expected = await routed(t, {}, 'reviewer', 'pull_request.ready_for_review.json', seed)
+  assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: 42, issue: null, reason: 'stack', app: 'reviewer' })
+  assert.deepEqual(await swept(m.reconcile()), [expected])
+})
+
 test('reconcile: a PR whose last run is over at another head gets a review', async (t) => {
   const m = await machine(t, pr42(IMPLEMENTER_BOT, false))
   await seedState(m.state, { pr: 42, phase: 'complete' })

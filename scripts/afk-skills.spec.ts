@@ -33,16 +33,20 @@ function inOrder(text: string, needles: string[]): void {
   }
 }
 
-test('implement-pr --afk pauses at a one-way door: comment, then needs-info, then the pause record, a push notification, the lock release', () => {
+// The pause record comes first: its paused_at is the pause boundary, set
+// before anyone can see the question, so an early answer still counts.
+test('implement-pr --afk pauses at a one-way door: the pause record, then the comment, then needs-info, a push notification, the lock release', () => {
   const afk = section(IMPLEMENT_PR, 'Decisions in an AFK run')
   assert.match(afk, /\*\*A one-way door\*\*: a data shape, a public API, a new dependency, a migration, or a destructive action/)
   inOrder(afk, [
+    'review.ts pause write --repo <owner/repo> --issue <ticket> --reason',
     'review.ts implementer comment --repo <owner/repo> --issue <ticket> --body-file <file>',
     'review.ts implementer label --repo <owner/repo> --issue <ticket> --add needs-info',
-    'review.ts pause write --repo <owner/repo> --issue <ticket> --reason',
     'push notification',
     'review.ts lock release --issue <ticket> --token <token>',
   ])
+  assert.match(afk, /add `--decisions-file <file>`/)
+  assert.match(section(IMPLEMENT_PR, 'Resume after a pause'), /The record's `decisions` \(the entries logged before the pause\) come back as the first entries of that section/)
 })
 
 test('implement-pr --afk logs its two-way decisions in the PR body and hands nothing to review-pipeline', () => {
@@ -62,7 +66,8 @@ test('review-pipeline --afk: each part ends with advance, then the lock release,
   inOrder(afk, ['prints `stopped`', 'REQUEST_CHANGES', 'release the lock', 'push notification', 'no hand-off'])
   assert.match(afk, /review\.ts implementer push --repo O\/R --branch <the worktree's branch> --to <headRefName>/)
   assert.match(afk, /`git reset --hard origin\/<headRefName>`/)
-  inOrder(section(PIPELINE, 'AFK run'), ['review.ts implementer comment --repo O/R --issue N', '--add needs-info', 'review.ts pause write --repo O/R --pr N', 'push notification', 'review.ts lock release --pr N --token <token>'])
+  inOrder(section(PIPELINE, 'AFK run'), ['review.ts pause write --repo O/R --pr N', 'review.ts implementer comment --repo O/R --issue N', '--add needs-info', 'push notification', 'review.ts lock release --pr N --token <token>'])
+  assert.match(afk, /A PR whose run state has mode `layer` or `stack-final`, terminal or not, stays under its stack/)
 })
 
 test('review-pipeline keeps the Decisions section when Finish rewrites the PR body', () => {
@@ -98,9 +103,10 @@ test('review-pipeline --afk adjudicate checks the Implementer App first, replies
 test('implement-spec-stack holds its own pause and resume protocol, and resumes a paused layer from its pushed tip', () => {
   assert.doesNotMatch(STACK, /implement-pr/)
   inOrder(STACK, [
+    'review.ts pause write --repo O/R --issue <spec> --reason "<the question, on one line>" --branch <layer branch> --tip <the tip it pushed>',
+    'add `--decisions-file <file>`',
     'review.ts implementer comment --repo O/R --issue <spec> --body-file <file>',
     'review.ts implementer label --repo O/R --issue <spec> --add needs-info',
-    'review.ts pause write --repo O/R --issue <spec> --reason "<the question, on one line>" --branch <layer branch> --tip <the tip it pushed>',
     'push notification',
     'review.ts lock release --issue <spec> --token <token>',
   ])

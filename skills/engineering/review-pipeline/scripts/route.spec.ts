@@ -996,6 +996,34 @@ test('route --app implementer: a reply to an earlier pause, delivered after a ne
   assert.deepEqual(answer, onIssue('resume'))
 })
 
+// The pause record is written before the question comment and the label
+// (the pause boundary comes first), so a reply in the seconds while the
+// pause is still being set up is later than paused_at: it is the answer.
+test('route --app implementer: a reply after paused_at but before the question comment landed resumes the run', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await seedPause(r, 'issue', 28, REPO, '2026-10-19T09:00:00.000Z')
+  // The question comment and the needs-info label came at 09:00:02.
+  const early = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T09:00:01Z'), 'implementer'))
+  assert.deepEqual(early, onIssue('resume'))
+})
+
+// A stack owns its layers and its stack PR: a late ready_for_review or
+// opened on one never starts a single-mode review, whatever its phase.
+for (const [mode, phase] of [['layer', 'complete'], ['layer', 'review-posted'], ['stack-final', 'complete'], ['stack-final', 'adjudicated']] as const) {
+  test(`route --app reviewer: a ready_for_review on a PR whose run is a ${mode} run at ${phase} is ignore (stack)`, async (t) => {
+    const r = await router(t)
+    await seedState(r.state, { pr: 42, mode, phase })
+    assert.deepEqual(await decision(r.route('pull_request.ready_for_review.json', D1)), onPr('ignore', 'stack'))
+    assert.deepEqual(await decision(r.route('pull_request.opened.implementer.json', D2)), onPr('ignore', 'stack'))
+  })
+}
+
+test('route --app reviewer: a single run that is over still lets a ready_for_review start a new review', async (t) => {
+  const r = await router(t)
+  await seedState(r.state, { pr: 42, mode: 'single', phase: 'complete' })
+  assert.deepEqual(await decision(r.route('pull_request.ready_for_review.json', D1)), review())
+})
+
 test('route --app implementer: a reply with no creation time is ignore (stale-reply)', async (t) => {
   const r = await router(t, { review: implementerMd() })
   await seedPause(r, 'pr', 42)

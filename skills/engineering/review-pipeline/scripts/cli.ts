@@ -79,7 +79,7 @@ export const COMMANDS = {
     summary: 'Write, read or delete the pause record of an AFK run stopped at a one-way door.',
     usage: `usage:
   review.ts pause write  --repo O/R --issue N | --pr N --reason <the question>
-                         [--branch <branch on GitHub> --tip <its pushed sha>]
+                         [--branch <branch on GitHub> --tip <its pushed sha>] [--decisions-file <the Decisions entries so far>]
   review.ts pause read   --issue N | --pr N    (exit 3: no pause record)
   review.ts pause delete --issue N | --pr N`,
   },

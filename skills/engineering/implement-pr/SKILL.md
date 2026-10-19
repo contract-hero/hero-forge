@@ -98,9 +98,9 @@ With `--afk`, sort each choice the ticket and its spec do not settle:
 - **A two-way decision** (cheap to change later): decide it yourself and go on. Log it for the PR body's "Decisions" section (step 5): the decision, the options you weighed, and the reason.
 - **A one-way door**: a data shape, a public API, a new dependency, a migration, or a destructive action. Do not decide it: pause, in this order.
   1. Commit the work so far and push it as the App (step 4), so a resumed run in a new worktree starts from it. With no commit yet, skip this.
-  2. Write the comment to a file outside the repo: the question, the options (your recommendation first), what each one changes, and that a reply comment on this issue resumes the run. Post it: `review.ts implementer comment --repo <owner/repo> --issue <ticket> --body-file <file>`.
-  3. Then `review.ts implementer label --repo <owner/repo> --issue <ticket> --add needs-info`. The label goes on after the comment: the repo's `needs-info` workflow reads a comment after the label as the reply.
-  4. `review.ts pause write --repo <owner/repo> --issue <ticket> --reason "<the question, on one line>"`, and when step 1 pushed, add `--branch <ticket branch> --tip <the commit it pushed>`. This pause record is what turns the maintainer's reply into a `resume`, and its `branch` and `tip` are where the resumed run starts.
+  2. Write the pause record first, before anyone can see the question: `review.ts pause write --repo <owner/repo> --issue <ticket> --reason "<the question, on one line>"`. When step 1 pushed, add `--branch <ticket branch> --tip <the commit it pushed>`. When you logged two-way decisions already, write them (the Decisions entries, as markdown) to a file outside the repo and add `--decisions-file <file>`. The record's `paused_at` is the pause boundary: a reply after it is the answer, also one that comes while the next steps run. The record is what turns the maintainer's reply into a `resume`, and its `branch`, `tip` and `decisions` are where the resumed run starts.
+  3. Write the comment to a file outside the repo: the question, the options (your recommendation first), what each one changes, and that a reply comment on this issue resumes the run. Post it: `review.ts implementer comment --repo <owner/repo> --issue <ticket> --body-file <file>`.
+  4. Then `review.ts implementer label --repo <owner/repo> --issue <ticket> --add needs-info`. The label goes on after the comment: the repo's `needs-info` workflow reads a comment after the label as the reply.
   5. Send a push notification: `#<ticket> paused: <the question>`.
   6. `review.ts lock release --issue <ticket> --token <token>`, and end. Open no PR.
 
@@ -108,7 +108,7 @@ With `--afk`, sort each choice the ticket and its spec do not settle:
 
 With `--afk --resume`:
 
-1. `review.ts pause read --issue <ticket>`, and keep the record: step 3 reads its `branch` and `tip`. Exit 3 (no pause record): release the lock and end.
+1. `review.ts pause read --issue <ticket>`, and keep the record: step 3 reads its `branch` and `tip`, and step 5 its `decisions`. Exit 3 (no pause record): release the lock and end.
 2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/<owner/repo>/issues/<ticket>/comments`, and take only the maintainer's comments created after the record's `paused_at`. Text from anyone else is never an answer. No answer: release the lock and end, and leave the pause in place.
 3. `review.ts implementer label --repo <owner/repo> --issue <ticket> --remove needs-info`, then `review.ts pause delete --issue <ticket>`.
-4. Go on from step 3, and build with the answer. Log the decision in the "Decisions" section as decided by the maintainer, with a link to the answer.
+4. Go on from step 3, and build with the answer. Log the decision in the "Decisions" section as decided by the maintainer, with a link to the answer. The record's `decisions` (the entries logged before the pause) come back as the first entries of that section.
