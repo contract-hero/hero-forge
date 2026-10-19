@@ -1,7 +1,7 @@
 // The `gh` calls the subcommands share. `gh` is found through PATH, so the
 // tests' fake `gh` stands in for it.
 import { spawn } from 'node:child_process'
-import { mintAppToken } from './app-token.ts'
+import { mintAppToken, type AppName } from './app-token.ts'
 import { Failure, refuse } from './cli.ts'
 
 export type GhResult = { code: number | null; stdout: string; stderr: string }
@@ -10,7 +10,7 @@ export type GhResult = { code: number | null; stdout: string; stderr: string }
 // gh that exits before it reads stdin makes the write fail with EPIPE; the
 // exit code and output still tell the caller what happened, so that error is
 // ignored rather than left to crash the process.
-// With `token`, gh runs as that token (the reviewer App) through GH_TOKEN;
+// With `token`, gh runs as that token (an App) through GH_TOKEN;
 // without it, gh runs as the user, with the environment unchanged.
 export function gh(args: string[], input = '', token?: string): Promise<GhResult> {
   return new Promise((resolve, reject) => {
@@ -61,10 +61,10 @@ export async function userIdentity(): Promise<Identity> {
   return { login, as: 'user' }
 }
 
-// The reviewer App, with a token minted for `repo`. A broken App throws
-// Failure 4: the caller stops and never falls back to the user.
-export async function appIdentity(repo: string): Promise<Identity> {
-  const { token, login } = await mintAppToken(repo)
+// An App (the reviewer by default), with a token minted for `repo`. A broken
+// App throws Failure 4: the caller stops and never falls back to the user.
+export async function appIdentity(repo: string, app: AppName = 'reviewer'): Promise<Identity> {
+  const { token, login } = await mintAppToken(repo, app)
   return { login, as: login, token }
 }
 
@@ -77,11 +77,13 @@ export type InlineComment = {
 }
 
 // Every review comment on the PR: the inline findings and the thread replies.
-export function listInlineComments(repo: string, pr: number): Promise<InlineComment[]> {
+// With `token`, read as that App.
+export function listInlineComments(repo: string, pr: number, token?: string): Promise<InlineComment[]> {
   return listLines<InlineComment>(
     ['api', '--paginate', '--jq', '.[] | {id, in_reply_to_id, pull_request_review_id, login: .user.login, body}',
       `repos/${repo}/pulls/${pr}/comments`],
     `the review comments of PR #${pr}`,
+    token,
   )
 }
 
