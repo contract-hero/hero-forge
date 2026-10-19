@@ -49,7 +49,7 @@ A run of a skill that a T3 router task starts from a GitHub event, with no perso
 _Avoid_: unattended run, headless run
 
 **Hand-off marker**:
-The hidden line (`<!-- hero-forge:handoff kind=<kind> pr=<N> round=<R> -->`) that one part of an **AFK run** posts as the last line of its last comment, after it saves the run state and releases its lock. Anywhere else in a comment, the line is no hand-off. The comment's webhook wakes the next part through the other App's router: `review-posted` and `recheck-failed` start an **Adjudication**, and `adjudicated` starts a re-check. Only the helper CLI writes it: the CLI refuses agent text that holds one. It is not the **Review pipeline**'s own hidden marker (`hero-forge:review-pipeline`).
+The hidden HTML comment line, with the hand-off kind, the pull request and the round, that one part of an **AFK run** posts as the last line of its last comment, after it saves the run state and releases its lock. Anywhere else in a comment, the line is no hand-off. The comment's webhook wakes the next part through the other App's router: `review-posted` and `recheck-failed` start an **Adjudication**, and `adjudicated` starts a re-check. Only the helper CLI writes it: the CLI refuses agent text that holds one. It is not the other hidden marker, which the helper CLI puts at the end of every post so that a re-run finds its own post.
 _Avoid_: trigger comment, done marker
 
 **Pause record**:
