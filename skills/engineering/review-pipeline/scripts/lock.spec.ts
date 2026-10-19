@@ -1,12 +1,12 @@
 // Lock races. These few tests call lock.ts's exported functions, not the CLI:
 // the interleavings they check cannot be driven through `review.ts route`.
 import assert from 'node:assert/strict'
-import { readFile, utimes } from 'node:fs/promises'
+import { readFile, stat, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Failure } from './cli.ts'
-import { releaseLock, takeLock, whileHolding } from './lock.ts'
+import { breakGuard, releaseLock, takeLock, whileHolding } from './lock.ts'
 import { tempDir } from './test-helpers.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -75,4 +75,49 @@ test('lock race: an expired holder commits nothing once its lock is replaced, an
     committed = true
   })
   assert.equal(committed, true)
+})
+
+test('guard race: callers that all see one stale guard break it once, and the fresh guard survives the others', async (t) => {
+  const file = join(await tempDir(t), 'pr-42.lock')
+  const token = await takeLock(file, HOUR, {})
+  assert.ok(token !== null)
+  // A guard left by a crashed process, which every caller below sees stale.
+  await writeFile(`${file}.guard`, `${JSON.stringify({ token: 'crashed' })}\n`)
+  const old = new Date(Date.now() - 2 * 60 * 1000)
+  await utimes(`${file}.guard`, old, old)
+  let inside = 0
+  let most = 0
+  const holder = () =>
+    whileHolding(file, token, async () => {
+      inside += 1
+      most = Math.max(most, inside)
+      await sleep(40)
+      inside -= 1
+    })
+  await Promise.all(Array.from({ length: 8 }, holder))
+  assert.equal(most, 1)
+})
+
+test('guard race: of callers that saw one stale guard, one breaks it, and the fresh guard survives a late break', async (t) => {
+  const file = join(await tempDir(t), 'pr-42.lock')
+  const guard = `${file}.guard`
+  const token = await takeLock(file, HOUR, {})
+  assert.ok(token !== null)
+  await writeFile(guard, `${JSON.stringify({ token: 'crashed' })}\n`)
+  const old = new Date(Date.now() - 2 * 60 * 1000)
+  await utimes(guard, old, old)
+  // Two callers saw the stale guard 'crashed' and both try to break it.
+  const broke = await Promise.all([breakGuard(guard, 'crashed'), breakGuard(guard, 'crashed')])
+  assert.equal(broke.filter((b) => b).length, 1)
+  // A takes a fresh guard and holds it; a third caller that also saw the
+  // stale guard tries to break it late.
+  let release = () => {}
+  const held = new Promise<void>((resolve) => (release = resolve))
+  const a = whileHolding(file, token, () => held)
+  while (!(await stat(guard).then(() => true, () => false))) await sleep(1)
+  const fresh = await readFile(guard, 'utf8')
+  assert.equal(await breakGuard(guard, 'crashed'), false)
+  assert.equal(await readFile(guard, 'utf8'), fresh)
+  release()
+  await a
 })

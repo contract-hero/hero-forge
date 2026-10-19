@@ -9,9 +9,17 @@
 // holder whose lock expired and was replaced can neither remove the new
 // lock nor commit its work.
 //
-// The one assumption left: a guard older than GUARD_TTL_MS was left by a
-// crashed process, and the next caller breaks it. A process that stalls for
-// more than that while it holds the guard can overlap with the breaker.
+// The guard carries an owner token too. A guard older than GUARD_TTL_MS was
+// left by a crashed process (a holder keeps it for milliseconds). Only the
+// holder of the breaker (`<lock>.guard.break`, an exclusive create) may
+// delete a guard, and it deletes it only when the guard still has the token
+// it saw stale and is still stale. A caller that cannot take the breaker
+// deletes nothing and tries the guard again.
+//
+// The one assumption left: the breaker is never deleted for its age. A
+// breaker older than GUARD_TTL_MS means a process crashed in the few
+// microseconds while it held one, and every caller then exits 1 and names
+// it, for a human to remove by hand.
 //
 // The per-PR lock that `route` takes is `<state root>/locks/pr-<N>.lock`. It
 // holds for LOCK_TTL_HOURS unless the run releases it with its token.
@@ -51,21 +59,47 @@ async function age(file: string): Promise<number | null> {
   }
 }
 
+// Delete the guard `guard` if it still holds `seen` (the token a caller saw)
+// and is still stale, while holding its breaker. True: this call deleted it.
+// A breaker that another caller holds: false, nothing deleted. A breaker
+// older than GUARD_TTL_MS: exit 1.
+export async function breakGuard(guard: string, seen: string | null): Promise<boolean> {
+  const breaker = `${guard}.break`
+  if (!(await createOnly(breaker, `${process.pid}\n`))) {
+    const breakerAge = await age(breaker)
+    if (breakerAge !== null && breakerAge >= GUARD_TTL_MS) {
+      throw new Failure(`${breaker} is older than ${GUARD_TTL_MS / 1000} s: a process crashed while it broke a stale guard. Remove it by hand`, 1)
+    }
+    return false
+  }
+  try {
+    const now = await age(guard)
+    if (now === null || now < GUARD_TTL_MS || (await tokenOf(guard)) !== seen) return false
+    await rm(guard, { force: true })
+    return true
+  } finally {
+    await rm(breaker, { force: true })
+  }
+}
+
 // Run `fn` while holding the guard of the lock `file`.
 async function underGuard<T>(file: string, fn: () => Promise<T>): Promise<T> {
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const guard = `${file}.guard`
+  const token = randomBytes(16).toString('hex')
   const until = Date.now() + GUARD_WAIT_MS
-  while (!(await createOnly(guard, `${process.pid}\n`))) {
+  while (!(await createOnly(guard, `${JSON.stringify({ token, pid: process.pid })}\n`))) {
+    const seen = await tokenOf(guard)
     const guardAge = await age(guard)
-    if (guardAge !== null && guardAge >= GUARD_TTL_MS) await rm(guard, { force: true })
-    else if (Date.now() >= until) throw new Failure(`cannot take the guard ${guard}: another process holds it`, 1)
-    else await sleep(2)
+    if (guardAge !== null && guardAge >= GUARD_TTL_MS && (await breakGuard(guard, seen))) continue
+    if (Date.now() >= until) throw new Failure(`cannot take the guard ${guard}: another process holds it`, 1)
+    await sleep(2)
   }
   try {
     return await fn()
   } finally {
-    await rm(guard, { force: true })
+    // Only this caller's own guard: one broken as stale is another's now.
+    if ((await tokenOf(guard)) === token) await rm(guard, { force: true })
   }
 }
 
