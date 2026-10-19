@@ -1,5 +1,10 @@
 # hero-forge
 
+## 1.0.13
+
+- `setup-forge`: an AFK part. It writes the AFK config (`paused`, `app_daily_runs`, the `implementer:` block), creates one T3 webhook task per App (signature on `x-hub-signature-256`, the secret through T3's private secret request) and an hourly reconcile task, guides each GitHub App setting and verifies it, checks T3 Connect, and, after asking, sets a ruleset on the default branch that requires a pull request and the `contract-reviewer/gate` check. It never creates an App.
+- `review-pipeline`: new `review.ts delivery` (reads one webhook delivery's payload from the App's own deliveries API, refusing a replay older than 25 hours) and `review.ts app-check` (reports each App setting as ok or wrong). New router and reconcile prompt templates in the `setup-forge` folder.
+
 ## 1.0.12
 
 - `implement-pr`, `review-pipeline`, `implement-spec-stack`: an AFK mode for router-launched threads. `implement-pr --afk` logs each two-way decision in the PR body's "Decisions" section, pauses on a one-way door (a comment, `needs-info`, a pause record and a push notification) and ends at the draft PR. `review-pipeline <pr> --afk review|adjudicate|recheck` runs one part of a run, then saves its state, releases its lock and posts a hand-off marker as its last action. `implement-spec-stack --afk` pushes each restacked layer as the Implementer App. By hand, nothing changes.

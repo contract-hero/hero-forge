@@ -25,6 +25,8 @@ const SUBCOMMANDS: [string, string][] = [
   ['stack', '  review.ts stack order       --repo O/R --spec N'],
   ['route', 'usage: review.ts route --app reviewer|implementer --event <X-GitHub-Event> --delivery <X-GitHub-Delivery> --payload <file>'],
   ['reconcile', 'usage: review.ts reconcile --repo O/R   (in a checkout of the repo, as route)'],
+  ['delivery', 'usage: review.ts delivery --app reviewer|implementer --delivery <X-GitHub-Delivery> --out <file>'],
+  ['app-check', 'usage: review.ts app-check --app reviewer|implementer --repo O/R [--webhook-url <url>]'],
 ]
 
 const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'], lock: ['release'], pause: ['write'] }

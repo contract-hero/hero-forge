@@ -6,7 +6,7 @@ Skills I use daily for code work.
 - **[grill-with-docs](./grill-with-docs/SKILL.md)**: Grilling session that also builds your project's domain model, sharpening terminology and updating `GLOSSARY.md` and ADRs inline.
 - **[triage](./triage/SKILL.md)**: Move issues through a state machine of triage roles.
 - **[improve-codebase-architecture](./improve-codebase-architecture/SKILL.md)**: Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
-- **[setup-forge](./setup-forge/SKILL.md)**: Configure this repo for the engineering skills in one run (issue tracker, triage labels, domain doc layout, and the review pipeline: runtime, reviewer pairs, model and effort per role, round limit, reviewer App). Run once per repo; re-run one part alone when it changes.
+- **[setup-forge](./setup-forge/SKILL.md)**: Configure this repo for the engineering skills in one run (issue tracker, triage labels, domain doc layout, and the review pipeline: runtime, reviewer pairs, model and effort per role, round limit, reviewer App, and AFK mode, where GitHub events start the runs). Run once per repo; re-run one part alone when it changes.
 - **[to-spec](./to-spec/SKILL.md)**: Turn the current conversation into a spec and publish it to the issue tracker.
 - **[to-tickets](./to-tickets/SKILL.md)**: Break any plan, spec, or conversation into a set of tracer-bullet tickets, each declaring its blocking edges, whether as text in a local file or as native blocking links on a real tracker.
 - **[wayfinder](./wayfinder/SKILL.md)**: Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on the issue tracker, resolved one at a time until the way to the destination is clear.

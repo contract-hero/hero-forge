@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdir, realpath, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { run, runCli, tempDir } from './test-helpers.ts'
 
@@ -271,4 +272,35 @@ test('an unknown option is a usage error', async () => {
   assert.equal(stdout, '')
   assert.match(stderr, /^review\.ts config: /)
   assert.match(stderr, /usage: review\.ts config \[--config <path>\]/)
+})
+
+// The file setup-forge writes with AFK mode on. setup-forge's SKILL.md shows
+// the same AFK lines, so the two cannot drift apart.
+const AFK_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'setup', 'review-afk.md')
+const SETUP_SKILL = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'setup-forge', 'SKILL.md')
+
+test('the config setup-forge writes with AFK mode on resolves, with both Apps and the caps', async () => {
+  const { code, stdout, stderr } = await runCli(['config', '--config', AFK_FIXTURE])
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), {
+    config_path: AFK_FIXTURE,
+    runtime: 'codex',
+    pairs: 2,
+    orchestrator: { model: 'gpt-6-astra', effort: 'low', agent_model: null },
+    reviewer: { model: 'gpt-6.1-sol', effort: 'high', agent_model: null },
+    max_rounds: 2,
+    app: true,
+    paused: false,
+    app_daily_runs: 20,
+    implementer: { app: true, attempts: 3, daily_runs: 20 },
+  })
+})
+
+test("setup-forge's SKILL.md shows the AFK lines of the fixture, as they are", async () => {
+  const fixture = await readFile(AFK_FIXTURE, 'utf8')
+  const afk = /^paused: false\n[\s\S]*?(?=```)/m.exec(fixture)?.[0] ?? ''
+  assert.equal(afk, 'paused: false\napp_daily_runs: 20\nimplementer:\n  app: enabled\n  attempts: 3\n  daily_runs: 20\n')
+  const skill = await readFile(SETUP_SKILL, 'utf8')
+  assert.ok(skill.includes(`\`\`\`yaml\n${afk}\`\`\``), 'setup-forge/SKILL.md has no ```yaml block holding the AFK lines')
 })

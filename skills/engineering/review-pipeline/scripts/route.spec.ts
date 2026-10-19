@@ -1073,3 +1073,59 @@ test('route --app implementer: a daily cap ignore after the attempt was reserved
   assert.deepEqual(await decision(r.route('issues.labeled.json', D2, 'implementer')), onIssue('ignore', 'cap'))
   assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#29`]: 1 })
 })
+
+// `route undo`: a router whose thread launch failed gives back what the
+// decision took, so the same delivery is decided again.
+const undo = (r: Router, app: App, token: string) => runCli(['route', 'undo', '--app', app, '--token', token], { env: r.env })
+
+const tokenOf = (stdout: string) => (JSON.parse(stdout) as { lock_token: string }).lock_token
+
+test('route undo: after a failed launch the same delivery is decided again, and the attempt and the run are given back', async (t) => {
+  const r = await router(t, { review: implementerMd('  attempts: 1', '  daily_runs: 1') })
+  const first = await r.route('issues.labeled.json', D1, 'implementer')
+  assert.deepEqual(decided(first.stdout), onIssue('build-ticket'))
+  const undone = await undo(r, 'implementer', tokenOf(first.stdout))
+  assert.equal(undone.stderr, '')
+  assert.equal(undone.code, 0)
+  assert.deepEqual(JSON.parse(undone.stdout), { undone: true, issue: 28, attempt: true, run: true, released: true })
+  assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), {})
+  assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-runs.json'), 'utf8')), [])
+  // attempts: 1 and daily_runs: 1, and the same delivery id: a build again, not duplicate, attempts or cap.
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+  assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 1 })
+})
+
+test('route undo: a review is decided again after its undo, and a second undo changes nothing', async (t) => {
+  const r = await router(t, { review: reviewMd('app_daily_runs: 1') })
+  const first = await r.route('pull_request.opened.json', D1)
+  assert.deepEqual(decided(first.stdout), review())
+  const token = tokenOf(first.stdout)
+  assert.deepEqual(JSON.parse((await undo(r, 'reviewer', token)).stdout), { undone: true, pr: 42, attempt: false, run: true, released: true })
+  const again = await undo(r, 'reviewer', token)
+  assert.equal(again.code, 0)
+  assert.deepEqual(JSON.parse(again.stdout), { undone: false, reason: 'no delivery record holds this token' })
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), review())
+})
+
+test('route undo: a token that no longer owns the lock undoes nothing', async (t) => {
+  const r = await router(t, { review: implementerMd('  attempts: 1') })
+  const first = await r.route('issues.labeled.json', D1, 'implementer')
+  const token = tokenOf(first.stdout)
+  // The lock expired and another run took it.
+  const lock = join(r.state, 'locks', 'issue-28.lock')
+  await writeFile(lock, `${JSON.stringify({ issue: 28, token: 'f'.repeat(32), taken_at: new Date().toISOString() })}\n`)
+  const stale = await undo(r, 'implementer', token)
+  assert.equal(stale.code, 0)
+  assert.deepEqual(JSON.parse(stale.stdout), { undone: false, reason: 'the token no longer owns the lock' })
+  assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 1 })
+  assert.equal(JSON.parse(await readFile(lock, 'utf8')).token, 'f'.repeat(32))
+  await rm(lock)
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('ignore', 'duplicate'))
+})
+
+test('route undo: a token that is not a lock token is a usage error', async (t) => {
+  const r = await router(t)
+  const { code, stderr } = await undo(r, 'reviewer', 'nope')
+  assert.equal(code, 2)
+  assert.match(stderr, /--token must be the lock_token that route printed/)
+})

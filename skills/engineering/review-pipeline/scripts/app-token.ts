@@ -127,6 +127,11 @@ function appJwt(id: string, key: KeyObject): string {
 // One GitHub API call as the App. `fetch`, not `gh api`: gh adds the user's
 // own Authorization header.
 async function call<T>(step: string, jwt: string, method: string, path: string, body?: unknown): Promise<T> {
+  return (await request<T>(step, jwt, method, path, body)).parsed
+}
+
+// `call`, with the answer's Link header (null without one).
+async function request<T>(step: string, jwt: string, method: string, path: string, body?: unknown): Promise<{ parsed: T; link: string | null }> {
   let response: Response
   try {
     response = await fetch(`${apiBase()}${path}`, {
@@ -151,9 +156,52 @@ async function call<T>(step: string, jwt: string, method: string, path: string, 
   }
   if (!response.ok) {
     const said = (parsed as { message?: unknown } | null)?.message
-    throw broken(`${step} failed: HTTP ${response.status}${typeof said === 'string' ? ` (${said})` : ''}`)
+    throw new ApiFailure(`${step} failed: HTTP ${response.status}${typeof said === 'string' ? ` (${said})` : ''}. ${FIX}.`, response.status)
   }
-  return (parsed ?? {}) as T
+  return { parsed: (parsed ?? {}) as T, link: response.headers.get('link') }
+}
+
+// An HTTP error answer from GitHub (exit 4), with its status, so a caller can
+// tell a 404 from a broken App.
+export class ApiFailure extends Failure {
+  status: number
+  constructor(message: string, status: number) {
+    super(message, 4)
+    this.status = status
+  }
+}
+
+// GitHub API calls as the App itself, signed with its JWT (not an
+// installation token): what `delivery` and `app-check` read. The JWT stays in
+// this process. Throws Failure 4 when the credentials are broken.
+// `page` GETs one page of a list and gives the `cursor` of the next page
+// from the Link header (null on the last page). Only the cursor is taken
+// from the link: the next request goes to the same API, whatever host the
+// link names.
+export type AppApi = {
+  <T>(step: string, method: string, path: string): Promise<T>
+  page: <T>(step: string, path: string) => Promise<{ body: T; cursor: string | null }>
+}
+
+function nextCursor(link: string | null): string | null {
+  const url = /<([^>]+)>\s*;\s*rel="next"/.exec(link ?? '')?.[1]
+  if (url === undefined) return null
+  try {
+    return new URL(url).searchParams.get('cursor')
+  } catch {
+    return null
+  }
+}
+
+export async function appApi(app: AppName): Promise<AppApi> {
+  const { id, key } = await loadCredentials(app)
+  const jwt = appJwt(id, key)
+  const api = (<T>(step: string, method: string, path: string) => call<T>(step, jwt, method, path)) as AppApi
+  api.page = async <T>(step: string, path: string) => {
+    const { parsed, link } = await request<T>(step, jwt, 'GET', path)
+    return { body: parsed, cursor: nextCursor(link) }
+  }
+  return api
 }
 
 export type AppIdentity = { token: string; login: string }

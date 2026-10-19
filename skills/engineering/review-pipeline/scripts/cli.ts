@@ -16,6 +16,12 @@ export const SETTABLE = ['round', 'head_sha', 'explainer']
 // usage line states it.
 export const LOCK_TTL_HOURS = 3
 
+// The oldest webhook delivery that `delivery` fetches, by the time GitHub
+// sent it. GitHub's signature has no timestamp, so this bounds a replay of a
+// captured request. T3 Connect holds a request for at most 24 hours while the
+// machine is offline. The usage line states it.
+export const MAX_DELIVERY_AGE_HOURS = 25
+
 // The usage table: the one place that holds each subcommand's one-line
 // summary and usage text. The dispatcher, `--help` and every usage error read
 // from it.
@@ -118,7 +124,10 @@ export const COMMANDS = {
   Prints {action, repo, pr, issue, reason, lock_token} and exits 0 for every decision, ignore included.
   reviewer actions: review, recheck. implementer actions: build-ticket, build-spec, adjudicate, resume.
   Work takes a lock, per PR (or per issue for a build or a resume on an issue), free again after ${LOCK_TTL_HOURS} hours.
-  lock_token is that lock's owner token, for the launched run to release it; null on ignore.`,
+  lock_token is that lock's owner token, for the launched run to release it; null on ignore.
+usage: review.ts route undo --app reviewer|implementer --token <lock_token>
+  The router could not launch the run: while the token still owns the lock, forget the delivery (so it is
+  decided again), give back the build attempt and the counted run, and release the lock. Prints {undone, ...}.`,
   },
   reconcile: {
     summary: 'Sweep the open work a missed webhook should have started, and decide each item as route does.',
@@ -130,6 +139,21 @@ export const COMMANDS = {
   as route does: start a run for each line whose action is not ignore. A ticket or spec that an open PR by the
   maintainer or contract-implementer[bot] closes (itself, or one of its sub-issues) is ignore, has-pr. An item
   that fails prints its error on stderr, the other lines still stand, and the exit code is the first failure's.`,
+  },
+  delivery: {
+    summary: "Fetch one webhook delivery's payload from the App's own deliveries on GitHub, for route.",
+    usage: `usage: review.ts delivery --app reviewer|implementer --delivery <X-GitHub-Delivery> --out <file>
+  Finds the delivery in the App's webhook deliveries (with a short retry while GitHub lists it),
+  writes its payload to <file>, and prints {event, action, repo}. Exit 3: GitHub does not list it.
+  Exit 1: GitHub sent it more than ${MAX_DELIVERY_AGE_HOURS} hours ago (a replay), or <file> already exists
+  (pass a fresh path in a private directory, such as one from mktemp -d).`,
+  },
+  'app-check': {
+    summary: "Check a GitHub App's settings for AFK mode: permissions, events, webhook and installation.",
+    usage: `usage: review.ts app-check --app reviewer|implementer --repo O/R [--webhook-url <url>]
+  Prints {app, app_id, slug, repo, ok, pages, items}: each item ok, wrong (with what to change), or
+  unverified (the API cannot show it: the user confirms it; webhook active is always unverified or wrong).
+  Exit 0 no item wrong, 1 an item is wrong, 4 the App's credentials are broken.`,
   },
 } as const satisfies Record<string, { summary: string; usage: string }>
 

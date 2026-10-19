@@ -3,11 +3,13 @@
 //   node review.ts help    (lists the subcommands from the usage table)
 // Each subcommand module exports `main(argv): Promise<number>`; the number is
 // the exit code (0 ok, 1 failed, 2 usage, 3 absent, 4 broken).
+import { main as appCheck } from './app-check.ts'
 import { main as appToken } from './app-token.ts'
 import { COMMANDS, listText, type CommandName } from './cli.ts'
 import { main as codexExec } from './codex-exec.ts'
 import { main as codexReview } from './codex-review.ts'
 import { main as config } from './config.ts'
+import { main as delivery } from './delivery.ts'
 import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as merge } from './finish.ts'
 import { main as handoff } from './handoff-post.ts'
 import { main as implementer } from './implementer.ts'
@@ -39,6 +41,8 @@ const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
   stack,
   route,
   reconcile,
+  delivery,
+  'app-check': appCheck,
 }
 
 const [name, ...rest] = process.argv.slice(2)

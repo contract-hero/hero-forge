@@ -241,7 +241,8 @@ export async function appKey(dir: string, name = 'reviewer-app.pem'): Promise<{ 
   return { pem, publicKey }
 }
 
-export type FakeApiRoute = { status: number; body: unknown }
+// `headers` go out with the answer (a `Link` header for a paged list).
+export type FakeApiRoute = { status: number; body: unknown; headers?: Record<string, string> }
 
 export type FakeApiRequest = {
   method: string
@@ -311,7 +312,7 @@ export async function fakeGitHubApi(
         ? { status: 401, body: { message: 'A JSON web token could not be decoded' } }
         : (routes[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } })
       void (onRequest?.(request) ?? Promise.resolve()).then(() => {
-        res.writeHead(route.status, { 'content-type': 'application/json' })
+        res.writeHead(route.status, { 'content-type': 'application/json', ...route.headers })
         res.end(JSON.stringify(route.body))
       })
     })
