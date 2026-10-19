@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { fakeGh, runCli, tempDir, type FakeGhResponse } from './test-helpers.ts'
+import { fakeGh, IMPLEMENTER_TOKEN, implementerApp, runCli, tempDir, type FakeApiRequest, type FakeGhResponse } from './test-helpers.ts'
 
 const SHA = 'c'.repeat(40)
 const REPO = 'contract-hero/hero-forge'
@@ -60,17 +60,23 @@ const SUMMARY_1 = [
   adjudicationMarker(1),
 ].join('\n')
 
-type Setup = { ledger?: unknown; recheck?: unknown; noState?: boolean }
+// `app`: the config has `app: enabled` and the machine has the Implementer
+// App (`missing`: no env file; `broken`: an env file that names no key).
+// `author`: the PR author GitHub reports, read only with `app`.
+type Setup = { ledger?: unknown; recheck?: unknown; noState?: boolean; app?: { missing?: boolean; broken?: boolean }; author?: string }
 
 // A PR with the pipeline's round 1 review (id 555) recorded in run state,
 // and a ledger. `reply(round)` runs the subcommand.
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await tempDir(t)
   const gh = await fakeGh(dir, [{ match: '--input', stdout: JSON.stringify({ id: 555 }) }, ME])
-  const env = { ...gh.env, HERO_FORGE_STATE_DIR: join(dir, 'state') }
+  const app = options.app === undefined ? undefined : await implementerApp(t, dir, REPO, options.app)
+  const env = { ...gh.env, ...app?.env, HERO_FORGE_STATE_DIR: join(dir, 'state') }
+  const config = join(dir, 'review.md')
+  await writeFile(config, '```yaml\nruntime: claude\n```\n')
+  const replyConfig = join(dir, 'reply-review.md')
+  await writeFile(replyConfig, options.app === undefined ? '```yaml\nruntime: claude\n```\n' : '```yaml\nruntime: claude\napp: enabled\n```\n')
   if (options.noState !== true) {
-    const config = join(dir, 'review.md')
-    await writeFile(config, '```yaml\nruntime: claude\n```\n')
     const payload = join(dir, 'review-payload.json')
     await writeFile(payload, JSON.stringify({ event: 'COMMENT', body: 'walkthrough', comments: [] }))
     const created = await runCli(
@@ -95,6 +101,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const github = (comments: Inline[], issueComments = '', extra: FakeGhResponse[] = []) =>
     gh.respond([
       ...extra,
+      { match: 'pulls/13 --jq .user.login', stdout: `${options.author ?? 'alilloig'}\n` },
       { match: '/replies --input', stdout: JSON.stringify({ id: 300 }) },
       { match: 'pulls/13/comments', stdout: inline(...comments) },
       { match: 'issues/13/comments --input', stdout: JSON.stringify({ id: 900 }) },
@@ -103,10 +110,11 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
     ])
   await github(FINDINGS)
   const reply = (round: number, ...extra: string[]) =>
-    runCli(['reply', '--repo', REPO, '--pr', '13', '--round', String(round), '--ledger', ledger,
+    runCli(['reply', '--repo', REPO, '--pr', '13', '--round', String(round), '--ledger', ledger, '--config', replyConfig,
       ...(options.recheck !== undefined ? ['--recheck', recheck] : []), ...extra], { env })
   const calls = async () => (await gh.calls()).slice(before)
-  return { reply, calls, github }
+  const requests = (): FakeApiRequest[] => app?.api.requests ?? []
+  return { reply, calls, github, requests }
 }
 
 test('round 1 answers each inline finding in its thread and every finding in one PR comment', async (t) => {
@@ -313,4 +321,71 @@ test('bad arguments are a usage error (exit 2)', async (t) => {
   }
   assert.equal((await runCli(['reply', '--repo', REPO, '--pr', '13', '--round', '1'])).code, 2)
   assert.deepEqual(await s.calls(), [])
+})
+
+const AUTHOR = ['api', `repos/${REPO}/pulls/13`, '--jq', '.user.login']
+const BOT = 'contract-implementer[bot]'
+
+test('on a PR the Implementer App opened, every reply and the comment post as the App, with no token printed', async (t) => {
+  const s = await setup(t, { app: {}, author: BOT })
+  // F1 already has the App's own answer: a re-run of an AFK reply skips it.
+  await s.github([...FINDINGS, { id: 201, reply_to: 101, login: BOT, body: `ACCEPT: ...\n\n${replyMarker(1, 'F1')}` }])
+  const { code, stdout, stderr } = await s.reply(1)
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.ok(!stdout.includes(IMPLEMENTER_TOKEN))
+  assert.deepEqual(JSON.parse(stdout), {
+    round: 1, replied: ['F2'], skipped: ['F1'], walkthrough: ['F3'], comment: { id: 900, posted: true },
+  })
+  const calls = await s.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [AUTHOR, COMMENTS, replyTo(102), ISSUE_COMMENTS, COMMENT_POST])
+  assert.equal(calls[0]!.gh_token, null)
+  assert.ok(calls.slice(1).every((c) => c.gh_token === IMPLEMENTER_TOKEN))
+  assert.deepEqual(JSON.parse(calls[4]!.stdin), { body: SUMMARY_1 })
+})
+
+test('on a PR a human opened, reply posts as the user and mints no App token, also with "app: enabled"', async (t) => {
+  const s = await setup(t, { app: {} })
+  const { code } = await s.reply(1)
+  assert.equal(code, 0)
+  const calls = await s.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [AUTHOR, USER, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST])
+  assert.ok(calls.every((c) => c.gh_token === null))
+  assert.deepEqual(s.requests(), [])
+})
+
+const USER_PATH = [AUTHOR, USER, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST]
+
+test('on a PR another App opened, reply posts as the user, after the Implementer App login shows it is not that App', async (t) => {
+  const s = await setup(t, { app: {}, author: 'dependabot[bot]' })
+  const { code } = await s.reply(1)
+  assert.equal(code, 0)
+  const calls = await s.calls()
+  assert.deepEqual(calls.map((c) => c.argv), USER_PATH)
+  assert.ok(calls.every((c) => c.gh_token === null))
+  assert.ok(s.requests().some((r) => r.path === '/app'), 'the Implementer App login was not read')
+})
+
+// With no env file the machine has no Implementer App, so no PR here is its
+// AFK build: the user answers, as before the App existed.
+for (const [name, author] of [['another App', 'dependabot[bot]'], ['an App with the Implementer App\'s login', BOT]] as const) {
+  test(`on a PR ${name} opened, with no Implementer env file, reply posts as the user and mints nothing`, async (t) => {
+    const s = await setup(t, { app: { missing: true }, author })
+    const { code, stderr } = await s.reply(1)
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    const calls = await s.calls()
+    assert.deepEqual(calls.map((c) => c.argv), USER_PATH)
+    assert.ok(calls.every((c) => c.gh_token === null))
+    assert.deepEqual(s.requests(), [])
+  })
+}
+
+test('on a PR an App opened, broken Implementer credentials exit 4 and post nothing, as the App or as the user', async (t) => {
+  const s = await setup(t, { app: { broken: true }, author: BOT })
+  const { code, stdout, stderr } = await s.reply(1)
+  assert.equal(code, 4)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts reply: .*implementer-app\.env sets no HERO_FORGE_IMPLEMENTER_APP_KEY/)
+  assert.deepEqual((await s.calls()).map((c) => c.argv), [AUTHOR])
 })

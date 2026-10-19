@@ -9,6 +9,8 @@ Build the ticket the user passes, then take it to a reviewed pull request. The w
 
 The helper CLI lives in the `review-pipeline` skill folder, a sibling of the folder this SKILL.md is in. Below, `review.ts` means `node "<the folder this SKILL.md is in>/../review-pipeline/scripts/review.ts"`, run from the repo root.
 
+**AFK run.** The T3 router passes `--afk` with the ticket; a human never needs it. With `--afk`, the Implementer GitHub App pushes the branch and opens the draft PR (steps 1, 4 and 5 say how), so the PR's author is the App and the reviewer App can approve it. The helper CLI mints the App's token in its own process: you never see or handle a token. Without `--afk`, every step works as written, as the user.
+
 ## 1. Check the review config
 
 Run `review.ts config` before anything else.
@@ -16,6 +18,11 @@ Run `review.ts config` before anything else.
 - Exit 0: continue.
 - Exit 3 (no `docs/agents/review.md`) or exit 4 (the file is invalid): show the message, tell the user to run `/setup-forge`, and stop. Build nothing.
 - Any other failure (for example, Node is older than 22.18): show the message and stop.
+
+With `--afk`, also check the Implementer App before you build: `review.ts app-token --repo <owner/repo> --app implementer --check`, with `<owner/repo>` from `gh repo view --json nameWithOwner --jq .nameWithOwner`.
+
+- Exit 0: continue.
+- Exit 3 (the config has no `app: enabled`) or exit 4 (the App's credentials are broken, or the App is not installed on the repo): show the message and stop. Build nothing, and never fall back to the user.
 
 ## 2. Fetch the ticket
 
@@ -28,7 +35,7 @@ Read the default branch: `gh repo view --json defaultBranchRef --jq .defaultBran
 - On the default branch: pull it, then create `ticket/<number>-<short-slug>` from it.
 - On another branch: stay on it.
 
-Then check for an open PR on the branch: `gh pr view --json number,state,body`. An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing, push it, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
+Then check for an open PR on the branch: `gh pr view --json number,state,body`. An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing, push it as step 4 says, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
 
 ## 4. Build it
 
@@ -37,6 +44,8 @@ Call the Skill tool with "tdd" where possible, at pre-agreed seams.
 Run typechecking regularly, single test files regularly, and the full test suite once at the end.
 
 Commit the work to the branch. Then push it: `git push -u origin <branch>`.
+
+With `--afk`, push as the App instead: `review.ts implementer push --repo <owner/repo> --branch <branch>`. It pushes the branch tip to GitHub over https from a scratch repo that reads none of the system's, the user's or the repo's git config, and prints the branch, the commit and the App's login. Exit 1 with GitHub's message means GitHub refused the push (for example, the App has no permission to change `.github/workflows/`): show the message and stop. Exit 4: stop as in step 1. Never push as the user instead.
 
 ## 5. Open the draft PR
 
@@ -55,6 +64,14 @@ gh pr create --draft --base <default branch> --title "<ticket title>" --body-fil
 ```
 
 The PR number is the last part of the URL it prints.
+
+With `--afk`, open it as the App instead:
+
+```sh
+review.ts implementer pr --repo <owner/repo> --head <branch> --base <default branch> --title "<ticket title>" --body-file <body file>
+```
+
+It opens a draft and prints its `number`, its `url` and the App's login (`as`). Exit 1: GitHub refused the PR, show the message and stop. Exit 4: stop as in step 1.
 
 ## 6. Hand off to the review pipeline
 

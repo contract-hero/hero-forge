@@ -1,6 +1,6 @@
 // Shared harness for the helper CLI tests. Every test drives `review.ts`
 // through its command line in a child process, never by importing a module.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { generateKeyPairSync, verify, type KeyObject } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -273,12 +273,14 @@ function checkJwt(auth: string | undefined, publicKey: KeyObject): { ok: boolean
 // A local stand-in for api.github.com. `routes` maps "METHOD /path" to a
 // response; any other request gets a 404. A request whose Bearer JWT does not
 // verify with `publicKey` gets a 401, as GitHub answers a wrong key. Every
-// request is recorded. The server runs in the test process, so spawn the CLI
-// with the async `run`/`runCli`, never with spawnSync.
+// request is recorded, and `onRequest` runs before each answer, so a test can
+// act between two calls. The server runs in the test process, so spawn the
+// CLI with the async `run`/`runCli`, never with spawnSync.
 export async function fakeGitHubApi(
   t: { after: (fn: () => Promise<void>) => void },
   publicKey: KeyObject,
   routes: Record<string, FakeApiRoute>,
+  onRequest?: (request: FakeApiRequest) => Promise<void>,
 ): Promise<FakeGitHubApi> {
   const requests: FakeApiRequest[] = []
   const server = createServer((req, res) => {
@@ -295,7 +297,7 @@ export async function fakeGitHubApi(
         body = raw
       }
       const version = req.headers['x-github-api-version']
-      requests.push({
+      const request: FakeApiRequest = {
         method,
         path,
         iss: jwt.iss,
@@ -303,16 +305,128 @@ export async function fakeGitHubApi(
         accept: req.headers.accept ?? null,
         api_version: typeof version === 'string' ? version : null,
         body,
-      })
+      }
+      requests.push(request)
       const route: FakeApiRoute = !jwt.ok
         ? { status: 401, body: { message: 'A JSON web token could not be decoded' } }
         : (routes[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } })
-      res.writeHead(route.status, { 'content-type': 'application/json' })
-      res.end(JSON.stringify(route.body))
+      void (onRequest?.(request) ?? Promise.resolve()).then(() => {
+        res.writeHead(route.status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(route.body))
+      })
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())))
   const { port } = server.address() as AddressInfo
   return { url: `http://127.0.0.1:${port}`, requests }
+}
+
+export const IMPLEMENTER_TOKEN = 'ghs_implementer0123456789abcdef'
+
+// A working Implementer App for `repo`: a fresh key, its env file, and a fake
+// GitHub API that mints IMPLEMENTER_TOKEN for slug `contract-implementer`.
+// `missing` leaves out the env file, as on a machine with no Implementer App;
+// `broken` writes one that names no key. Merge `env` into the env of the CLI
+// call.
+export async function implementerApp(
+  t: { after: (fn: () => Promise<void>) => void },
+  dir: string,
+  repo: string,
+  options: { missing?: boolean; broken?: boolean; onRequest?: (request: FakeApiRequest) => Promise<void> } = {},
+): Promise<{ env: Record<string, string>; api: FakeGitHubApi }> {
+  const key = await appKey(dir, 'implementer-app.pem')
+  const api = await fakeGitHubApi(t, key.publicKey, {
+    [`GET /repos/${repo}/installation`]: { status: 200, body: { id: 4343 } },
+    'POST /app/installations/4343/access_tokens': { status: 201, body: { token: IMPLEMENTER_TOKEN } },
+    'GET /app': { status: 200, body: { slug: 'contract-implementer' } },
+  }, options.onRequest)
+  const envFile = join(dir, 'implementer-app.env')
+  if (options.broken === true) await writeFile(envFile, 'HERO_FORGE_IMPLEMENTER_APP_ID=777\n')
+  else if (options.missing !== true) {
+    await writeFile(envFile, `HERO_FORGE_IMPLEMENTER_APP_ID=777\nHERO_FORGE_IMPLEMENTER_APP_KEY=${key.pem}\n`)
+  }
+  return { env: { HERO_FORGE_IMPLEMENTER_APP_ENV: envFile, HERO_FORGE_GITHUB_API_URL: api.url }, api }
+}
+
+// `password` is what the push's own credential config gives a real `git
+// credential fill` for https://github.com, `evil_password` the same for another
+// host (null: no password). `config` is the real `git config --list
+// --show-origin` the push would read, its `-c` options included. `env` is
+// the push's whole environment. `landed` is the exit code of the real push
+// to `remote` (null: not run).
+export type FakeGitPush = {
+  argv: string[]
+  cwd: string
+  password: string | null
+  evil_password: string | null
+  config: string[]
+  env: Record<string, string>
+  landed: number | null
+}
+
+// How the fake answers a push. `{password}` in `stderr` becomes the password
+// the push's credential config gave, as a git that echoed it would print.
+// With `remote` (a bare repo path) and no failing `exit`, the fake also runs
+// the real push there, with the same options and env, over the file protocol.
+export type FakeGitSpec = { exit?: number; stderr?: string; remote?: string }
+
+const fakeGitScript = (realGit: string, log: string, specFile: string) => `import { appendFileSync, readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+const argv = process.argv.slice(2)
+const configs = []
+let i = 0
+while (argv[i] === '-c') { configs.push(argv[i + 1]); i += 2 }
+if (argv[i] !== 'push') {
+  const real = spawnSync(${JSON.stringify(realGit)}, argv, { stdio: 'inherit' })
+  process.exit(real.status ?? 1)
+}
+const fill = (host) => {
+  const r = spawnSync(${JSON.stringify(realGit)}, [...configs.flatMap((c) => ['-c', c]), 'credential', 'fill'], {
+    input: 'protocol=https\\nhost=' + host + '\\n\\n', encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  })
+  return /^password=(.*)$/m.exec(r.stdout ?? '')?.[1] ?? null
+}
+const password = fill('github.com')
+const listed = spawnSync(${JSON.stringify(realGit)}, [...configs.flatMap((c) => ['-c', c]), 'config', '--list', '--show-origin'], { encoding: 'utf8' })
+const config = (listed.stdout ?? '').split('\\n').filter((line) => line !== '')
+const spec = JSON.parse(readFileSync(${JSON.stringify(specFile)}, 'utf8'))
+let landed = null
+if (spec.remote !== undefined && (spec.exit ?? 0) === 0) {
+  const real = spawnSync(${JSON.stringify(realGit)}, [...configs.flatMap((c) => ['-c', c]), 'push', '-q', spec.remote, argv.at(-1)],
+    { encoding: 'utf8', env: { ...process.env, GIT_ALLOW_PROTOCOL: 'file' } })
+  landed = real.status
+  if (real.status !== 0) process.stderr.write(real.stderr)
+}
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), password, evil_password: fill('evil.example'), config,
+  env: process.env, landed }) + '\\n')
+process.stderr.write((spec.stderr ?? 'To https://github.com/x/y.git\\n * [new branch] x -> x\\n').replaceAll('{password}', password ?? ''))
+process.exitCode = spec.exit ?? 0
+`
+
+// Put a fake `git` first on PATH. Every git command but `push` runs the real
+// git. A push is logged, never sent: the fake runs the real git's credential
+// fill with the push's own `-c` options, so the log shows whose credentials
+// the push would carry. Put `bin` first on the PATH of the CLI call.
+export async function fakeGit(dir: string, spec: FakeGitSpec = {}): Promise<{ bin: string; pushes: () => Promise<FakeGitPush[]> }> {
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim()
+  const bin = join(dir, 'git-bin')
+  await mkdir(bin, { recursive: true })
+  const log = join(dir, 'git-pushes.jsonl')
+  const specFile = join(dir, 'git-spec.json')
+  const script = join(bin, 'fake-git.mjs')
+  await writeFile(script, fakeGitScript(realGit, log, specFile))
+  const shim = join(bin, 'git')
+  await writeFile(shim, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`)
+  await chmod(shim, 0o755)
+  await writeFile(log, '')
+  await writeFile(specFile, JSON.stringify(spec))
+  return {
+    bin,
+    pushes: async () =>
+      (await readFile(log, 'utf8'))
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as FakeGitPush),
+  }
 }

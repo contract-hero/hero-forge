@@ -10,6 +10,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['app-token', 'usage: review.ts app-token --repo O/R [--app reviewer|implementer] [--config <path>] --check | --login'],
   ['post-review', 'usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R'],
   ['reply', 'usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>'],
+  ['implementer', '  review.ts implementer push    --repo O/R --branch <name> [--config <path>]   (in the repo\'s worktree)'],
   [
     'codex-exec',
     'usage: review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file> [--schema <file>] [--log <file>] [--config <path>]',
@@ -22,7 +23,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['route', 'usage: review.ts route --app reviewer --event <X-GitHub-Event> --delivery <X-GitHub-Delivery> --payload <file>'],
 ]
 
-const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'] }
+const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'] }
 
 for (const [name, line] of SUBCOMMANDS) {
   test(`${name} --help prints a summary and the usage to stdout, and exits 0`, async () => {
@@ -43,7 +44,7 @@ for (const [name, line] of SUBCOMMANDS) {
 
   test(`${name} with an unknown option exits 2 with the same usage text that --help prints`, async () => {
     const help = await runCli([name, '--help'])
-    // stack and run-state take a command first; give them one, so the
+    // stack, run-state and implementer take a command first; give them one, so the
     // unknown option reaches the option parser.
     const command = COMMANDS_FIRST[name] ?? []
     const { code, stdout, stderr } = await runCli([name, ...command, '--no-such-option'])

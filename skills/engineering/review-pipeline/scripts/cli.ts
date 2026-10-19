@@ -51,7 +51,15 @@ export const COMMANDS = {
   reply: {
     summary: 'Post the Adjudication: one reply per inline finding and one PR comment with every answer.',
     usage: `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
-                       [--recheck <recheck-r(R-1).json>]   (round 2 and later)`,
+                       [--recheck <recheck-r(R-1).json>]   (round 2 and later)
+                       [--config <path>]`,
+  },
+  implementer: {
+    summary: 'Push a branch, open a draft PR, or comment, as the Implementer App (it mints its own token).',
+    usage: `usage:
+  review.ts implementer push    --repo O/R --branch <name> [--config <path>]   (in the repo's worktree)
+  review.ts implementer pr      --repo O/R --head <branch> --base <ref> --title <text> --body-file <file> [--config <path>]
+  review.ts implementer comment --repo O/R --issue N --body-file <file> [--config <path>]   (an issue or a PR)`,
   },
   'codex-exec': {
     summary: 'Run one Codex role read-only on a brief, and check its output against a schema.',
