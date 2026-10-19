@@ -31,7 +31,8 @@ function retryMs(): number {
   return raw !== undefined && /^[0-9]+$/.test(raw) ? Number(raw) : DEFAULT_RETRY_MS
 }
 
-// GitHub's list entry for one delivery: `id` is GitHub's own number, `guid`
+// GitHub's list entry for one delivery: `id` is GitHub's own number (its
+// exact digits as a string when it is above 2^53, see parseExact), `guid`
 // the X-GitHub-Delivery value.
 type Listed = { id?: unknown; guid?: unknown; event?: unknown; action?: unknown; delivered_at?: unknown }
 
@@ -64,7 +65,7 @@ async function delivery(argv: string[]): Promise<string> {
     let cursor: string | null = null
     for (;;) {
       const { listed, next } = await page(cursor)
-      const hit = listed.find((d) => d.guid === guid && typeof d.id === 'number')
+      const hit = listed.find((d) => d.guid === guid && (typeof d.id === 'number' || (typeof d.id === 'string' && /^\d+$/.test(d.id))))
       if (hit !== undefined) return hit
       if (next === null || listed.length === 0 || listed.some(tooOld)) return undefined
       cursor = next
@@ -90,7 +91,16 @@ async function delivery(argv: string[]): Promise<string> {
     )
   }
 
-  const detail = await api<Detail>('read the webhook delivery', 'GET', `/app/hook/deliveries/${found.id as number}`)
+  const id = String(found.id)
+  let detail: Detail
+  try {
+    detail = await api<Detail>('read the webhook delivery', 'GET', `/app/hook/deliveries/${id}`)
+  } catch (error) {
+    if (error instanceof ApiFailure && error.status === 404) {
+      throw new Failure(`delivery ${guid} (id ${id}) is listed, but GitHub has no detail for it (HTTP 404)`, 1)
+    }
+    throw error
+  }
   const payload = detail.request?.payload
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new Failure(`GitHub sent no JSON payload for delivery ${guid}`, 1)

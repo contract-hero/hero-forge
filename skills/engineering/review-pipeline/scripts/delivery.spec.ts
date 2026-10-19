@@ -320,3 +320,43 @@ test('a Link to another host is never followed: only its cursor is used, on the 
   assert.equal(code, 0)
   assert.equal(s.api.requests[1]?.path, '/app/hook/deliveries?per_page=100&cursor=v1_200')
 })
+
+// GitHub's delivery ids are 64-bit numbers above 2^53, which a JS number
+// rounds: the detail read must use the id's exact digits from the list text.
+const BIG = '3849173578576568291'
+test('a delivery id above 2^53 is read by its exact digits, not a rounded number', async (t) => {
+  const listed = JSON.stringify([entry(901, 'other-guid'), entry(1, GUID)]).replace('"id":1,', `"id":${BIG},`)
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: null, raw: listed },
+      [`GET /app/hook/deliveries/${BIG}`]: { status: 200, body: detail(1, GUID, PAYLOAD) },
+    },
+  })
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { event: 'issues', action: 'labeled', repo: 'contract-hero/hero-forge' })
+  assert.deepEqual(JSON.parse(await readFile(s.out, 'utf8')), PAYLOAD)
+  assert.deepEqual(s.api.requests.map((r) => r.path), ['/app/hook/deliveries?per_page=100', `/app/hook/deliveries/${BIG}`])
+})
+
+test('a 404 on the detail read names the delivery, not the credentials', async (t) => {
+  const s = await setup(t, { routes: { [LIST]: { status: 200, body: [entry(902, GUID)] } } })
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.match(stderr, new RegExp(`delivery ${GUID} \\(id 902\\) is listed, but GitHub has no detail for it \\(HTTP 404\\)`))
+  assert.doesNotMatch(stderr, /Fix the App credentials/)
+})
+
+test('a non-404 failure on the detail read stays a broken App: exit 4, its HTTP status, and no payload file', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      'GET /app/hook/deliveries/902': { status: 500, body: { message: 'Server Error' } },
+    },
+  })
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(code, 4)
+  assert.match(stderr, /read the webhook delivery failed: HTTP 500 \(Server Error\)/)
+  await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
+})

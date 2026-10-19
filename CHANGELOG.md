@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.14
+
+- `review-pipeline`: `review.ts delivery` reads GitHub's webhook delivery ids by their exact digits. They are 64-bit numbers above 2^53, so a JS number rounded them, and every router run stopped with a 404 that blamed the App credentials. A 404 on the detail read now names the delivery.
+
 ## 1.0.13
 
 - `setup-forge`: an AFK part. It writes the AFK config (`paused`, `app_daily_runs`, the `implementer:` block), creates one T3 webhook task per App (signature on `x-hub-signature-256`, the secret through T3's private secret request) and an hourly reconcile task, guides each GitHub App setting and verifies it, checks T3 Connect, and, after asking, sets a ruleset on the default branch that requires a pull request and the `contract-reviewer/gate` check. It never creates an App.
