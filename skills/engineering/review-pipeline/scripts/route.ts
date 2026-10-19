@@ -7,8 +7,10 @@
 // wins:
 //   1. paused: true                                 ignore, paused
 //   2. the delivery id was seen before              ignore, duplicate
-//   3. not pull_request opened|reopened|ready_for_review
-//                                                   ignore, event:<name> or action:<name>
+//   3. not a pull_request trigger action           ignore, event:<name> or action:<name>
+//      contract-implementer[bot]'s PR: opened, reopened
+//      any other PR: ready_for_review, or opened or reopened when not a draft
+//      (a by-hand /implement-pr opens a draft and reviews it in its own session)
 //   4. no docs/agents/review.md on the default branch
 //                                                   ignore, no-config
 //   5. the PR author is not the maintainer (the local gh user) or
@@ -28,13 +30,19 @@ import { loadState, stateRoot, TERMINAL } from './run-state.ts'
 
 const usage = usageFor('route')
 
-const STARTS = ['opened', 'reopened', 'ready_for_review']
-
 // The Implementer App's bot login: its PRs start a review like the maintainer's.
 const IMPLEMENTER_BOT = 'contract-implementer[bot]'
 
 // GitHub logins are case-insensitive.
 const sameLogin = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+
+// Whether `action` on a PR by `author` starts a review (rule 3). An author
+// who is not the bot gets the maintainer's actions here: rule 5 then ignores
+// anyone who is not the maintainer, so rule 3 needs no maintainer lookup.
+function triggers(action: string, author: string | undefined, draft: boolean): boolean {
+  if (author !== undefined && sameLogin(author, IMPLEMENTER_BOT)) return action === 'opened' || action === 'reopened'
+  return action === 'ready_for_review' || ((action === 'opened' || action === 'reopened') && !draft)
+}
 
 type Decision = { action: 'review' | 'ignore'; repo: string | null; pr: number | null; reason: string | null }
 
@@ -43,7 +51,7 @@ type Decision = { action: 'review' | 'ignore'; repo: string | null; pr: number |
 type Payload = {
   action?: unknown
   repository?: { full_name?: unknown; default_branch?: unknown }
-  pull_request?: { number?: unknown; user?: { login?: unknown } }
+  pull_request?: { number?: unknown; draft?: unknown; user?: { login?: unknown } }
 }
 
 async function readPayload(file: string): Promise<Payload> {
@@ -139,10 +147,11 @@ async function route(argv: string[]): Promise<string> {
   if (await seenDelivery(delivery)) return decide('ignore', 'duplicate')
   if (event !== 'pull_request') return decide('ignore', `event:${event}`)
   const action = typeof payload.action === 'string' ? payload.action : ''
-  if (!STARTS.includes(action)) return decide('ignore', `action:${action}`)
+  const login = payload.pull_request?.user?.login
+  const author = typeof login === 'string' ? login : undefined
+  if (!triggers(action, author, payload.pull_request?.draft === true)) return decide('ignore', `action:${action}`)
   if (config === null) return decide('ignore', 'no-config')
-  const author = payload.pull_request?.user?.login
-  if (typeof author !== 'string') return decide('ignore', 'author')
+  if (author === undefined) return decide('ignore', 'author')
   if (!sameLogin(author, IMPLEMENTER_BOT) && !sameLogin(author, (await userIdentity()).login)) return decide('ignore', 'author')
   // A pull_request event always carries its number: a payload without one is not GitHub's.
   if (pr === null) throw new Failure('the pull_request payload has no pull_request.number', 1)

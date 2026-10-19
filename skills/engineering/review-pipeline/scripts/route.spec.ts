@@ -72,9 +72,17 @@ const ignore = (reason: string, pr: number | null = 42): Decision => ({ action: 
 // Each case: the test name, the recorded payload, the default branch, and the
 // decision a fresh router prints for it.
 const cases: [string, string, Remote, Decision][] = [
-  ['a draft PR opened by the maintainer', 'pull_request.opened.json', { review: reviewMd() }, review()],
+  ['a draft PR opened by the maintainer', 'pull_request.opened.draft.json', { review: reviewMd() }, ignore('action:opened')],
+  ['a PR opened by the maintainer, not a draft', 'pull_request.opened.json', { review: reviewMd() }, review()],
+  ['a maintainer PR marked ready for review', 'pull_request.ready_for_review.json', { review: reviewMd() }, review()],
+  ['a draft PR opened by contract-implementer[bot]', 'pull_request.opened.implementer.json', { review: reviewMd() }, review()],
   ['a PR by contract-implementer[bot] reopened', 'pull_request.reopened.json', { review: reviewMd() }, review()],
-  ['a PR marked ready for review', 'pull_request.ready_for_review.json', { review: reviewMd() }, review()],
+  [
+    'a contract-implementer[bot] PR marked ready for review',
+    'pull_request.ready_for_review.implementer.json',
+    { review: reviewMd() },
+    ignore('action:ready_for_review'),
+  ],
   ['a push to a pull request (synchronize)', 'pull_request.synchronize.json', { review: reviewMd() }, ignore('action:synchronize')],
   ['a merged PR (closed)', 'pull_request.closed.json', { review: reviewMd() }, ignore('action:closed')],
   ['a push event', 'push.json', { review: reviewMd() }, ignore('event:push', null)],
