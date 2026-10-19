@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.11
+
+- `review-pipeline`: a new `review.ts reconcile --repo O/R` finds work a missed webhook should have started (labelled tickets and specs with no run, open PRs with no run at their head, hand-offs due, answered pauses) and routes each item through the same decision code as `route`, so caps, `paused`, locks and the sender and author rules give the same answers. It prints one JSON line per item, the `route` decision plus `app`. Synthetic delivery ids are deterministic, so a second sweep starts nothing new. A ticket that an open PR by the maintainer or the Implementer App closes is `ignore` with reason `has-pr`.
+
 ## 1.0.10
 
 - `review-pipeline`: `review.ts route --app implementer` decides the Implementer App's events: `build-ticket` and `build-spec` (a maintainer adds `ready-for-agent` to a maintainer-written ticket with no parent, or to a spec whose sub-issues the maintainer wrote), `adjudicate` (the reviewer's hand-off marker on an Implementer PR at `review-posted`) and `resume` (a maintainer reply on a paused issue or PR). `route --app reviewer` gains `recheck` (the Implementer's `adjudicated` hand-off marker, or a maintainer `/recheck` on a maintainer PR). Every decision prints `lock_token`. Attempts per ticket and a daily cap per App are counted.
