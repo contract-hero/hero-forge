@@ -36,6 +36,7 @@ const OPTIONS = {
   'body-file': { type: 'string' },
   issue: { type: 'string' },
   'force-with-lease': { type: 'string' },
+  to: { type: 'string' },
   add: { type: 'string' },
   remove: { type: 'string' },
 } as const
@@ -121,13 +122,18 @@ function scratchEnv(scratch: string, token?: string): NodeJS.ProcessEnv {
 // remote is a URL, not `origin`. Hooks are off, and no prompt or askpass can
 // stand in for the App.
 //
-// With --force-with-lease <old tip>, the push replaces the branch on GitHub
+// With --to <remote branch>, the local branch's tip goes to that branch on
+// GitHub (an AFK thread works on a local branch the router names). With
+// --force-with-lease <old tip>, the push replaces the branch on GitHub
 // only while GitHub still has that tip there: a restack rewrites the layer
 // branch from the tip it started at. The scratch repo has no remote-tracking
 // ref, so the lease always names the tip.
 async function push(repo: string, values: Values): Promise<string> {
   const branch = values.branch
   if (branch === undefined || branch === '') throw usage('--branch is required')
+  const to = values.to ?? branch
+  const named = await git(['check-ref-format', `refs/heads/${to}`])
+  if (to === '' || to.startsWith('-') || named.code !== 0) throw usage('--to must be a branch name on GitHub')
   const lease = values['force-with-lease']
   if (lease !== undefined && !/^[0-9a-f]{40}$/.test(lease)) throw usage('--force-with-lease must be the full sha of the old tip on GitHub')
   const app = await implementerApp(repo, values.config)
@@ -151,18 +157,18 @@ async function push(repo: string, values: Values): Promise<string> {
     const pushed = await git(
       ['-c', 'credential.helper=', '-c', `credential.helper=${HELPER}`, '-c', 'http.extraHeader=', '-c', 'http.sslVerify=true',
         '-c', 'http.proxy=', '-c', 'core.askPass=', '-c', 'core.hooksPath=/dev/null',
-        'push', ...(lease === undefined ? [] : [`--force-with-lease=refs/heads/${branch}:${lease}`]),
-        `https://github.com/${repo}.git`, `${commit}:refs/heads/${branch}`],
+        'push', ...(lease === undefined ? [] : [`--force-with-lease=refs/heads/${to}:${lease}`]),
+        `https://github.com/${repo}.git`, `${commit}:refs/heads/${to}`],
       scratchEnv(scratch, token),
       scratch,
     )
     // git prints no credential, but its output is scrubbed of the token anyway.
     const said = oneLine(pushed.stderr || pushed.stdout).replaceAll(token, '***')
-    refuse(pushed.code === 0, `GitHub refused the push of ${branch}: ${said}`)
+    refuse(pushed.code === 0, `GitHub refused the push of ${to}: ${said}`)
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
-  return `${JSON.stringify({ branch, commit, as: me.login })}\n`
+  return `${JSON.stringify({ branch: to, commit, as: me.login })}\n`
 }
 
 async function comment(repo: string, values: Values): Promise<string> {

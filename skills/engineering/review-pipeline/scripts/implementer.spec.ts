@@ -438,3 +438,40 @@ test('label needs exactly one of --add and --remove, with a name: else a usage e
   assert.deepEqual(await s.gh.calls(), [])
   assert.deepEqual(s.api.requests, [])
 })
+
+// An AFK thread works in a fresh worktree on a local branch the router names,
+// so it pushes that branch's tip to the PR's head ref on GitHub.
+test('push --to <remote branch> sends the local branch tip to that branch on GitHub', async (t) => {
+  const s = await pushSetup(t)
+  assert.equal((await run('git', ['-C', s.repo, 'branch', 'afk/adjudicate-41-abcd1234', 'ticket/27-x'])).code, 0)
+  const result = await s.push('--branch', 'afk/adjudicate-41-abcd1234', '--to', 'ticket/27-x')
+  assert.equal(result.stderr, '')
+  assert.equal(result.code, 0)
+  noToken(result)
+  assert.deepEqual(JSON.parse(result.stdout), { branch: 'ticket/27-x', commit: s.sha, as: 'contract-implementer[bot]' })
+  const push = (await s.pushes())[0]!
+  assert.deepEqual(push.argv.slice(-3), ['push', `https://github.com/${REPO}.git`, `${s.sha}:refs/heads/ticket/27-x`])
+  assert.equal(await s.landed(), s.sha)
+})
+
+test('push --to with --force-with-lease leases the remote branch', async (t) => {
+  const s = await pushSetup(t)
+  assert.equal((await s.push('--branch', 'ticket/27-x')).code, 0)
+  const sha = await restacked(s)
+  assert.equal((await run('git', ['-C', s.repo, 'branch', 'afk/x', sha])).code, 0)
+  const result = await s.push('--branch', 'afk/x', '--to', 'ticket/27-x', '--force-with-lease', s.sha)
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual((await s.pushes())[1]!.argv.slice(-4, -2), ['push', `--force-with-lease=refs/heads/ticket/27-x:${s.sha}`])
+  assert.equal(await s.landed(), sha)
+})
+
+test('push --to that is not a branch name is a usage error that mints nothing', async (t) => {
+  const s = await pushSetup(t)
+  for (const to of ['', '-f', 'a b', 'x:y', 'a..b', 'refs/heads/../x']) {
+    const result = await s.push('--branch', 'ticket/27-x', `--to=${to}`)
+    assert.equal(result.code, 2, to)
+    assert.match(result.stderr, /--to must be a branch name/, to)
+  }
+  assert.deepEqual(await s.pushes(), [])
+  assert.deepEqual(s.api.requests, [])
+})

@@ -10,7 +10,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['app-token', 'usage: review.ts app-token --repo O/R [--app reviewer|implementer] [--config <path>] --check | --login'],
   ['post-review', 'usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R'],
   ['reply', 'usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>'],
-  ['implementer', '  review.ts implementer push    --repo O/R --branch <name> [--force-with-lease <old tip sha>] [--config <path>]   (in the repo\'s worktree)'],
+  ['implementer', '  review.ts implementer push    --repo O/R --branch <local> [--to <branch on GitHub>] [--force-with-lease <old tip sha>] [--config <path>]   (in the repo\'s worktree)'],
   ['handoff', 'usage: review.ts handoff --app reviewer|implementer --repo O/R --pr N --kind review-posted|recheck-failed|adjudicated --round R [--config <path>]'],
   ['lock', 'usage: review.ts lock release --pr N | --issue N --token <lock_token>'],
   ['pause', '  review.ts pause write  --repo O/R --issue N | --pr N --reason <the question>'],

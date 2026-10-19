@@ -58,7 +58,7 @@ export const COMMANDS = {
   implementer: {
     summary: 'Push a branch, open a draft PR, comment, or label, as the Implementer App (it mints its own token).',
     usage: `usage:
-  review.ts implementer push    --repo O/R --branch <name> [--force-with-lease <old tip sha>] [--config <path>]   (in the repo's worktree)
+  review.ts implementer push    --repo O/R --branch <local> [--to <branch on GitHub>] [--force-with-lease <old tip sha>] [--config <path>]   (in the repo's worktree)
   review.ts implementer pr      --repo O/R --head <branch> --base <ref> --title <text> --body-file <file> [--config <path>]
   review.ts implementer comment --repo O/R --issue N --body-file <file> [--config <path>]   (an issue or a PR)
   review.ts implementer label   --repo O/R --issue N --add <label> | --remove <label> [--config <path>]   (an issue or a PR)`,
