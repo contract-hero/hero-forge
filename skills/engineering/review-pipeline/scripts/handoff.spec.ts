@@ -3,7 +3,7 @@
 // exported functions: the format must stay the one that `route` parses. The
 // rest drive `review.ts handoff` through its command line.
 import assert from 'node:assert/strict'
-import { writeFile } from 'node:fs/promises'
+import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { handoffMarker, parseHandoff } from './handoff.ts'
@@ -85,7 +85,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup) {
   ])
   const env = { ...gh.env, ...app.env, HERO_FORGE_STATE_DIR: root }
   const cli = (...args: string[]) => runCli(['handoff', '--repo', REPO, '--pr', '13', '--config', config, ...args], { env })
-  return { gh, api: app.api, cli }
+  return { gh, api: app.api, cli, root }
 }
 
 const posts = (calls: FakeGhCall[]) => calls.filter((c) => c.argv.includes('POST'))
@@ -114,40 +114,99 @@ for (const [app, kind, state, round, token] of CASES) {
   })
 }
 
-// The run was created at CREATED; GitHub gives comment times in whole seconds.
-const CREATED = '2026-10-19T12:00:00.400Z'
 const lines = (...comments: object[]) => comments.map((c) => `${JSON.stringify(c)}\n`).join('')
+const handoffsFile = (s: { root: string }) => join(s.root, 'pr-13', 'handoffs.json')
 
-test('handoff run again after its post landed posts nothing and says already', async (t) => {
+// "Already posted" is this run's own record, <run dir>/handoffs.json, never a
+// time: the run dir is per run (supersede moves it aside), so an earlier
+// run's marker, whenever it was posted, is never this run's hand-off.
+test('a post records its comment id, kind and round in the run dir, and a re-run whose comment is there posts nothing and says already', async (t) => {
   const mark = handoffMarker({ kind: 'adjudicated', pr: 13, round: 1 })
-  const comments = lines(
-    { id: 5, login: 'someone', body: `quoted\n\n${mark}`, created_at: '2026-10-19T13:00:00Z' },
-    { id: 6, login: 'contract-implementer[bot]', body: `Adjudication of round 1 is done.\n\n${mark}`, created_at: '2026-10-19T12:00:00Z' },
-  )
-  const s = await setup(t, { app: 'implementer', state: { phase: 'adjudicated', round: 1, created_at: CREATED }, comments })
-  const result = await s.cli('--app', 'implementer', '--kind', 'adjudicated', '--round', '1')
-  assert.equal(result.stderr, '')
-  assert.equal(result.code, 0)
-  assert.deepEqual(JSON.parse(result.stdout), { id: 6, kind: 'adjudicated', pr: 13, round: 1, as: 'contract-implementer[bot]', already: true })
-  assert.deepEqual(posts(await s.gh.calls()), [])
+  const s = await setup(t, { app: 'implementer', state: { phase: 'adjudicated', round: 1 } })
+  const first = await s.cli('--app', 'implementer', '--kind', 'adjudicated', '--round', '1')
+  assert.equal(first.code, 0, first.stderr)
+  assert.equal(JSON.parse(first.stdout).already, false)
+  assert.deepEqual(JSON.parse(await readFile(handoffsFile(s), 'utf8')), [{ kind: 'adjudicated', round: 1, id: 777 }])
+
+  await s.gh.respond([
+    { match: 'issues/13/comments --input', stdout: JSON.stringify({ id: 778 }) },
+    { match: 'issues/13/comments', stdout: lines({ id: 777, login: 'contract-implementer[bot]', body: `Hand-off.\n\n${mark}` }) },
+  ])
+  const again = await s.cli('--app', 'implementer', '--kind', 'adjudicated', '--round', '1')
+  assert.equal(again.stderr, '')
+  assert.equal(again.code, 0)
+  assert.deepEqual(JSON.parse(again.stdout), { id: 777, kind: 'adjudicated', pr: 13, round: 1, as: 'contract-implementer[bot]', already: true })
+  assert.equal(posts(await s.gh.calls()).length, 1)
 })
 
 // A new run (after a supersede, or a terminal run created again) starts at
-// round 1 again: the marker of an earlier run is not this run's hand-off.
-test("the same marker from an earlier run of the PR, before this run's created_at, does not stop the post", async (t) => {
+// round 1 again, with no record: an earlier run's marker, from the same
+// second as this run's start or from any other time, does not stop the post.
+for (const [name, at] of [['the same second as this run started', '2026-10-19T12:00:00Z'], ['after this run started', '2026-10-19T13:00:00Z'], ['before this run started', '2026-10-19T11:00:00Z']] as const) {
+  test(`an earlier run's marker by the same App, from ${name}, does not stop this run's post`, async (t) => {
+    const mark = handoffMarker({ kind: 'review-posted', pr: 13, round: 1 })
+    const comments = lines({ id: 4, login: 'contract-reviewer[bot]', body: `Hand-off.\n\n${mark}`, created_at: at })
+    const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1, created_at: '2026-10-19T12:00:00.400Z' }, comments })
+    const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { id: 777, kind: 'review-posted', pr: 13, round: 1, as: 'contract-reviewer[bot]', already: false })
+    assert.equal(posts(await s.gh.calls()).length, 1)
+  })
+}
+
+test('a recorded hand-off whose comment is gone from the PR posts again and records the new id', async (t) => {
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 2 }, comments: lines({ id: 9, login: 'alilloig', body: 'hi' }) })
+  await writeFile(handoffsFile(s), JSON.stringify([{ kind: 'review-posted', round: 1, id: 50 }, { kind: 'recheck-failed', round: 2, id: 60 }]))
+  const result = await s.cli('--app', 'reviewer', '--kind', 'recheck-failed', '--round', '2')
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).already, false)
+  assert.equal(posts(await s.gh.calls()).length, 1)
+  assert.deepEqual(JSON.parse(await readFile(handoffsFile(s), 'utf8')), [{ kind: 'review-posted', round: 1, id: 50 }, { kind: 'recheck-failed', round: 2, id: 777 }])
+})
+
+test('a recorded id that GitHub shows by another login is not this hand-off: it posts', async (t) => {
   const mark = handoffMarker({ kind: 'review-posted', pr: 13, round: 1 })
-  const comments = lines({ id: 4, login: 'contract-reviewer[bot]', body: `Hand-off.\n\n${mark}`, created_at: '2026-10-19T11:59:59Z' })
-  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1, created_at: CREATED }, comments })
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1 }, comments: lines({ id: 50, login: 'alilloig', body: mark }) })
+  await writeFile(handoffsFile(s), JSON.stringify([{ kind: 'review-posted', round: 1, id: 50 }]))
   const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
   assert.equal(result.code, 0, result.stderr)
-  assert.deepEqual(JSON.parse(result.stdout), { id: 777, kind: 'review-posted', pr: 13, round: 1, as: 'contract-reviewer[bot]', already: false })
+  assert.equal(JSON.parse(result.stdout).already, false)
+  assert.equal(posts(await s.gh.calls()).length, 1)
+})
+
+test('a corrupt hand-off record exits 4 and posts nothing', async (t) => {
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1 } })
+  await writeFile(handoffsFile(s), '{"kind":')
+  const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
+  assert.equal(result.code, 4)
+  assert.match(result.stderr, /corrupt hand-off record .*handoffs\.json/)
+  assert.deepEqual(posts(await s.gh.calls()), [])
+})
+
+// The comment landed but its record did not: the CLI says so. A re-run would
+// post a second marker for the round, which route meets with its lock and
+// phase checks.
+test('a post whose record cannot be written exits 1 and names the comment that landed', async (t) => {
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1 } })
+  const dir = join(s.root, 'pr-13')
+  await chmod(dir, 0o500)
+  let result
+  try {
+    result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
+  } finally {
+    // Before the temp dir's cleanup, which cannot remove a read-only dir.
+    await chmod(dir, 0o700)
+  }
+  assert.equal(result.code, 1)
+  assert.equal(result.stdout, '')
+  assert.match(result.stderr, /^review\.ts handoff: the hand-off comment 777 is on PR #13, but its record .*handoffs\.json could not be written/)
   assert.equal(posts(await s.gh.calls()).length, 1)
 })
 
 test('the same marker posted by another login does not count as already posted', async (t) => {
   const mark = handoffMarker({ kind: 'review-posted', pr: 13, round: 1 })
-  const comments = lines({ id: 5, login: 'alilloig', body: mark, created_at: '2026-10-19T13:00:00Z' })
-  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1, created_at: CREATED }, comments })
+  const comments = lines({ id: 5, login: 'alilloig', body: mark })
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1 }, comments })
   const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
   assert.equal(result.code, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).already, false)

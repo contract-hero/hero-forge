@@ -68,7 +68,7 @@ export const COMMANDS = {
     summary: 'Post the hand-off marker comment, as the App named, as the last action of an AFK part.',
     usage: `usage: review.ts handoff --app reviewer|implementer --repo O/R --pr N --kind review-posted|recheck-failed|adjudicated --round R [--config <path>]
   reviewer: review-posted, recheck-failed (at phase review-posted). implementer: adjudicated (at phase adjudicated).
-  Posts at most one comment per App, kind, PR and round; a re-run prints already: true.`,
+  Posts at most one comment per run, kind and round (recorded in the run dir); a re-run prints already: true.`,
   },
   lock: {
     summary: 'Release the lock that route took for an AFK run, with its owner token.',

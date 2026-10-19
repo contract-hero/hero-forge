@@ -11,19 +11,31 @@
 //
 // Each kind belongs to one App, as route reads it: review-posted and
 // recheck-failed to the reviewer App, adjudicated to the Implementer App.
-// A comment by the same App, made since the run was created, whose last line
-// is the same marker is already the hand-off: a re-run posts nothing and
-// prints `already: true`.
+// "Already posted" is a record of this run, never a time: each post writes
+// its comment id, kind and round to `<run dir>/handoffs.json`. The run dir
+// belongs to one run (`supersede` moves it aside, and a new run starts with
+// none), so an earlier run's marker is never this run's hand-off, whenever it
+// was posted. A recorded comment that GitHub still shows, by the same App
+// with the same marker as its last line, is the hand-off: a re-run posts
+// nothing and prints `already: true`. A recorded comment that is gone posts
+// again.
+//
+// A comment that lands while its record cannot be written exits 1 and names
+// the comment. A re-run would then post a second marker for the round; route
+// meets a repeat with its lock and phase checks, so it starts no second run.
 //
 // Exit 3: the App is not switched on in the config, or the PR has no run
 // state. Exit 4: the config is invalid, or the App is enabled but broken.
+import { randomBytes } from 'node:crypto'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { APPS, type AppName } from './app-token.ts'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { loadConfig } from './config.ts'
 import { appIdentity, gh, json, listLines, oneLine } from './github.ts'
 import { HANDOFF_KINDS, handoffMarker, type HandoffKind } from './handoff.ts'
 import { hasOwnMarker } from './marker.ts'
-import { loadState, type Phase } from './run-state.ts'
+import { loadState, runDir, type Phase } from './run-state.ts'
 
 const usage = usageFor('handoff')
 
@@ -46,6 +58,50 @@ const KINDS: Record<HandoffKind, { app: AppName; phase: Phase; text: (round: num
     phase: 'adjudicated',
     text: (r) => `Hand-off: the Adjudication of round ${r} is done. The re-check is next.`,
   },
+}
+
+type Posted = { kind: HandoffKind; round: number; id: number }
+
+function recordFile(pr: number): string {
+  return join(runDir(pr), 'handoffs.json')
+}
+
+// This run's posted hand-offs; none when there is no record yet. A record
+// that is there but not a list of hand-offs exits 4.
+async function readPosted(pr: number): Promise<Posted[]> {
+  const file = recordFile(pr)
+  let text: string
+  try {
+    text = await readFile(file, 'utf8')
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return []
+    throw new Failure(`cannot read ${file}: ${(error as Error).message}`, 1)
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    value = null
+  }
+  const ok = (v: unknown): v is Posted => {
+    const p = v as Partial<Posted> | null
+    return typeof p === 'object' && p !== null && HANDOFF_KINDS.includes(p.kind as HandoffKind) &&
+      Number.isInteger(p.round) && Number.isInteger(p.id)
+  }
+  if (!Array.isArray(value) || !value.every(ok)) throw new Failure(`corrupt hand-off record ${file}: delete it to post the hand-off again`, 4)
+  return value
+}
+
+// Write the record whole: a temp file in the run dir, then rename.
+async function writePosted(pr: number, posted: Posted[]): Promise<void> {
+  const file = recordFile(pr)
+  const tmp = `${file}.${randomBytes(6).toString('hex')}`
+  try {
+    await writeFile(tmp, `${JSON.stringify(posted)}\n`, { mode: 0o600 })
+    await rename(tmp, file)
+  } finally {
+    await rm(tmp, { force: true })
+  }
 }
 
 async function handoff(argv: string[]): Promise<string> {
@@ -94,22 +150,31 @@ async function handoff(argv: string[]): Promise<string> {
   const mark = handoffMarker({ kind, pr, round })
   const done = (id: number, already: boolean) => `${JSON.stringify({ id, kind, pr, round, as: me.login, already })}\n`
 
-  const comments = await listLines<{ id: number; login: string | null; body: string | null; created_at: string | null }>(
-    ['api', '--paginate', '--jq', '.[] | {id, login: .user.login, body, created_at}', `repos/${repo}/issues/${pr}/comments`],
-    `the comments of PR #${pr}`,
-    me.token,
-  )
-  // Only this run's hand-off counts: a new run of the PR starts at round 1
-  // again, so the same marker from an earlier run is not it. GitHub gives
-  // whole seconds, so the run's start is cut to its second.
-  const since = Math.floor(Date.parse(state.created_at) / 1000) * 1000
-  const earlier = comments.find((c) => c.login === me.login && Date.parse(c.created_at ?? '') >= since && hasOwnMarker(c.body, mark))
-  if (earlier !== undefined) return done(earlier.id, true)
+  const posted = await readPosted(pr)
+  const recorded = posted.find((p) => p.kind === kind && p.round === round)
+  if (recorded !== undefined) {
+    const comments = await listLines<{ id: number; login: string | null; body: string | null }>(
+      ['api', '--paginate', '--jq', '.[] | {id, login: .user.login, body}', `repos/${repo}/issues/${pr}/comments`],
+      `the comments of PR #${pr}`,
+      me.token,
+    )
+    const there = comments.some((c) => c.id === recorded.id && c.login === me.login && hasOwnMarker(c.body, mark))
+    if (there) return done(recorded.id, true)
+  }
 
   const post = { body: `${rule.text(round)}\n\n${mark}` }
   const result = await gh(['api', '-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '--input', '-'], JSON.stringify(post), me.token)
   refuse(result.code === 0, `GitHub rejected the hand-off comment on PR #${pr}: ${oneLine(result.stderr || result.stdout)}`)
-  return done(json<{ id: number }>(result.stdout, 'post the hand-off comment').id, false)
+  const id = json<{ id: number }>(result.stdout, 'post the hand-off comment').id
+  try {
+    await writePosted(pr, [...posted.filter((p) => p.kind !== kind || p.round !== round), { kind, round, id }])
+  } catch (error) {
+    throw new Failure(
+      `the hand-off comment ${id} is on PR #${pr}, but its record ${recordFile(pr)} could not be written (${(error as Error).message}). A re-run posts a second marker for round ${round}; route starts no second run from it`,
+      1,
+    )
+  }
+  return done(id, false)
 }
 
 export const main = runMain('handoff', handoff)
