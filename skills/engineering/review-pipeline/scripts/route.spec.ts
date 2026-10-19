@@ -499,6 +499,15 @@ const flows: [string, App, string, Remote, ((r: Router) => Promise<void>) | null
   // adjudicate
   ['the review-posted hand-off', 'implementer', 'issue_comment.created.review-posted.json', { review: implementerMd() }, phase('review-posted'), onPr('adjudicate')],
   ['the recheck-failed hand-off', 'implementer', 'issue_comment.created.recheck-failed.json', { review: implementerMd() }, phase('review-posted'), onPr('adjudicate')],
+  // A paused Adjudication goes on only through resume, on the maintainer's answer.
+  [
+    'the review-posted hand-off on a PR whose Adjudication is paused',
+    'implementer',
+    'issue_comment.created.review-posted.json',
+    { review: implementerMd() },
+    (r) => phase('review-posted')(r).then(() => paused('pr', 42)(r)),
+    onPr('ignore', 'paused-run'),
+  ],
   [
     'the review-posted hand-off before the run reached review-posted',
     'implementer',

@@ -53,6 +53,7 @@ export const COMMANDS = {
     summary: 'Post the Adjudication: one reply per inline finding and one PR comment with every answer.',
     usage: `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
                        [--recheck <recheck-r(R-1).json>]   (round 2 and later)
+                       [--as implementer]   (AFK: the Implementer App only, never the user)
                        [--config <path>]`,
   },
   implementer: {
@@ -78,6 +79,7 @@ export const COMMANDS = {
     summary: 'Write, read or delete the pause record of an AFK run stopped at a one-way door.',
     usage: `usage:
   review.ts pause write  --repo O/R --issue N | --pr N --reason <the question>
+                         [--branch <branch on GitHub> --tip <its pushed sha>]
   review.ts pause read   --issue N | --pr N    (exit 3: no pause record)
   review.ts pause delete --issue N | --pr N`,
   },

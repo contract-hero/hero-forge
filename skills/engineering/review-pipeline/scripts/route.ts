@@ -57,6 +57,8 @@
 //      this PR                                      ignore, marker
 //      the PR is not contract-implementer[bot]'s    ignore, author
 //      the run state phase is not review-posted     ignore, phase
+//      a pause record for the PR (only resume goes on)
+//                                                   ignore, paused-run
 //      adjudicate
 //      sender the maintainer: no needs-info label   ignore, not-paused
 //      no pause record for the issue or PR          ignore, no-pause-record
@@ -356,6 +358,8 @@ async function commentRule(e: Event): Promise<Outcome> {
     if (handoff === null || !ADJUDICATE_ON.includes(handoff.kind) || handoff.pr !== e.pr) return why('marker')
     if (!sameLogin(text(e.payload.issue?.user?.login), IMPLEMENTER_BOT)) return why('author')
     if ((await phaseOf(e.pr)) !== 'review-posted') return why('phase')
+    // A paused Adjudication goes on only through resume, on the maintainer's answer.
+    if ((await readPause({ kind: 'pr', number: e.pr })) !== null) return why('paused-run')
     return { action: 'adjudicate', lock: { kind: 'pr', number: e.pr } }
   }
   if (e.sender === undefined || !sameLogin(e.sender, await e.maintainer())) return why('sender')

@@ -428,3 +428,40 @@ test('on a PR an App opened, broken Implementer credentials exit 4 and post noth
   assert.match(stderr, /^review\.ts reply: .*implementer-app\.env sets no HERO_FORGE_IMPLEMENTER_APP_KEY/)
   assert.deepEqual((await s.calls()).map((c) => c.argv), [AUTHOR])
 })
+
+// `--as implementer`, for an AFK Adjudication: the answers post as the
+// Implementer App or not at all. Every case that would fall back to the user
+// stops with nothing posted.
+test('reply --as implementer on the Implementer App\'s PR posts as the App, as without the option', async (t) => {
+  const s = await setup(t, { app: {}, author: BOT })
+  const { code, stderr } = await s.reply(1, '--as', 'implementer')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const calls = await s.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [AUTHOR, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST])
+  assert.ok(calls.slice(1).every((c) => c.gh_token === IMPLEMENTER_TOKEN))
+})
+
+for (const [name, options, code, said] of [
+  ['with no Implementer env file', { app: { missing: true }, author: BOT }, 4, /implementer-app\.env does not exist/],
+  ['with broken Implementer credentials', { app: { broken: true }, author: BOT }, 4, /sets no HERO_FORGE_IMPLEMENTER_APP_KEY/],
+  ['without "implementer.app: enabled"', { app: {}, author: BOT, replyConfig: 'runtime: claude\napp: enabled' }, 3, /no "implementer\.app: enabled" in the config/],
+  ['on a PR the user opened', { app: {} }, 1, /PR #13 is by alilloig, not the Implementer App \(contract-implementer\[bot\]\): reply --as implementer answers only the App's own PR/],
+  ['on a PR another App opened', { app: {}, author: 'dependabot[bot]' }, 1, /PR #13 is by dependabot\[bot\], not the Implementer App/],
+] as const) {
+  test(`reply --as implementer ${name} exits ${code} and posts nothing, as the App or as the user`, async (t) => {
+    const s = await setup(t, options)
+    const result = await s.reply(1, '--as', 'implementer')
+    assert.equal(result.code, code)
+    assert.equal(result.stdout, '')
+    assert.match(result.stderr, said)
+    assert.ok((await s.calls()).every((c) => !c.argv.includes('POST') && !c.argv.join(' ').includes('--input')))
+  })
+}
+
+test('reply --as with anything but implementer is a usage error', async (t) => {
+  const s = await setup(t)
+  const result = await s.reply(1, '--as', 'user')
+  assert.equal(result.code, 2)
+  assert.match(result.stderr, /^review\.ts reply: --as must be implementer\n/)
+})

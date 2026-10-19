@@ -14,7 +14,8 @@
 // author is: with `implementer.app: enabled`, a bot author is checked against
 // the login the Implementer App's own credentials give. Without it, or with
 // no Implementer env file, the user answers. Broken Implementer credentials
-// on a bot-authored PR exit 4 and post nothing.
+// on a bot-authored PR exit 4 and post nothing. With `--as implementer` (the
+// AFK path) it posts as the Implementer App or not at all.
 import { access } from 'node:fs/promises'
 import { appEnvPath } from './app-token.ts'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
@@ -79,6 +80,21 @@ async function poster(repo: string, pr: number, app: boolean): Promise<Identity>
   return implementer.login === author ? implementer : userIdentity()
 }
 
+// With `--as implementer` (an AFK Adjudication): the Implementer App, on its
+// own PR, or nothing. Missing or broken credentials throw Failure 4 and a PR
+// by anyone else exits 1: there is no fall back to the user.
+async function implementerOnly(repo: string, pr: number): Promise<Identity> {
+  const read = await gh(['api', `repos/${repo}/pulls/${pr}`, '--jq', '.user.login'])
+  const author = read.stdout.trim()
+  refuse(read.code === 0 && author !== '', `cannot read the author of PR #${pr}: ${oneLine(read.stderr)}`)
+  const implementer = await appIdentity(repo, 'implementer')
+  refuse(
+    implementer.login === author,
+    `PR #${pr} is by ${author}, not the Implementer App (${implementer.login}): reply --as implementer answers only the App's own PR`,
+  )
+  return implementer
+}
+
 async function reply(argv: string[]): Promise<string> {
   const { values } = parse(
     argv,
@@ -89,9 +105,11 @@ async function reply(argv: string[]): Promise<string> {
       ledger: { type: 'string' },
       recheck: { type: 'string' },
       config: { type: 'string' },
+      as: { type: 'string' },
     },
     usage,
   )
+  if (values.as !== undefined && values.as !== 'implementer') throw usage('--as must be implementer')
   const repo = repoOption(values.repo, usage)
   const pr = positive('pr', values.pr, usage)
   const round = positive('round', values.round, usage)
@@ -107,6 +125,10 @@ async function reply(argv: string[]): Promise<string> {
   // As in post-review, any config problem is broken (4).
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, 4)
+  const onlyApp = values.as === 'implementer'
+  if (onlyApp && !loaded.config.implementer.app) {
+    throw new Failure('no implementer App configured for this repo (no "implementer.app: enabled" in the config): reply --as implementer posts as the App only', 3)
+  }
 
   const ledger = await loadLedger(ledgerPath)
   const closed = new Set(
@@ -129,7 +151,7 @@ async function reply(argv: string[]): Promise<string> {
   const commentPost = { body: summary(round, targets, commentMarker(pr, round, runReview)) }
   refuseSecretsIn([...targets.map((e) => replyPost(pr, round, e)), commentPost], `ledger ${ledgerPath}`)
 
-  const me = await poster(repo, pr, loaded.config.implementer.app)
+  const me = onlyApp ? await implementerOnly(repo, pr) : await poster(repo, pr, loaded.config.implementer.app)
   const comments = await listInlineComments(repo, pr, me.token)
   const reviewIds = state.reviews.filter((r) => r.kind === 'review').map((r) => r.id)
   const posted = postedFindings(comments, reviewIds)

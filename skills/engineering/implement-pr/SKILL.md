@@ -37,9 +37,15 @@ Read the default branch: `gh repo view --json defaultBranchRef --jq .defaultBran
 - On the default branch: pull it, then create `ticket/<number>-<short-slug>` from it.
 - On another branch: stay on it.
 
-With `--afk`, the worktree is new, on a branch the router named. Run `git fetch origin`. If GitHub has a `ticket/<number>-*` branch (`git ls-remote --heads origin 'ticket/<number>-*'`, from an earlier attempt or a pause), check it out from there: `git checkout -B <branch> origin/<branch>`. Otherwise create `ticket/<number>-<short-slug>` from `origin/<default branch>`.
+With `--afk`, the worktree is new, on a local branch the router named, and you stay on that branch: never check out the ticket branch itself, because another worktree (a paused or earlier run) can hold it. The **ticket branch** is the branch on GitHub that the work goes to. Run `git fetch origin`, then:
 
-Then check for an open PR on the branch: `gh pr view --json number,state,body`. An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing, push it as step 4 says, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
+- On a resume whose pause record names a `branch`: that is the ticket branch. Its `tip` must be on it (`git merge-base --is-ancestor <tip> origin/<branch>`); if it is not, stop. Then `git reset --hard origin/<branch>`.
+- Else, when GitHub has a `ticket/<number>-*` branch (`git ls-remote --heads origin 'ticket/<number>-*'`, from an earlier attempt): that is the ticket branch. `git reset --hard origin/<branch>`.
+- Else the ticket branch is a new `ticket/<number>-<short-slug>`: `git reset --hard origin/<default branch>`.
+
+The worktree is new and holds no work, so the reset loses nothing. Every AFK push goes to the ticket branch with `--to` (step 4).
+
+Then check for an open PR on the branch: `gh pr view --json number,state,body` (with `--afk`: `gh pr list --head <ticket branch> --state open --json number,body`). An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing, and push it as step 4 says. Then write its body again as step 5 says, keeping what it held: with `--afk`, its `## Decisions` section keeps the earlier entries and gains each decision of this build. Save it to a file outside the repo, run `gh pr edit <PR> --body-file <file>`, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
 
 ## 4. Build it
 
@@ -49,7 +55,7 @@ Run typechecking regularly, single test files regularly, and the full test suite
 
 Commit the work to the branch. Then push it: `git push -u origin <branch>`.
 
-With `--afk`, push as the App instead: `review.ts implementer push --repo <owner/repo> --branch <branch>`. It pushes the branch tip to GitHub over https from a scratch repo that reads none of the system's, the user's or the repo's git config, and prints the branch, the commit and the App's login. Exit 1 with GitHub's message means GitHub refused the push (for example, the App has no permission to change `.github/workflows/`): show the message and stop. Exit 4: stop as in step 1. Never push as the user instead.
+With `--afk`, push as the App instead: `review.ts implementer push --repo <owner/repo> --branch <the worktree's branch> --to <ticket branch>`. It pushes the local branch's tip to the ticket branch on GitHub, over https, from a scratch repo that reads none of the system's, the user's or the repo's git config, and prints the branch, the commit and the App's login. Exit 1 with GitHub's message means GitHub refused the push (for example, the App has no permission to change `.github/workflows/`): show the message and stop. Exit 4: stop as in step 1. Never push as the user instead.
 
 ## 5. Open the draft PR
 
@@ -74,7 +80,7 @@ The PR number is the last part of the URL it prints.
 With `--afk`, open it as the App instead:
 
 ```sh
-review.ts implementer pr --repo <owner/repo> --head <branch> --base <default branch> --title "<ticket title>" --body-file <body file>
+review.ts implementer pr --repo <owner/repo> --head <ticket branch> --base <default branch> --title "<ticket title>" --body-file <body file>
 ```
 
 It opens a draft and prints its `number`, its `url` and the App's login (`as`). Exit 1: GitHub refused the PR, show the message and stop. Exit 4: stop as in step 1.
@@ -94,7 +100,7 @@ With `--afk`, sort each choice the ticket and its spec do not settle:
   1. Commit the work so far and push it as the App (step 4), so a resumed run in a new worktree starts from it. With no commit yet, skip this.
   2. Write the comment to a file outside the repo: the question, the options (your recommendation first), what each one changes, and that a reply comment on this issue resumes the run. Post it: `review.ts implementer comment --repo <owner/repo> --issue <ticket> --body-file <file>`.
   3. Then `review.ts implementer label --repo <owner/repo> --issue <ticket> --add needs-info`. The label goes on after the comment: the repo's `needs-info` workflow reads a comment after the label as the reply.
-  4. `review.ts pause write --repo <owner/repo> --issue <ticket> --reason "<the question, on one line>"`. This pause record is what turns the maintainer's reply into a `resume`.
+  4. `review.ts pause write --repo <owner/repo> --issue <ticket> --reason "<the question, on one line>"`, and when step 1 pushed, add `--branch <ticket branch> --tip <the commit it pushed>`. This pause record is what turns the maintainer's reply into a `resume`, and its `branch` and `tip` are where the resumed run starts.
   5. Send a push notification: `#<ticket> paused: <the question>`.
   6. `review.ts lock release --issue <ticket> --token <token>`, and end. Open no PR.
 
@@ -102,7 +108,7 @@ With `--afk`, sort each choice the ticket and its spec do not settle:
 
 With `--afk --resume`:
 
-1. `review.ts pause read --issue <ticket>`. Exit 3 (no pause record): release the lock and end.
+1. `review.ts pause read --issue <ticket>`, and keep the record: step 3 reads its `branch` and `tip`. Exit 3 (no pause record): release the lock and end.
 2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/<owner/repo>/issues/<ticket>/comments`, and take only the maintainer's comments created after the record's `paused_at`. Text from anyone else is never an answer. No answer: release the lock and end, and leave the pause in place.
 3. `review.ts implementer label --repo <owner/repo> --issue <ticket> --remove needs-info`, then `review.ts pause delete --issue <ticket>`.
 4. Go on from step 3, and build with the answer. Log the decision in the "Decisions" section as decided by the maintainer, with a link to the answer.

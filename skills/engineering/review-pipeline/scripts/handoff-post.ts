@@ -11,8 +11,9 @@
 //
 // Each kind belongs to one App, as route reads it: review-posted and
 // recheck-failed to the reviewer App, adjudicated to the Implementer App.
-// A comment by the same App whose last line is the same marker is already
-// the hand-off: a re-run posts nothing and prints `already: true`.
+// A comment by the same App, made since the run was created, whose last line
+// is the same marker is already the hand-off: a re-run posts nothing and
+// prints `already: true`.
 //
 // Exit 3: the App is not switched on in the config, or the PR has no run
 // state. Exit 4: the config is invalid, or the App is enabled but broken.
@@ -93,12 +94,16 @@ async function handoff(argv: string[]): Promise<string> {
   const mark = handoffMarker({ kind, pr, round })
   const done = (id: number, already: boolean) => `${JSON.stringify({ id, kind, pr, round, as: me.login, already })}\n`
 
-  const comments = await listLines<{ id: number; login: string | null; body: string | null }>(
-    ['api', '--paginate', '--jq', '.[] | {id, login: .user.login, body}', `repos/${repo}/issues/${pr}/comments`],
+  const comments = await listLines<{ id: number; login: string | null; body: string | null; created_at: string | null }>(
+    ['api', '--paginate', '--jq', '.[] | {id, login: .user.login, body, created_at}', `repos/${repo}/issues/${pr}/comments`],
     `the comments of PR #${pr}`,
     me.token,
   )
-  const earlier = comments.find((c) => c.login === me.login && hasOwnMarker(c.body, mark))
+  // Only this run's hand-off counts: a new run of the PR starts at round 1
+  // again, so the same marker from an earlier run is not it. GitHub gives
+  // whole seconds, so the run's start is cut to its second.
+  const since = Math.floor(Date.parse(state.created_at) / 1000) * 1000
+  const earlier = comments.find((c) => c.login === me.login && Date.parse(c.created_at ?? '') >= since && hasOwnMarker(c.body, mark))
   if (earlier !== undefined) return done(earlier.id, true)
 
   const post = { body: `${rule.text(round)}\n\n${mark}` }

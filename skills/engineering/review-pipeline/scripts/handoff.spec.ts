@@ -114,13 +114,17 @@ for (const [app, kind, state, round, token] of CASES) {
   })
 }
 
+// The run was created at CREATED; GitHub gives comment times in whole seconds.
+const CREATED = '2026-10-19T12:00:00.400Z'
+const lines = (...comments: object[]) => comments.map((c) => `${JSON.stringify(c)}\n`).join('')
+
 test('handoff run again after its post landed posts nothing and says already', async (t) => {
   const mark = handoffMarker({ kind: 'adjudicated', pr: 13, round: 1 })
-  const comments = [
-    { id: 5, login: 'someone', body: `quoted\n\n${mark}` },
-    { id: 6, login: 'contract-implementer[bot]', body: `Adjudication of round 1 is done.\n\n${mark}` },
-  ].map((c) => `${JSON.stringify(c)}\n`).join('')
-  const s = await setup(t, { app: 'implementer', state: { phase: 'adjudicated', round: 1 }, comments })
+  const comments = lines(
+    { id: 5, login: 'someone', body: `quoted\n\n${mark}`, created_at: '2026-10-19T13:00:00Z' },
+    { id: 6, login: 'contract-implementer[bot]', body: `Adjudication of round 1 is done.\n\n${mark}`, created_at: '2026-10-19T12:00:00Z' },
+  )
+  const s = await setup(t, { app: 'implementer', state: { phase: 'adjudicated', round: 1, created_at: CREATED }, comments })
   const result = await s.cli('--app', 'implementer', '--kind', 'adjudicated', '--round', '1')
   assert.equal(result.stderr, '')
   assert.equal(result.code, 0)
@@ -128,10 +132,22 @@ test('handoff run again after its post landed posts nothing and says already', a
   assert.deepEqual(posts(await s.gh.calls()), [])
 })
 
+// A new run (after a supersede, or a terminal run created again) starts at
+// round 1 again: the marker of an earlier run is not this run's hand-off.
+test("the same marker from an earlier run of the PR, before this run's created_at, does not stop the post", async (t) => {
+  const mark = handoffMarker({ kind: 'review-posted', pr: 13, round: 1 })
+  const comments = lines({ id: 4, login: 'contract-reviewer[bot]', body: `Hand-off.\n\n${mark}`, created_at: '2026-10-19T11:59:59Z' })
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1, created_at: CREATED }, comments })
+  const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), { id: 777, kind: 'review-posted', pr: 13, round: 1, as: 'contract-reviewer[bot]', already: false })
+  assert.equal(posts(await s.gh.calls()).length, 1)
+})
+
 test('the same marker posted by another login does not count as already posted', async (t) => {
   const mark = handoffMarker({ kind: 'review-posted', pr: 13, round: 1 })
-  const comments = `${JSON.stringify({ id: 5, login: 'alilloig', body: mark })}\n`
-  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1 }, comments })
+  const comments = lines({ id: 5, login: 'alilloig', body: mark, created_at: '2026-10-19T13:00:00Z' })
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1, created_at: CREATED }, comments })
   const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
   assert.equal(result.code, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).already, false)

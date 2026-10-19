@@ -125,3 +125,33 @@ test('pause needs one of --issue and --pr, a repo and a reason to write: else a 
   }
   assert.equal(await readPause({ kind: 'issue', number: 1 }), null)
 })
+
+// A build that pushed its work before it paused names the branch and the tip
+// it pushed, so the resumed run, in a new worktree, starts from that tip.
+test('pause write --branch --tip records the pushed branch and tip, and the record still reads as a pause', async (t) => {
+  const s = await pauseCli(t)
+  const tip = 'a'.repeat(40)
+  const written = await s.cli('write', '--repo', 'contract-hero/hero-forge', '--issue', '25', '--reason', 'New dependency?', '--branch', 'ticket/25-x', '--tip', tip)
+  assert.equal(written.code, 0, written.stderr)
+  const record = JSON.parse(written.stdout) as PauseRecord
+  assert.equal(record.branch, 'ticket/25-x')
+  assert.equal(record.tip, tip)
+  assert.deepEqual(await readPause({ kind: 'issue', number: 25 }), record)
+  assert.deepEqual(JSON.parse((await s.cli('read', '--issue', '25')).stdout), record)
+})
+
+test('pause write takes --branch and --tip together, the tip as a full sha: else a usage error that writes nothing', async (t) => {
+  const s = await pauseCli(t)
+  const base = ['write', '--repo', 'contract-hero/hero-forge', '--issue', '25', '--reason', 'Q?']
+  for (const extra of [['--branch', 'ticket/25-x'], ['--tip', 'a'.repeat(40)], ['--branch', 'ticket/25-x', '--tip', 'HEAD'], ['--branch=-x', '--tip', 'a'.repeat(40)], ['--branch', 'a..b', '--tip', 'a'.repeat(40)]]) {
+    const result = await s.cli(...base, ...extra)
+    assert.equal(result.code, 2, extra.join(' '))
+    assert.match(result.stderr, /^review\.ts pause: .*\nusage:\n/, extra.join(' '))
+  }
+  assert.equal(await readPause({ kind: 'issue', number: 25 }), null)
+})
+
+test('pause record: a record with a bad tip is corrupt', async (t) => {
+  await stateDir(t)
+  await assert.rejects(writePause({ ...RECORD, branch: 'ticket/28-x', tip: 'nope' }), (error) => error instanceof Failure && error.code === 1)
+})

@@ -302,6 +302,18 @@ test('reconcile: only the newest hand-off of an App counts: plain comments and t
   assert.deepEqual(await swept(m.reconcile()), [{ action: 'adjudicate', repo: REPO, pr: 42, issue: null, reason: null, app: 'implementer' }])
 })
 
+test('reconcile: a review-posted hand-off on a PR whose Adjudication is paused is the ignore (paused-run) route gives: only resume goes on', async (t) => {
+  const m = await machine(t, handoffs(reviewPosted))
+  await atPhase('review-posted')(m)
+  await seedPause(m.state, 'pr', 42)
+  const expected = await routed(t, {}, 'implementer', 'issue_comment.created.review-posted.json', async (r) => {
+    await atPhase('review-posted')(r)
+    await seedPause(r.state, 'pr', 42)
+  })
+  assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: 42, issue: null, reason: 'paused-run', app: 'implementer' })
+  assert.deepEqual(await swept(m.reconcile()), [expected])
+})
+
 test('reconcile: a PR with no hand-off prints no hand-off line', async (t) => {
   const m = await machine(t, handoffs({ id: 3456000010, author: MAINTAINER, body: 'Hi', created_at: '2026-10-19T10:30:00Z' }))
   await atPhase('review-posted')(m)

@@ -12,7 +12,13 @@ import { stateRoot } from './run-state.ts'
 export type PauseSubject = { kind: 'issue' | 'pr'; number: number }
 
 // `reason`: the question the run asks the maintainer. `paused_at`: an ISO time.
-export type PauseRecord = PauseSubject & { repo: string; reason: string; paused_at: string }
+// `branch` and `tip`, together or not at all: the branch on GitHub that the
+// paused build pushed its work to, and the commit it pushed, so the resumed
+// run starts from that tip.
+export type PauseRecord = PauseSubject & { repo: string; reason: string; paused_at: string; branch?: string; tip?: string }
+
+const isBranch = (v: unknown) => typeof v === 'string' && v !== '' && !v.startsWith('-') && !/[\s:~^?*[\\]|\.\./.test(v)
+const isSha = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v)
 
 const FIELDS: Record<keyof PauseRecord, (v: unknown) => boolean> = {
   kind: (v) => v === 'issue' || v === 'pr',
@@ -20,6 +26,8 @@ const FIELDS: Record<keyof PauseRecord, (v: unknown) => boolean> = {
   repo: isRepo,
   reason: (v) => typeof v === 'string' && v !== '',
   paused_at: (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v)),
+  branch: (v) => v === undefined || isBranch(v),
+  tip: (v) => v === undefined || isSha(v),
 }
 
 export function pauseFile({ kind, number }: PauseSubject): string {
@@ -32,6 +40,7 @@ function problem(value: unknown, subject: PauseSubject): string | undefined {
   const obj = value as Record<string, unknown>
   for (const key of Object.keys(obj)) if (!Object.hasOwn(FIELDS, key)) return `unknown field "${key}"`
   for (const [key, ok] of Object.entries(FIELDS)) if (!ok(obj[key])) return `bad or missing "${key}"`
+  if ((obj.branch === undefined) !== (obj.tip === undefined)) return '"branch" and "tip" go together'
   if (obj.kind !== subject.kind || obj.number !== subject.number) return `it is the record of ${String(obj.kind)} ${String(obj.number)}`
   return undefined
 }
@@ -66,9 +75,9 @@ export async function writePause(record: PauseRecord): Promise<void> {
   const file = pauseFile(record)
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${randomBytes(6).toString('hex')}`
-  const { kind, number, repo, reason, paused_at } = record
+  const { kind, number, repo, reason, paused_at, branch, tip } = record
   try {
-    await writeFile(tmp, `${JSON.stringify({ kind, number, repo, reason, paused_at })}\n`, { mode: 0o600 })
+    await writeFile(tmp, `${JSON.stringify({ kind, number, repo, reason, paused_at, branch, tip })}\n`, { mode: 0o600 })
     await rename(tmp, file)
   } finally {
     await rm(tmp, { force: true })
@@ -95,7 +104,7 @@ async function pause(argv: string[]): Promise<string> {
   if (command !== 'write' && command !== 'read' && command !== 'delete') throw usage(`unknown command "${command ?? ''}"`)
   const { values } = parse(
     rest,
-    { repo: { type: 'string' }, issue: { type: 'string' }, pr: { type: 'string' }, reason: { type: 'string' } },
+    { repo: { type: 'string' }, issue: { type: 'string' }, pr: { type: 'string' }, reason: { type: 'string' }, branch: { type: 'string' }, tip: { type: 'string' } },
     usage,
   )
   if ((values.issue === undefined) === (values.pr === undefined)) throw usage(`pause ${command} needs one of --issue and --pr`)
@@ -105,7 +114,11 @@ async function pause(argv: string[]): Promise<string> {
     const repo = repoOption(values.repo, usage)
     const reason = values.reason?.trim() ?? ''
     if (reason === '') throw usage('pause write needs --reason: the question the run asks')
-    const record: PauseRecord = { ...subject, repo, reason, paused_at: new Date().toISOString() }
+    const { branch, tip } = values
+    if ((branch === undefined) !== (tip === undefined)) throw usage('--branch and --tip go together: the branch the work was pushed to, and its tip')
+    if (branch !== undefined && !isBranch(branch)) throw usage('--branch must be a branch name')
+    if (tip !== undefined && !isSha(tip)) throw usage('--tip must be the full sha of the pushed tip')
+    const record: PauseRecord = { ...subject, repo, reason, paused_at: new Date().toISOString(), ...(branch === undefined ? {} : { branch, tip }) }
     await writePause(record)
     return `${JSON.stringify(record)}\n`
   }
