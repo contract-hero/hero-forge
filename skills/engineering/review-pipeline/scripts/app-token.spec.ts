@@ -273,6 +273,21 @@ test('--app implementer does not read "app: enabled", which is the reviewer App 
   assert.deepEqual(await s.mint('--login'), { code: 0, stdout: 'hero-implementer[bot]\n', stderr: '' })
 })
 
+test('--app implementer with no override reads ~/.config/hero-forge/implementer-app.env', async (t) => {
+  const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER })
+  const home = join(s.dir, 'home')
+  const configDir = join(home, '.config', 'hero-forge')
+  await mkdir(configDir, { recursive: true })
+  await writeFile(join(configDir, 'implementer-app.env'), `HERO_FORGE_IMPLEMENTER_APP_ID=123456\nHERO_FORGE_IMPLEMENTER_APP_KEY=${s.key.pem}\n`)
+  // A reviewer env file at its default path too: the implementer must not pick it.
+  await writeFile(join(configDir, 'reviewer-app.env'), 'HERO_FORGE_REVIEWER_APP_ID=999\nHERO_FORGE_REVIEWER_APP_KEY=/no/such/key.pem\n')
+  const env: Record<string, string | undefined> = { ...s.env, HOME: home }
+  delete env.HERO_FORGE_IMPLEMENTER_APP_ENV
+  delete env.HERO_FORGE_REVIEWER_APP_ENV
+  const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, '--app', 'implementer', '--login'], { env })
+  assert.deepEqual({ code, stdout, stderr }, { code: 0, stdout: 'hero-implementer[bot]\n', stderr: '' })
+})
+
 test('--app implementer never reads the reviewer env file', async (t) => {
   // A working reviewer env file, and no implementer env var: the default
   // implementer path is one baseEnv points at nothing.
