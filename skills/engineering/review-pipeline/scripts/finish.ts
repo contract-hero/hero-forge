@@ -18,6 +18,7 @@ import { isAbsolute } from 'node:path'
 import { Failure, parse as parseOptions, positive, refuse, repoOption, runMain, usageFor, type Usage } from './cli.ts'
 import { mintAppToken } from './app-token.ts'
 import { loadConfig } from './config.ts'
+import { GATE_CONTEXT } from './gate-status.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
 import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
 import { refuseSecretsIn } from './secrets.ts'
@@ -88,7 +89,10 @@ function appApprovalProblem(state: State, bot: string, reviews: GitHubReview[]):
 function judge(view: PrView, state: State, appLogin: string | null, reviews: GitHubReview[]): Gate {
   const app = appLogin !== null
   const checks = { passed: 0, pending: [] as string[], failed: [] as string[] }
+  // The reviewer App's own gate status is not CI: the re-check gate below
+  // enforces the gate, and counting it would turn a PR with no CI green.
   for (const check of view.statusCheckRollup ?? []) {
+    if (check.__typename === 'StatusContext' && check.context === GATE_CONTEXT) continue
     const name = check.name ?? check.context ?? 'unnamed check'
     const result = outcome(check)
     if (result === 'passed') checks.passed += 1

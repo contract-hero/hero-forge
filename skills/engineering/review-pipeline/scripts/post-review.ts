@@ -109,9 +109,10 @@ function checkPayload(value: unknown): Payload {
 // duplicate check) and the gate result (once per round, commit and result) in
 // the PR's run state, when there is one.
 //
-// With the App, the first pass at a commit also posts the gate status there,
-// before the pass is recorded: a status post that fails records nothing, so a
-// re-run (which finds the review on GitHub) posts the status again.
+// With the App, a pass also posts the gate status at the commit (once per
+// head: gate-status.ts reads GitHub first), before the pass is recorded: a
+// status post that fails records nothing, so a re-run (which finds the review
+// on GitHub) posts the status again.
 async function record(
   state: State | undefined,
   entry: ReviewRecord | undefined,
@@ -120,7 +121,7 @@ async function record(
 ): Promise<void> {
   if (state === undefined) return
   const fresh = await loadState(state.pr)
-  if (app && gate?.result === 'pass' && !fresh.gates.some((g) => g.commit === gate.commit && g.result === 'pass')) {
+  if (app && gate?.result === 'pass') {
     await postGateStatus(fresh, 'success', 'The review gate passed at this commit')
   }
   let changed = false

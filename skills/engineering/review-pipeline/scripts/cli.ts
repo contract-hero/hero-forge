@@ -42,7 +42,7 @@ export const COMMANDS = {
     usage: `usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R
                              --kind review|recheck|verdict --payload <file> [--config <path>]
                              [--ledger <findings.json> --recheck <recheck-rN.json>]   (recheck, verdict)
-  (with the reviewer App, the first passing gate at a head posts the contract-reviewer/gate success status there)`,
+  (with the reviewer App, a passing gate posts the contract-reviewer/gate success status at the head, once per head)`,
   },
   reply: {
     summary: 'Post the Adjudication: one reply per inline finding and one PR comment with every answer.',
