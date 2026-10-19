@@ -99,6 +99,17 @@ export const COMMANDS = {
   Work takes a lock, per PR (or per issue for a build or a resume on an issue), free again after ${LOCK_TTL_HOURS} hours.
   lock_token is that lock's owner token, for the launched run to release it; null on ignore.`,
   },
+  reconcile: {
+    summary: 'Sweep the open work a missed webhook should have started, and decide each item as route does.',
+    usage: `usage: review.ts reconcile --repo O/R   (in a checkout of the repo, as route)
+  Lists open issues labelled ready-for-agent (unless paused), open PRs with no run state at their head, the
+  newest hand-off and maintainer /recheck on each open PR, and needs-info issues and PRs with a maintainer
+  comment after their pause record.
+  Prints one line per item: route's decision plus app (reviewer or implementer), and exits 0. Work takes its lock
+  as route does: start a run for each line whose action is not ignore. A ticket or spec that an open PR by the
+  maintainer or contract-implementer[bot] closes (itself, or one of its sub-issues) is ignore, has-pr. An item
+  that fails prints its error on stderr, the other lines still stand, and the exit code is the first failure's.`,
+  },
 } as const satisfies Record<string, { summary: string; usage: string }>
 
 export type CommandName = keyof typeof COMMANDS

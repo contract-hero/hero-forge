@@ -11,6 +11,7 @@ import { main as config } from './config.ts'
 import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as merge } from './finish.ts'
 import { main as implementer } from './implementer.ts'
 import { main as postReview } from './post-review.ts'
+import { main as reconcile } from './reconcile.ts'
 import { main as reply } from './reply.ts'
 import { main as route } from './route.ts'
 import { main as runState } from './run-state.ts'
@@ -31,6 +32,7 @@ const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
   explainer,
   stack,
   route,
+  reconcile,
 }
 
 const [name, ...rest] = process.argv.slice(2)
