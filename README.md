@@ -21,7 +21,7 @@ Then run `/setup-forge` once per repo. It asks which issue tracker you use, whic
 
 In AFK mode, GitHub events start the runs: you type no slash command.
 
-**What it does.** You add the `ready-for-agent` label to a spec, or to a ticket with no parent, that you wrote. The `contract-implementer` App builds it test-first and opens a draft PR. The `contract-reviewer` App reviews the PR, and the Implementer answers each finding. After the re-check passes, the reviewer App posts the `contract-reviewer/gate` status and approves, and the PR merges. A spec with sub-issues builds as a stack of PRs. A one-way door (a data shape, a public API, a new dependency, a migration, a destructive action) pauses the run: a comment with the question, the `needs-info` label and a push notification. Your reply comment resumes it.
+**What it does.** You add the `ready-for-agent` label to a spec, or to an issue with no parent, that you wrote. The `contract-implementer` App builds it test-first and opens a draft PR. The `contract-reviewer` App reviews the PR, and the Implementer answers each finding. After the re-check passes, the reviewer App posts the `contract-reviewer/gate` status and approves, and the PR merges. A spec with sub-issues builds as a stack of PRs. A one-way door (a data shape, a public API, a new dependency, a migration, a destructive action) pauses the run: a comment with the question, the `needs-info` label and a push notification. Your reply comment resumes it.
 
 **What it needs.**
 
