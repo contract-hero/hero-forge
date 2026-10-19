@@ -55,3 +55,12 @@ test('setup-forge 6.2 and 6.4 update an existing task\'s prompt in place, and no
   const reconcile = part('6.4 The reconcile task.')
   assert.match(reconcile, /When its `prompt` differs from the filled template, call `update_scheduled_task` with its `scheduledTaskId` and the new `prompt` only: its schedule stays/)
 })
+
+test('setup-forge 6.2 and 6.4 create a task only when none exists, and leave a matching one as it is', () => {
+  for (const label of ['6.2 The router tasks.', '6.4 The reconcile task.']) {
+    const text = part(label)
+    assert.match(text, /When its `prompt` is the same as the filled template, change nothing/, label)
+    assert.match(text, /Only when no such task exists/, label)
+    assert.doesNotMatch(text, /\bElse\b/, label)
+  }
+})
