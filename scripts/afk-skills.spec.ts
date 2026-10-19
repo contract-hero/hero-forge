@@ -59,7 +59,7 @@ test('implement-pr --afk logs its two-way decisions in the PR body and hands not
 
 test('review-pipeline --afk: each part ends with advance, then the lock release, then the hand-off as the last action', () => {
   const afk = section(PIPELINE, 'AFK run')
-  inOrder(afk, ['`run-state advance` to the new phase', 'review.ts lock release --pr N --token <token>', 'then the hand-off as the last action'])
+  inOrder(afk, ['`run-state advance` to the new phase', 'review.ts lock release --pr N --token <token>', 'then the hand-off as the last post'])
   inOrder(afk, ['ends after `advance review-posted`', 'lock release', 'review.ts handoff --app reviewer --repo O/R --pr N --kind review-posted --round <R>'])
   inOrder(afk, ['ends after `advance adjudicated`', 'lock release', 'review.ts handoff --app implementer --repo O/R --pr N --kind adjudicated --round <R>'])
   inOrder(afk, ['prints `review-posted`', 'lock release', 'review.ts handoff --app reviewer --repo O/R --pr N --kind recheck-failed --round <the new round>'])
@@ -112,6 +112,57 @@ test('implement-spec-stack holds its own pause and resume protocol, and resumes 
   ])
   inOrder(STACK, ['review.ts pause read --issue <spec>', '--remove needs-info', 'review.ts pause delete --issue <spec>'])
   assert.match(section(STACK, 'Resume'), /a layer with no PR whose branch is on GitHub .* from its pushed tip, never from the parent base/)
+})
+
+// The run's own T3 thread is the last thing an AFK run touches: settled when
+// the run leaves nothing for the maintainer, marked unread when it needs them.
+const THREAD = /t3_thread_organize|`settle`|`mark_unread`|settle the thread|mark the thread unread/
+
+// Each needle names the thread rule: the tool, both actions, the skip.
+function threadRule(text: string): void {
+  inOrder(text, ['`t3_thread_organize` with no `threadId`', 'action `settle`', 'action `mark_unread`', 'A session with no `t3_thread_organize` tool skips this step'])
+  assert.match(text, /A run without `--afk` never settles, archives or marks its thread/)
+}
+
+// `text` with every paragraph that starts `With \`--afk\`` taken out.
+const withoutAfkParagraphs = (text: string) => text.split('\n\n').filter((p) => !p.startsWith('With `--afk`')).join('\n\n')
+
+test('implement-pr --afk settles its thread after the PR, and marks it unread on a pause or a stop', () => {
+  const top = IMPLEMENT_PR.slice(IMPLEMENT_PR.indexOf('**AFK run.**'), IMPLEMENT_PR.indexOf('\n## 1.'))
+  threadRule(top)
+  inOrder(top, ['releases the lock', 'mark the thread unread', 'and ends'])
+  inOrder(section(IMPLEMENT_PR, '6. Hand off to the review pipeline'), ['review.ts lock release --issue <ticket> --token <token>', 'settle the thread', 'and end'])
+  inOrder(section(IMPLEMENT_PR, 'Decisions in an AFK run'), ['review.ts lock release --issue <ticket> --token <token>', 'mark the thread unread', 'Open no PR'])
+  const resume = section(IMPLEMENT_PR, 'Resume after a pause')
+  inOrder(resume, ['Exit 3 (no pause record): release the lock, settle the thread, and end', 'No answer: release the lock, settle the thread, and end'])
+})
+
+test('review-pipeline --afk settles its thread after the hand-off or the merge, and marks it unread on a pause or a stop', () => {
+  const afk = section(PIPELINE, 'AFK run')
+  threadRule(afk)
+  inOrder(afk, ['then the hand-off as the last post: nothing posts after it', 'settle the thread'])
+  inOrder(afk, ['prints `stopped`', 'push notification', 'mark the thread unread', 'no hand-off'])
+  inOrder(afk, ['A re-checker that failed twice', 'mark the thread unread'])
+  inOrder(afk, ['**Stops.**', 'release the lock, mark the thread unread, and end with no hand-off'])
+  inOrder(afk, ['**One-way door in `adjudicate`.**', 'review.ts lock release --pr N --token <token>', 'mark the thread unread'])
+})
+
+test('implement-spec-stack --afk settles its thread after step 9, and marks it unread on a pause or a stop', () => {
+  const afk = STACK.slice(STACK.indexOf('**AFK run.**'), STACK.indexOf('Without `--afk`, every step works as written.'))
+  threadRule(afk)
+  assert.match(afk, /send a push notification with the message .*, run `review\.ts lock release --issue <spec> --token <token>`, mark the thread unread, and end/)
+  assert.match(afk, /The run ends after step 9 with `review\.ts lock release --issue <spec> --token <token>`, then settle the thread/)
+  inOrder(afk, ['**Pause**', 'review.ts lock release --issue <spec> --token <token>`, mark the thread unread, and end'])
+  inOrder(afk, ['**Resume after a pause**', 'Exit 3 (no pause record): release the lock, settle the thread, and end', 'No answer: release the lock, settle the thread, and end'])
+})
+
+test('the by-hand paths never settle, archive or mark their thread', () => {
+  const byHand: [string, string][] = [
+    ['implement-pr', withoutAfkParagraphs(IMPLEMENT_PR.replace(IMPLEMENT_PR.slice(IMPLEMENT_PR.indexOf('**AFK run.**'), IMPLEMENT_PR.indexOf('\n## 1.')), '').replace(section(IMPLEMENT_PR, 'Decisions in an AFK run'), '').replace(section(IMPLEMENT_PR, 'Resume after a pause'), ''))],
+    ['review-pipeline', PIPELINE.replace(section(PIPELINE, 'AFK run'), '')],
+    ['implement-spec-stack', STACK.replace(STACK.slice(STACK.indexOf('**AFK run.**'), STACK.indexOf('Without `--afk`, every step works as written.')), '')],
+  ]
+  for (const [name, text] of byHand) assert.doesNotMatch(text, THREAD, `${name} names the thread step outside its AFK text`)
 })
 
 // `review.ts <subcommand> [<command>] --flag ...` in a SKILL.md, for the
