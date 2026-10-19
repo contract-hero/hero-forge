@@ -44,9 +44,12 @@
 //   7. the issue is a PR                            ignore, pull-request
 //   8. the sender is not the maintainer             ignore, sender
 //   9. the issue has a parent issue                 ignore, has-parent
-//  10. the ticket's builds reached implementer.attempts
+//  10. the issue's author, or (for a spec) the author of any of its
+//      sub-issues, is not the maintainer: the build agent reads that text
+//                                                   ignore, author (issue: the one at fault)
+//  11. the ticket's builds reached implementer.attempts
 //                                                   ignore, attempts
-//  11. build-spec when it has sub-issues, else build-ticket
+//  12. build-spec when it has sub-issues, else build-ticket
 // --app implementer, an issue_comment event:
 //   3. not created                                  ignore, action:<name>
 //   4, 5 as above
@@ -73,7 +76,7 @@ import { APPS, type AppName } from './app-token.ts'
 import { attemptsOf, countAttempt, countRun } from './cap.ts'
 import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
 import { resolveConfigText, type ResolvedConfig } from './config.ts'
-import { gh, json, oneLine, userIdentity } from './github.ts'
+import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
 import { parseHandoff, type HandoffKind } from './handoff.ts'
 import { releaseIssueLock, releasePrLock, takeIssueLock, takePrLock } from './lock.ts'
 import { readPause } from './pause.ts'
@@ -109,9 +112,10 @@ type Decision = { action: Action; repo: string | null; pr: number | null; issue:
 // What a rule found: an ignore with its reason, or work to start. Work names
 // the lock it takes and, for a build, the ticket whose attempt it counts.
 type Start = { action: Exclude<Action, 'ignore'>; lock: { kind: 'pr' | 'issue'; number: number }; attempt?: number }
-type Outcome = { ignore: string } | Start
+// An ignore may name another issue than the delivery's: the one at fault.
+type Outcome = { ignore: string; issue?: number } | Start
 
-const why = (reason: string): Outcome => ({ ignore: reason })
+const why = (reason: string, issue?: number): Outcome => (issue === undefined ? { ignore: reason } : { ignore: reason, issue })
 
 // The fields of a webhook payload that route reads. GitHub sends them; route
 // trusts that the payload came from GitHub (the router checks the signature).
@@ -173,6 +177,14 @@ async function relations(repo: string, issue: number): Promise<{ parent: boolean
     throw new Failure(`GitHub sent no sub-issue count for issue #${issue} of ${repo}`, 1)
   }
   return { parent: typeof found.parent_issue_url === 'string', subIssues: total }
+}
+
+// The sub-issues of `issue`, each with its author, every page.
+function subIssues(repo: string, issue: number): Promise<{ number: number; author: string | null }[]> {
+  return listLines(
+    ['api', '--paginate', '--jq', '.[] | {number, author: .user.login}', `repos/${repo}/issues/${issue}/sub_issues?per_page=100`],
+    `the sub-issues of #${issue}`,
+  )
 }
 
 // The deliveries that started work, per App: one record each, under
@@ -298,10 +310,17 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
   if (e.pr !== null) return why('pull-request')
   if (e.repo === null || e.issue === null) throw new Failure('the issues payload has no repository.full_name or issue.number', 1)
   if (!sameLogin(e.sender, await e.maintainer())) return why('sender')
-  const { parent, subIssues } = await relations(e.repo, e.issue)
+  const maintainer = await e.maintainer()
+  const { parent, subIssues: count } = await relations(e.repo, e.issue)
   if (parent) return why('has-parent')
+  // The author of an issue never changes, so the payload's is GitHub's.
+  if (!sameLogin(text(e.payload.issue?.user?.login), maintainer)) return why('author')
+  if (count > 0) {
+    const stranger = (await subIssues(e.repo, e.issue)).find((sub) => !sameLogin(sub.author ?? undefined, maintainer))
+    if (stranger !== undefined) return why('author', stranger.number)
+  }
   if ((await attemptsOf(e.repo, e.issue)) >= config.implementer.attempts) return why('attempts')
-  return { action: subIssues > 0 ? 'build-spec' : 'build-ticket', lock: { kind: 'issue', number: e.issue }, attempt: e.issue }
+  return { action: count > 0 ? 'build-spec' : 'build-ticket', lock: { kind: 'issue', number: e.issue }, attempt: e.issue }
 }
 
 async function commentRule(e: Event): Promise<Outcome> {
@@ -355,6 +374,9 @@ async function route(argv: string[]): Promise<string> {
   const issue = onPr || payload.pull_request !== undefined ? null : issueNumber
   const decide = (action: Action, reason: string | null): string =>
     `${JSON.stringify({ action, repo, pr, issue, reason } satisfies Decision)}\n`
+  // An ignore about another issue than the delivery's names that issue.
+  const decideOn = (other: number, reason: string): string =>
+    `${JSON.stringify({ action: 'ignore', repo, pr: null, issue: other, reason } satisfies Decision)}\n`
 
   const branch = payload.repository?.default_branch
   const config = repo === null ? null : await remoteConfig(repo, typeof branch === 'string' ? branch : undefined)
@@ -376,7 +398,7 @@ async function route(argv: string[]): Promise<string> {
     maintainer: () => (maintainer ??= userIdentity().then((u) => u.login)),
   }
   const outcome = await (app === 'reviewer' ? reviewerRule(event) : implementerRule(event))
-  if ('ignore' in outcome) return decide('ignore', outcome.ignore)
+  if ('ignore' in outcome) return outcome.issue === undefined ? decide('ignore', outcome.ignore) : decideOn(outcome.issue, outcome.ignore)
   // Every rule that starts work has checked the config is there.
   if (config === null || repo === null) throw new Failure('no config for a decision that starts work', 1)
 

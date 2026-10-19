@@ -19,9 +19,11 @@ function reviewMd(...yaml: string[]): string {
 const implementerMd = (...yaml: string[]) => reviewMd('implementer:', '  app: enabled', ...yaml)
 
 // The repo's default branch: its review.md (null: the file is not there), and
-// what GitHub says of the labelled issue: whether it has a parent, and how
-// many sub-issues it has.
-type Remote = { review: string | null; issue?: { parent: boolean; subIssues: number } }
+// what GitHub says of the labelled issue: whether it has a parent, how many
+// sub-issues it has, and who wrote each sub-issue (by default the maintainer,
+// numbered from 24).
+type Sub = { number: number; author: string }
+type Remote = { review: string | null; issue?: { parent: boolean; subIssues: number; subs?: Sub[] } }
 
 const TICKET = { parent: false, subIssues: 0 }
 const SPEC = { parent: false, subIssues: 9 }
@@ -33,6 +35,12 @@ function responses({ review, issue = TICKET }: Remote): FakeGhResponse[] {
       ? { match: 'contents/docs/agents/review.md', stdout: '{"message":"Not Found","status":"404"}', stderr: 'gh: Not Found (HTTP 404)\n', exit: 1 }
       : { match: 'contents/docs/agents/review.md', stdout: review },
     { match: 'api user', stdout: `${MAINTAINER}\n` },
+    {
+      match: '/sub_issues',
+      stdout: (issue.subs ?? Array.from({ length: issue.subIssues }, (_, i) => ({ number: 24 + i, author: MAINTAINER })))
+        .map((sub) => `${JSON.stringify(sub)}\n`)
+        .join(''),
+    },
     {
       match: `repos/${REPO}/issues/`,
       stdout: `${JSON.stringify({
@@ -440,6 +448,26 @@ const flows: [string, App, string, Remote, ((r: Router) => Promise<void>) | null
   // build-ticket and build-spec
   ['the maintainer labels a ticket with no parent', 'implementer', 'issues.labeled.json', { review: implementerMd() }, null, onIssue('build-ticket')],
   ['the maintainer labels a spec', 'implementer', 'issues.labeled.spec.json', { review: implementerMd(), issue: SPEC }, null, onIssue('build-spec', null, 23)],
+  ['the maintainer labels a ticket someone else wrote', 'implementer', 'issues.labeled.stranger-ticket.json', { review: implementerMd() }, null, onIssue('ignore', 'author', 31)],
+  [
+    'the maintainer labels a spec with one sub-issue someone else wrote',
+    'implementer',
+    'issues.labeled.spec.json',
+    {
+      review: implementerMd(),
+      issue: {
+        parent: false,
+        subIssues: 3,
+        subs: [
+          { number: 24, author: MAINTAINER },
+          { number: 25, author: 'mallory' },
+          { number: 26, author: MAINTAINER },
+        ],
+      },
+    },
+    null,
+    onIssue('ignore', 'author', 25),
+  ],
   ['the maintainer labels a ticket that has a parent', 'implementer', 'issues.labeled.json', { review: implementerMd(), issue: CHILD }, null, onIssue('ignore', 'has-parent')],
   ['someone else adds ready-for-agent', 'implementer', 'issues.labeled.stranger.json', { review: implementerMd() }, null, onIssue('ignore', 'sender')],
   ['the maintainer adds another label', 'implementer', 'issues.labeled.other-label.json', { review: implementerMd() }, null, onIssue('ignore', 'label:needs-triage')],
@@ -879,4 +907,29 @@ test('route --app reviewer: a /recheck while the PR lock is held is ignore (lock
   await seedState(r.state, { pr: 42, phase: 'adjudicated' })
   assert.deepEqual(await decision(r.route('issue_comment.created.recheck.json', D5)), onPr('recheck'))
   assert.deepEqual(await decision(r.route('issue_comment.created.adjudicated.json', D6)), onPr('ignore', 'locked'))
+})
+
+test('route --app implementer: a spec someone else wrote is ignore (author), and no sub-issue is looked up', async (t) => {
+  const r = await router(t, { review: implementerMd(), issue: SPEC })
+  const got = await decision(
+    r.routeChanged(
+      'issues.labeled.spec.json',
+      D1,
+      (p) => {
+        p.issue.user.login = 'mallory'
+      },
+      'implementer',
+    ),
+  )
+  assert.deepEqual(got, onIssue('ignore', 'author', 23))
+  assert.ok(!(await r.gh.calls()).some((c) => c.argv.join(' ').includes('/sub_issues')))
+})
+
+test('route --app implementer: a spec reads every page of its sub-issues as the maintainer', async (t) => {
+  const r = await router(t, { review: implementerMd(), issue: SPEC })
+  assert.deepEqual(await decision(r.route('issues.labeled.spec.json', D1, 'implementer')), onIssue('build-spec', null, 23))
+  assert.deepEqual(
+    (await r.gh.calls()).map((c) => c.argv).filter((argv) => argv.join(' ').includes('/sub_issues')),
+    [['api', '--paginate', '--jq', '.[] | {number, author: .user.login}', `repos/${REPO}/issues/23/sub_issues?per_page=100`]],
+  )
 })
