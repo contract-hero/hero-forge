@@ -19,7 +19,7 @@
 //                                                   ignore, locked
 //   7. the App's daily run cap is reached           ignore, cap
 //   8. review: take the lock, count the run, record the delivery id
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { countRun } from './cap.ts'
 import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
@@ -108,6 +108,10 @@ async function recordDelivery(delivery: string): Promise<void> {
   await writeFile(file, '', { mode: 0o600 })
 }
 
+async function forgetDelivery(delivery: string): Promise<void> {
+  await rm(deliveryFile(delivery), { force: true })
+}
+
 // Whether PR `pr` has a run state that is not terminal. A corrupt state file
 // exits 4.
 async function runInFlight(pr: number): Promise<boolean> {
@@ -156,17 +160,24 @@ async function route(argv: string[]): Promise<string> {
   // A pull_request event always carries its number: a payload without one is not GitHub's.
   if (pr === null) throw new Failure('the pull_request payload has no pull_request.number', 1)
   if (await runInFlight(pr)) return decide('ignore', 'locked')
-  if (!(await takePrLock(pr, { app: values.app, delivery }))) return decide('ignore', 'locked')
-  // The lock is taken first, so a held lock is reported before the cap. A
-  // call that the cap stops, or that fails, gives the lock back.
+  const lock = await takePrLock(pr, { app: values.app, delivery })
+  if (lock === null) return decide('ignore', 'locked')
+  // The lock is taken first, so a held lock is reported before the cap. The
+  // delivery is recorded before the run is counted, so a failed record
+  // counts nothing. A call that the cap stops, or that fails, forgets the
+  // delivery and gives the lock back.
   try {
+    await recordDelivery(delivery)
     if (!(await countRun(values.app, config.app_daily_runs))) {
-      await releasePrLock(pr)
+      await releasePrLock(pr, lock)
+      await forgetDelivery(delivery)
       return decide('ignore', 'cap')
     }
-    await recordDelivery(delivery)
   } catch (error) {
-    await releasePrLock(pr)
+    await releasePrLock(pr, lock)
+    // The error that stopped the call is the one to report: when the record
+    // itself failed, there may be nothing to forget, or no way to reach it.
+    await forgetDelivery(delivery).catch(() => {})
     throw error
   }
   return decide('review', null)

@@ -309,3 +309,16 @@ for (const [name, args, message] of usageErrors) {
     assert.equal(stderr.split('\n')[0], `review.ts route: ${message}`)
   })
 }
+
+test('route: a delivery that fails to record counts no run, so a redelivery under app_daily_runs: 1 is review', async (t) => {
+  const r = await router(t, { review: reviewMd('app_daily_runs: 1') })
+  await mkdir(r.state, { recursive: true })
+  // A file where the deliveries dir should be: recording the delivery fails.
+  await writeFile(join(r.state, 'deliveries'), '')
+  const failed = await r.route('pull_request.opened.json', D1)
+  assert.equal(failed.code, 1)
+  assert.equal(failed.stdout, '')
+  await rm(join(r.state, 'deliveries'))
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), review())
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), ignore('duplicate'))
+})

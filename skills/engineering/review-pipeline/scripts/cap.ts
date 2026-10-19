@@ -8,11 +8,12 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Failure } from './cli.ts'
-import { withLock } from './lock.ts'
+import { whileHolding, withLock } from './lock.ts'
 
 const DAY = 24 * 60 * 60 * 1000
 
-// A process holds the cap file's lock for one read and one write.
+// A process holds the cap file's lock for one read and one write. Its write
+// commits only while it still owns that lock.
 const LOCK_TTL_MS = 30 * 1000
 const LOCK_WAIT_MS = 5 * 1000
 
@@ -46,7 +47,8 @@ async function readRuns(file: string): Promise<string[]> {
 export async function countRun(app: string, limit: number): Promise<boolean> {
   const file = capFile(app)
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
-  return withLock(`${file}.lock`, LOCK_TTL_MS, LOCK_WAIT_MS, async () => {
+  const lock = `${file}.lock`
+  return withLock(lock, LOCK_TTL_MS, LOCK_WAIT_MS, async (token) => {
     const now = Date.now()
     const runs = (await readRuns(file)).filter((at) => now - Date.parse(at) < DAY)
     if (runs.length >= limit) return false
@@ -54,10 +56,9 @@ export async function countRun(app: string, limit: number): Promise<boolean> {
     const tmp = `${file}.${randomBytes(6).toString('hex')}`
     try {
       await writeFile(tmp, `${JSON.stringify(runs)}\n`, { mode: 0o600 })
-      await rename(tmp, file)
-    } catch (error) {
+      await whileHolding(lock, token, () => rename(tmp, file))
+    } finally {
       await rm(tmp, { force: true })
-      throw error
     }
     return true
   })
