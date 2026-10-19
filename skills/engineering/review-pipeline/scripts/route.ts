@@ -215,12 +215,18 @@ function deliveryFile(app: AppName, delivery: string): string {
 
 // Whether work already came from `delivery` for `app`: its record is done.
 // No record, or one that is pending or cannot be read, is not a duplicate.
+// The reviewer also reads `<state root>/deliveries/<id>`, where 1.0.9 kept
+// its records before they moved under the App's name.
 async function doneDelivery(app: AppName, delivery: string): Promise<boolean> {
-  try {
-    return (JSON.parse(await readFile(deliveryFile(app, delivery), 'utf8')) as { state?: unknown }).state === 'done'
-  } catch {
-    return false
+  const files = [deliveryFile(app, delivery), ...(app === 'reviewer' ? [join(stateRoot(), 'deliveries', delivery)] : [])]
+  for (const file of files) {
+    try {
+      if ((JSON.parse(await readFile(file, 'utf8')) as { state?: unknown }).state === 'done') return true
+    } catch {
+      // No record there, or not one that can be read: not a duplicate.
+    }
   }
+  return false
 }
 
 // Write the record whole: a temp file in the same dir, then rename.

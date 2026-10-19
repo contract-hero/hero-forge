@@ -955,3 +955,12 @@ test('route: the lock_token is the owner token in the lock that the decision too
   // A held lock is an ignore, with no token.
   assert.equal(JSON.parse((await r.route('pull_request.ready_for_review.json', D3)).stdout).lock_token, null)
 })
+
+test('route --app reviewer: a done record that 1.0.9 wrote at deliveries/<id> is still a duplicate', async (t) => {
+  const r = await router(t)
+  await mkdir(join(r.state, 'deliveries'), { recursive: true })
+  await writeFile(join(r.state, 'deliveries', D1), JSON.stringify({ state: 'done', pr: 42, token: 'old-call' }))
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), ignore('duplicate'))
+  // It is the reviewer's: the Implementer never wrote records there.
+  assert.notDeepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('ignore', 'duplicate'))
+})
