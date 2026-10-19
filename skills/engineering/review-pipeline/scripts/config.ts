@@ -3,8 +3,9 @@
 //
 // The block is a small YAML subset, parsed by hand. This is the whole grammar:
 //   top     KEY: SCALAR        column 0; runtime | pairs | max_rounds | app | paused | app_daily_runs
-//   open    KEY:               column 0; orchestrator | reviewer; opens a map
-//   nested    KEY: SCALAR      exactly 2 spaces; model | effort; inside a map
+//   open    KEY:               column 0; orchestrator | reviewer | implementer; opens a map
+//   nested    KEY: SCALAR      exactly 2 spaces; inside a map: model | effort (orchestrator,
+//                              reviewer), or app | attempts | daily_runs (implementer)
 //   SCALAR  [A-Za-z0-9._-]+ | "..." | '...'
 // plus blank lines, `#` comment lines, and ` # ...` after a value. Nothing else.
 import { spawnSync } from 'node:child_process'
@@ -33,14 +34,22 @@ const AGENT_MODELS = ['opus', 'sonnet', 'haiku', 'fable']
 type RoleName = 'orchestrator' | 'reviewer'
 const ROLES: RoleName[] = ['orchestrator', 'reviewer']
 const TOP_KEYS = ['runtime', 'pairs', 'max_rounds', 'app', 'paused', 'app_daily_runs']
-const ROLE_KEYS = ['model', 'effort']
+
+// Each map and the keys it takes, as an error names them.
+type MapName = RoleName | 'implementer'
+const MAPS: Record<MapName, { keys: string[]; named: string }> = {
+  orchestrator: { keys: ['model', 'effort'], named: 'model or effort' },
+  reviewer: { keys: ['model', 'effort'], named: 'model or effort' },
+  implementer: { keys: ['app', 'attempts', 'daily_runs'], named: 'app, attempts or daily_runs' },
+}
+const isMap = (key: string): key is MapName => Object.hasOwn(MAPS, key)
 
 // A value from the block, with its 1-based line in the file.
 type Value = { text: string; quoted: boolean; line: number }
 
 type Parsed = {
   top: Map<string, Value>
-  roles: Map<RoleName, Map<string, Value>>
+  maps: Map<MapName, Map<string, Value>>
 }
 
 // Thrown for anything wrong with the file's contents (exit 4).
@@ -81,37 +90,39 @@ function findBlock(text: string): { text: string; line: number }[] {
 }
 
 function parse(text: string): Parsed {
-  const parsed: Parsed = { top: new Map(), roles: new Map() }
+  const parsed: Parsed = { top: new Map(), maps: new Map() }
   let open: Map<string, Value> | undefined
-  let openName = ''
+  let openName: MapName = 'orchestrator'
   for (const { text: line, line: n } of findBlock(text)) {
     if (/^\s*$/.test(line) || /^\s*#/.test(line)) continue
     if (/^\s*\t/.test(line)) throw new Invalid('tab indentation (indent with 2 spaces)', n)
     let m: RegExpExecArray | null
     if ((m = NESTED.exec(line))) {
       const [, key = '', raw = ''] = m
-      if (open === undefined) throw new Invalid(`indented line outside orchestrator or reviewer`, n)
-      if (!ROLE_KEYS.includes(key)) throw new Invalid(`unknown key ${openName}.${key} (model or effort)`, n)
+      if (open === undefined) throw new Invalid(`indented line outside orchestrator, reviewer or implementer`, n)
+      if (!MAPS[openName].keys.includes(key)) throw new Invalid(`unknown key ${openName}.${key} (${MAPS[openName].named})`, n)
       if (open.has(key)) throw new Invalid(`duplicate key ${openName}.${key}`, n)
       open.set(key, scalar(raw, n))
     } else if ((m = TOP.exec(line))) {
       const [, key = '', raw = ''] = m
       open = undefined
-      if ((ROLES as string[]).includes(key)) throw new Invalid(`${key} must be a map (put model and effort on indented lines)`, n)
+      if (isMap(key)) {
+        const keys = MAPS[key].keys
+        throw new Invalid(`${key} must be a map (put ${keys.slice(0, -1).join(', ')} and ${keys.at(-1)} on indented lines)`, n)
+      }
       if (!TOP_KEYS.includes(key)) throw new Invalid(`unknown key ${key}`, n)
       if (parsed.top.has(key)) throw new Invalid(`duplicate key ${key}`, n)
       parsed.top.set(key, scalar(raw, n))
     } else if ((m = OPEN.exec(line))) {
       const [, key = ''] = m
       if (TOP_KEYS.includes(key)) throw new Invalid(`${key} needs a value`, n)
-      if (!(ROLES as string[]).includes(key)) throw new Invalid(`unknown key ${key}`, n)
-      const role = key as RoleName
-      if (parsed.roles.has(role)) throw new Invalid(`duplicate key ${role}`, n)
+      if (!isMap(key)) throw new Invalid(`unknown key ${key}`, n)
+      if (parsed.maps.has(key)) throw new Invalid(`duplicate key ${key}`, n)
       open = new Map()
-      openName = role
-      parsed.roles.set(role, open)
+      openName = key
+      parsed.maps.set(key, open)
     } else {
-      throw new Invalid('line is outside the supported YAML subset (KEY: value, or a 2-space indented model/effort)', n)
+      throw new Invalid('line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)', n)
     }
   }
   return parsed
@@ -122,6 +133,11 @@ function parse(text: string): Parsed {
 const DEFAULT_PAIRS = 2
 const DEFAULT_MAX_ROUNDS = 2
 const DEFAULT_APP_DAILY_RUNS = 20
+
+// The implementer block's defaults: the App off, 3 builds of one ticket, and
+// 20 runs of the Implementer App in a rolling 24 hours.
+const DEFAULT_ATTEMPTS = 3
+const DEFAULT_IMPLEMENTER_DAILY_RUNS = 20
 
 function count(name: string, value: Value | undefined, fallback: number): number {
   if (value === undefined) return fallback
@@ -170,7 +186,7 @@ function resolveConfig(path: string, parsed: Parsed) {
   }
 
   const resolveRole = (role: RoleName) => {
-    const given = parsed.roles.get(role) ?? new Map<string, Value>()
+    const given = parsed.maps.get(role) ?? new Map<string, Value>()
     const modelValue = given.get('model')
     const effortValue = given.get('effort')
     const model = modelValue?.text ?? DEFAULTS[runtime][role].model
@@ -192,6 +208,12 @@ function resolveConfig(path: string, parsed: Parsed) {
     return { model, effort, agent_model: agent }
   }
 
+  const implementer = parsed.maps.get('implementer') ?? new Map<string, Value>()
+  const implementerApp = implementer.get('app')
+  if (implementerApp !== undefined && implementerApp.text !== 'enabled' && implementerApp.text !== 'disabled') {
+    throw new Invalid(`implementer.app must be "enabled" or "disabled", got "${implementerApp.text}"`, implementerApp.line)
+  }
+
   return {
     config_path: path,
     runtime,
@@ -202,6 +224,11 @@ function resolveConfig(path: string, parsed: Parsed) {
     app: appValue !== undefined,
     paused,
     app_daily_runs: appDailyRuns,
+    implementer: {
+      app: implementerApp?.text === 'enabled',
+      attempts: count('implementer.attempts', implementer.get('attempts'), DEFAULT_ATTEMPTS),
+      daily_runs: count('implementer.daily_runs', implementer.get('daily_runs'), DEFAULT_IMPLEMENTER_DAILY_RUNS),
+    },
   }
 }
 

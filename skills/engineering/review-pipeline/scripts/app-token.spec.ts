@@ -8,6 +8,8 @@ import { appKey, baseEnv, fakeGitHubApi, runCli, tempDir, type FakeApiRoute } fr
 const REPO = 'contract-hero/hero-forge'
 const NO_APP = '# Review pipeline\n\n```yaml\nruntime: claude\n```\n'
 const WITH_APP = '# Review pipeline\n\n```yaml\nruntime: claude\napp: enabled\n```\n'
+// The Implementer App's switch is its own: implementer.app, not app.
+const WITH_IMPLEMENTER = '# Review pipeline\n\n```yaml\nruntime: claude\nimplementer:\n  app: enabled\n```\n'
 const TOKEN = 'ghs_faketoken0123456789'
 
 // GitHub's three answers for a working App installed on the repo.
@@ -32,7 +34,7 @@ type Setup = {
 async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const dir = await tempDir(t)
   const configPath = join(dir, 'review.md')
-  await writeFile(configPath, options.config ?? WITH_APP)
+  await writeFile(configPath, options.config ?? (options.app === 'implementer' ? WITH_IMPLEMENTER : WITH_APP))
   const key = await appKey(dir)
   const trusted = options.wrongKey ? (await appKey(dir, 'other.pem')).publicKey : key.publicKey
   const api = await fakeGitHubApi(t, trusted, options.routes ?? WORKING)
@@ -268,12 +270,32 @@ test('--app implementer --login prints the implementer App bot login', async (t)
   assert.deepEqual(await s.mint('--login'), { code: 0, stdout: 'hero-implementer[bot]\n', stderr: '' })
 })
 
-test('--app implementer with no App in the config exits 3 like the reviewer form, and calls no API', async (t) => {
-  const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER, config: NO_APP })
-  const { code, stdout, stderr } = await s.mint('--login')
+const IMPLEMENTER_OFF: [string, string][] = [
+  ['no App in the config', NO_APP],
+  ['only the reviewer App enabled (app: enabled)', WITH_APP],
+  ['implementer.app: disabled', '# Review pipeline\n\n```yaml\nruntime: claude\napp: enabled\nimplementer:\n  app: disabled\n```\n'],
+  ['an implementer block with no app key', '# Review pipeline\n\n```yaml\nruntime: claude\nimplementer:\n  attempts: 2\n```\n'],
+]
+
+for (const [name, config] of IMPLEMENTER_OFF) {
+  test(`--app implementer with ${name} exits 3 and calls no API`, async (t) => {
+    const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER, config })
+    const { code, stdout, stderr } = await s.mint('--login')
+    assert.equal(code, 3)
+    assert.equal(stdout, '')
+    assert.equal(
+      stderr,
+      'review.ts app-token: no implementer App configured for this repo (no "implementer.app: enabled" in the config): post as the user\n',
+    )
+    assert.deepEqual(s.api.requests, [])
+  })
+}
+
+test('the reviewer App does not answer to implementer.app', async (t) => {
+  const s = await setup(t, { config: WITH_IMPLEMENTER })
+  const { code, stderr } = await s.mint('--check')
   assert.equal(code, 3)
-  assert.equal(stdout, '')
-  assert.match(stderr, /^review\.ts app-token: no implementer App configured for this repo \(no "app: enabled" in the config\): post as the user/m)
+  assert.match(stderr, /^review\.ts app-token: no reviewer App configured for this repo \(no "app: enabled" in the config\)/)
   assert.deepEqual(s.api.requests, [])
 })
 
@@ -294,8 +316,8 @@ test('--app implementer with no override reads ~/.config/hero-forge/implementer-
 
 test('--app implementer never reads the reviewer env file', async (t) => {
   // A working reviewer env file, and no implementer env var: the default
-  // implementer path is one baseEnv points at nothing.
-  const s = await setup(t)
+  // implementer path is one baseEnv points at nothing. Both Apps are on.
+  const s = await setup(t, { config: '# Review pipeline\n\n```yaml\nruntime: claude\napp: enabled\nimplementer:\n  app: enabled\n```\n' })
   const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, '--app', 'implementer', '--check'], { env: s.env })
   assert.equal(code, 4)
   assert.equal(stdout, '')

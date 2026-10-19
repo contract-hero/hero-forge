@@ -41,6 +41,7 @@ test('a minimal codex file resolves to the codex defaults', async (t) => {
     app: false,
     paused: false,
     app_daily_runs: 20,
+    implementer: { app: false, attempts: 3, daily_runs: 20 },
   })
 })
 
@@ -58,6 +59,7 @@ test('a minimal claude file resolves to the claude defaults with sub-agent model
     app: false,
     paused: false,
     app_daily_runs: 20,
+    implementer: { app: false, attempts: 3, daily_runs: 20 },
   })
 })
 
@@ -88,6 +90,10 @@ test('the canonical block setup writes resolves field for field', async (t) => {
       'app: enabled',
       'paused: true',
       'app_daily_runs: 5',
+      'implementer:',
+      '  app: enabled',
+      '  attempts: 2',
+      '  daily_runs: 7',
     ),
   )
   assert.equal(stderr, '')
@@ -100,6 +106,24 @@ test('the canonical block setup writes resolves field for field', async (t) => {
   assert.equal(resolved.app, true)
   assert.equal(resolved.paused, true)
   assert.equal(resolved.app_daily_runs, 5)
+  assert.deepEqual(resolved.implementer, { app: true, attempts: 2, daily_runs: 7 })
+})
+
+test('an implementer block resolves its own keys and leaves the reviewer App switch alone', async (t) => {
+  const off = await config(t, doc('runtime: codex', 'app: enabled', 'implementer:', '  app: disabled'))
+  assert.equal(off.stderr, '')
+  assert.equal(off.code, 0)
+  assert.equal(JSON.parse(off.stdout).app, true)
+  assert.deepEqual(JSON.parse(off.stdout).implementer, { app: false, attempts: 3, daily_runs: 20 })
+
+  const on = await config(t, doc('runtime: codex', 'implementer:  # the Implementer App', "  app: 'enabled'", '  daily_runs: 4'))
+  assert.equal(on.code, 0)
+  assert.equal(JSON.parse(on.stdout).app, false)
+  assert.deepEqual(JSON.parse(on.stdout).implementer, { app: true, attempts: 3, daily_runs: 4 })
+
+  const empty = await config(t, doc('runtime: codex', 'implementer:'))
+  assert.equal(empty.code, 0)
+  assert.deepEqual(JSON.parse(empty.stdout).implementer, { app: false, attempts: 3, daily_runs: 20 })
 })
 
 test('paused: false is accepted and stays false', async (t) => {
@@ -154,10 +178,10 @@ const invalid: [string, string, number | null, string][] = [
     'a four-space indent',
     doc('runtime: codex', 'reviewer:', '    effort: low'),
     8,
-    'line is outside the supported YAML subset (KEY: value, or a 2-space indented model/effort)',
+    'line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)',
   ],
-  ['a list', doc('runtime: codex', '- one'), 7, 'line is outside the supported YAML subset (KEY: value, or a 2-space indented model/effort)'],
-  ['an indented line outside a map', doc('runtime: codex', '  model: gpt-6-astra'), 7, 'indented line outside orchestrator or reviewer'],
+  ['a list', doc('runtime: codex', '- one'), 7, 'line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)'],
+  ['an indented line outside a map', doc('runtime: codex', '  model: gpt-6-astra'), 7, 'indented line outside orchestrator, reviewer or implementer'],
   ['a role given a scalar', doc('runtime: codex', 'reviewer: gpt-6.1-sol'), 7, 'reviewer must be a map (put model and effort on indented lines)'],
   ['a top key with no value', doc('runtime: codex', 'pairs:'), 7, 'pairs needs a value'],
   [
@@ -207,6 +231,16 @@ const invalid: [string, string, number | null, string][] = [
   ['a non-integer app_daily_runs', doc('runtime: codex', 'app_daily_runs: ten'), 7, 'app_daily_runs must be a whole number, got "ten"'],
   ['a duplicate paused', doc('runtime: codex', 'paused: true', 'paused: false'), 8, 'duplicate key paused'],
   ['an app value other than enabled', doc('runtime: codex', 'app: true'), 7, 'app must be "enabled" or left out, got "true"'],
+  ['an implementer given a scalar', doc('runtime: codex', 'implementer: enabled'), 7, 'implementer must be a map (put app, attempts and daily_runs on indented lines)'],
+  ['an unknown implementer key', doc('runtime: codex', 'implementer:', '  model: opus'), 8, 'unknown key implementer.model (app, attempts or daily_runs)'],
+  ['a role key under implementer', doc('runtime: codex', 'reviewer:', '  app: enabled'), 8, 'unknown key reviewer.app (model or effort)'],
+  ['a duplicate implementer key', doc('runtime: codex', 'implementer:', '  attempts: 2', '  attempts: 3'), 9, 'duplicate key implementer.attempts'],
+  ['a duplicate implementer map', doc('runtime: codex', 'implementer:', 'implementer:'), 8, 'duplicate key implementer'],
+  ['an implementer.app value other than enabled or disabled', doc('runtime: codex', 'implementer:', '  app: true'), 8, 'implementer.app must be "enabled" or "disabled", got "true"'],
+  ['implementer.attempts 0', doc('runtime: codex', 'implementer:', '  attempts: 0'), 8, 'implementer.attempts must be 1 or more, got 0'],
+  ['a non-integer implementer.attempts', doc('runtime: codex', 'implementer:', '  attempts: many'), 8, 'implementer.attempts must be a whole number, got "many"'],
+  ['implementer.daily_runs 0', doc('runtime: codex', 'implementer:', '  daily_runs: 0'), 8, 'implementer.daily_runs must be 1 or more, got 0'],
+  ['a quoted implementer.daily_runs', doc('runtime: codex', 'implementer:', '  daily_runs: "5"'), 8, 'implementer.daily_runs must be a whole number, got "5"'],
 ]
 
 for (const [name, text, line, reason] of invalid) {
