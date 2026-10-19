@@ -33,8 +33,8 @@ export const COMMANDS = {
   review.ts run-state supersede  --pr N    (the PR head moved after a review: archive the run, then create a new one)`,
   },
   'app-token': {
-    summary: 'Check the reviewer GitHub App, or print its bot login.',
-    usage: `usage: review.ts app-token --repo O/R [--config <path>] --check | --login`,
+    summary: 'Check a GitHub App (the reviewer by default, or the implementer), or print its bot login.',
+    usage: `usage: review.ts app-token --repo O/R [--app reviewer|implementer] [--config <path>] --check | --login`,
   },
   'post-review': {
     summary: 'Post one review payload to a PR, at most once per PR, round, kind and commit.',

@@ -15,8 +15,8 @@ export type RunResult = { code: number | null; stdout: string; stderr: string }
 
 export type RunOptions = { cwd?: string; env?: Record<string, string | undefined>; stdin?: string }
 
-// The machine may export a real token, or hold real reviewer App credentials
-// in ~/.config/hero-forge/. A test must never inherit or reach either: the App
+// The machine may export a real token, or hold real App credentials in
+// ~/.config/hero-forge/. A test must never inherit or reach either: each App
 // env file points at a path that does not exist, and the GitHub API at a port
 // nothing listens on, until a test sets its own.
 export function baseEnv(): Record<string, string | undefined> {
@@ -24,6 +24,7 @@ export function baseEnv(): Record<string, string | undefined> {
   delete env.GH_TOKEN
   delete env.GITHUB_TOKEN
   env.HERO_FORGE_REVIEWER_APP_ENV = join(tmpdir(), 'review-pipeline-no-such-dir', 'reviewer-app.env')
+  env.HERO_FORGE_IMPLEMENTER_APP_ENV = join(tmpdir(), 'review-pipeline-no-such-dir', 'implementer-app.env')
   env.HERO_FORGE_GITHUB_API_URL = 'http://127.0.0.1:9'
   return env
 }
