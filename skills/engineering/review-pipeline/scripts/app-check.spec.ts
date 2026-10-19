@@ -57,7 +57,7 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   return { dir, api, check }
 }
 
-type Item = { item: string; status: 'ok' | 'wrong'; want: string; has: string; fix: string | null }
+type Item = { item: string; status: 'ok' | 'wrong' | 'unverified'; want: string; has: string; fix: string | null }
 
 const wrongItems = (report: { items: Item[] }) => report.items.filter((i) => i.status === 'wrong')
 
@@ -79,13 +79,14 @@ test('a reviewer App set up as AFK mode needs: every item ok, exit 0', async (t)
   assert.deepEqual(
     report.items.map((i: Item) => [i.item, i.status]),
     [
+      ['app slug', 'ok'],
       ['permission contents', 'ok'],
       ['permission pull_requests', 'ok'],
       ['permission statuses', 'ok'],
       ['permission metadata', 'ok'],
       ['event pull_request', 'ok'],
       ['event issue_comment', 'ok'],
-      ['webhook active', 'ok'],
+      ['webhook active', 'unverified'],
       ['webhook url', 'ok'],
       ['webhook secret', 'ok'],
       ['webhook content type', 'ok'],
@@ -93,7 +94,7 @@ test('a reviewer App set up as AFK mode needs: every item ok, exit 0', async (t)
       ['installation accepted', 'ok'],
     ],
   )
-  assert.ok(report.items.every((i: Item) => i.fix === null))
+  assert.ok(report.items.filter((i: Item) => i.status === 'ok').every((i: Item) => i.fix === null))
   // The webhook URL carries T3's token: the report never prints it.
   assert.ok(!stdout.includes('tok123'))
   assert.ok(s.api.requests.every((r) => r.jwt_ok && r.iss === '123456'))
@@ -306,3 +307,43 @@ test('a bad --repo or --app is a usage error that calls no API', async (t) => {
   assert.match(noApp.stderr, /--app must be reviewer or implementer/)
   assert.deepEqual(s.api.requests, [])
 })
+
+// GitHub's API has no field that shows the webhook is active: app-check never
+// says it is. The user confirms it on the settings page.
+test('a configured webhook gives webhook active unverified, never ok, and still exit 0', async (t) => {
+  const s = await setup(t)
+  const { code, stdout } = await s.check()
+  assert.equal(code, 0)
+  const report = JSON.parse(stdout)
+  assert.equal(report.ok, true)
+  assert.deepEqual(report.items.find((i: Item) => i.item === 'webhook active'), {
+    item: 'webhook active',
+    status: 'unverified',
+    want: 'active',
+    has: 'configured; the API does not show whether it is active',
+    fix: `confirm that Active is ticked under Webhook on ${ORG_APPS}/contract-reviewer`,
+  })
+})
+
+test('an unverified item next to a wrong one: exit 1, and both are listed', async (t) => {
+  const s = await setup(t, { routes: patch('reviewer', 'GET /app/hook/config', (b) => ({ ...b, content_type: 'form' })) })
+  const { code, stdout } = await s.check()
+  assert.equal(code, 1)
+  const statuses = Object.fromEntries(JSON.parse(stdout).items.map((i: Item) => [i.item, i.status]))
+  assert.equal(statuses['webhook active'], 'unverified')
+  assert.equal(statuses['webhook content type'], 'wrong')
+})
+
+// route trusts only contract-reviewer[bot] and contract-implementer[bot].
+for (const [app, expected] of [['reviewer', 'contract-reviewer'], ['implementer', 'contract-implementer']] as const) {
+  test(`an App whose slug is not ${expected} is wrong for --app ${app}: route would not trust it`, async (t) => {
+    const s = await setup(t, { app, routes: patch(app, 'GET /app', (b) => ({ ...b, slug: 'my-bot' })) })
+    const { code, stdout } = await s.check()
+    assert.equal(code, 1)
+    const report = JSON.parse(stdout)
+    assert.deepEqual(wrongItems(report).map((i) => [i.item, i.want, i.has, i.fix]), [
+      ['app slug', expected, 'my-bot',
+        `route trusts only ${expected}[bot]: use the App named ${expected} (its env file is ~/.config/hero-forge/${app}-app.env)`],
+    ])
+  })
+}

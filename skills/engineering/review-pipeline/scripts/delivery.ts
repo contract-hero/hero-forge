@@ -4,8 +4,12 @@
 // from the request headers; the payload that `route` reads comes from
 // GitHub's API, signed in as the App with its JWT.
 //
-// GitHub can take a moment to list a delivery it has just sent, so the list
-// is read up to DELIVERY_TRIES times, HERO_FORGE_DELIVERY_RETRY_MS apart.
+// GitHub lists the deliveries newest first, 100 a page, with a cursor to the
+// next page. Each try walks the pages until it finds the delivery, reaches a
+// delivery older than MAX_DELIVERY_AGE_HOURS (an older one would be refused
+// anyway), or runs out of pages. GitHub can take a moment to list a delivery
+// it has just sent, so the walk runs up to DELIVERY_TRIES times,
+// HERO_FORGE_DELIVERY_RETRY_MS apart.
 // Exit 1: GitHub sent the delivery more than MAX_DELIVERY_AGE_HOURS ago (its
 // signature has no timestamp, so an old one is a replay), or --out already
 // exists (a file or a symlink: it is created new, never followed).
@@ -42,10 +46,11 @@ async function delivery(argv: string[]): Promise<string> {
   if (values.out === undefined || values.out === '') throw usage('delivery needs --out')
 
   const api = await appApi(app)
-  const list = async (): Promise<Listed[]> => {
+  const page = async (cursor: string | null) => {
+    const path = `/app/hook/deliveries?per_page=100${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`
     try {
-      const listed = await api<unknown>('list the App webhook deliveries', 'GET', '/app/hook/deliveries?per_page=100')
-      return Array.isArray(listed) ? (listed as Listed[]) : []
+      const { body, cursor: next } = await api.page<unknown>('list the App webhook deliveries', path)
+      return { listed: Array.isArray(body) ? (body as Listed[]) : [], next }
     } catch (error) {
       if (error instanceof ApiFailure && error.status === 404) {
         throw new Failure(`the ${app} App has no webhook deliveries (HTTP 404): set its webhook, or re-run /setup-forge`, 4)
@@ -53,10 +58,22 @@ async function delivery(argv: string[]): Promise<string> {
       throw error
     }
   }
+  const oldest = () => Date.now() - MAX_DELIVERY_AGE_HOURS * 3600 * 1000
+  const tooOld = (d: Listed) => typeof d.delivered_at === 'string' && Date.parse(d.delivered_at) < oldest()
+  const walk = async (): Promise<Listed | undefined> => {
+    let cursor: string | null = null
+    for (;;) {
+      const { listed, next } = await page(cursor)
+      const hit = listed.find((d) => d.guid === guid && typeof d.id === 'number')
+      if (hit !== undefined) return hit
+      if (next === null || listed.length === 0 || listed.some(tooOld)) return undefined
+      cursor = next
+    }
+  }
 
   let found: Listed | undefined
   for (let tries = 1; found === undefined; tries++) {
-    found = (await list()).find((d) => d.guid === guid && typeof d.id === 'number')
+    found = await walk()
     if (found !== undefined) break
     if (tries === DELIVERY_TRIES) {
       throw new Failure(`GitHub does not list delivery ${guid} in the ${app} App's webhook deliveries (${DELIVERY_TRIES} tries)`, 3)
@@ -66,7 +83,7 @@ async function delivery(argv: string[]): Promise<string> {
 
   const sent = typeof found.delivered_at === 'string' ? Date.parse(found.delivered_at) : Number.NaN
   if (Number.isNaN(sent)) throw new Failure(`GitHub sent no delivery time for delivery ${guid}`, 1)
-  if (Date.now() - sent > MAX_DELIVERY_AGE_HOURS * 3600 * 1000) {
+  if (sent < oldest()) {
     throw new Failure(
       `delivery ${guid} was sent at ${found.delivered_at as string}, more than ${MAX_DELIVERY_AGE_HOURS} hours ago: a replay, or a request held too long`,
       1,

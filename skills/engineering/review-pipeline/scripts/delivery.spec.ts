@@ -255,3 +255,68 @@ test('a dangling symlink at --out is refused too', async (t) => {
   assert.match(stderr, /already exists: pass a fresh path/)
   await assert.rejects(readFile(target, 'utf8'), { code: 'ENOENT' })
 })
+
+// GitHub pages the deliveries, newest first, with a cursor in the Link header.
+const PAGE2 = 'GET /app/hook/deliveries?per_page=100&cursor=v1_200'
+const next = (cursor: string) => ({ link: `<https://api.github.com/app/hook/deliveries?per_page=100&cursor=${cursor}>; rel="next"` })
+
+test('a delivery on the second page of the deliveries is found through the Link cursor', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(901, 'other-guid')], headers: next('v1_200') },
+      [PAGE2]: { status: 200, body: [entry(902, GUID)] },
+      'GET /app/hook/deliveries/902': { status: 200, body: detail(902, GUID, PAYLOAD) },
+    },
+  })
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { event: 'issues', action: 'labeled', repo: 'contract-hero/hero-forge' })
+  assert.deepEqual(s.api.requests.map((r) => r.path), [
+    '/app/hook/deliveries?per_page=100',
+    '/app/hook/deliveries?per_page=100&cursor=v1_200',
+    '/app/hook/deliveries/902',
+  ])
+})
+
+test('a missing delivery: each try walks every page, then it exits 3', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(901, 'other-guid')], headers: next('v1_200') },
+      [PAGE2]: { status: 200, body: [entry(900, 'older-guid')] },
+    },
+  })
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(code, 3)
+  assert.match(stderr, /GitHub does not list delivery .* \(5 tries\)/)
+  assert.deepEqual(s.api.requests.map((r) => r.path), Array.from({ length: 5 }, () => [
+    '/app/hook/deliveries?per_page=100',
+    '/app/hook/deliveries?per_page=100&cursor=v1_200',
+  ]).flat())
+})
+
+test('the walk stops at a delivery older than 25 hours: no later page is read', async (t) => {
+  const old = new Date(Date.now() - 26 * HOURS).toISOString()
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(901, 'other-guid'), entry(900, 'old-guid', 'issues', 'labeled', old)], headers: next('v1_200') },
+      [PAGE2]: { status: 200, body: [entry(902, GUID)] },
+    },
+  })
+  const { code } = await s.fetchDelivery()
+  assert.equal(code, 3)
+  assert.ok(s.api.requests.every((r) => r.path === '/app/hook/deliveries?per_page=100'))
+})
+
+test('a Link to another host is never followed: only its cursor is used, on the configured API', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(901, 'other-guid')], headers: { link: '<https://evil.example/app/hook/deliveries?per_page=100&cursor=v1_200>; rel="next"' } },
+      [PAGE2]: { status: 200, body: [entry(902, GUID)] },
+      'GET /app/hook/deliveries/902': { status: 200, body: detail(902, GUID, PAYLOAD) },
+    },
+  })
+  const { code } = await s.fetchDelivery()
+  assert.equal(code, 0)
+  assert.equal(s.api.requests[1]?.path, '/app/hook/deliveries?per_page=100&cursor=v1_200')
+})

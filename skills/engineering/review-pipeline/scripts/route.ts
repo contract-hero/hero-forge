@@ -77,15 +77,15 @@
 // attempt, record the delivery, count the run, and print the decision with
 // the lock's owner token (lock_token), for the run to release it.
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { APPS, type AppName } from './app-token.ts'
-import { countRun, releaseAttempt, reserveAttempt } from './cap.ts'
+import { countRun, releaseAttempt, reserveAttempt, uncountRun } from './cap.ts'
 import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
 import { resolveConfigText, type ResolvedConfig } from './config.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
 import { parseHandoff, type HandoffKind } from './handoff.ts'
-import { releaseIssueLock, releasePrLock, takeIssueLock, takePrLock } from './lock.ts'
+import { issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, whileHolding } from './lock.ts'
 import { readPause } from './pause.ts'
 import { loadState, stateRoot, TERMINAL, type Phase } from './run-state.ts'
 
@@ -240,13 +240,25 @@ async function doneDelivery(app: AppName, delivery: string): Promise<boolean> {
   return false
 }
 
+// What a done record also keeps, so `route undo` can give it back: the repo,
+// the ticket whose attempt the decision reserved (null for no build), and
+// the time its run was counted.
+type Taken = { repo: string; attempt: number | null; counted_at: string }
+
 // Write the record whole: a temp file in the same dir, then rename.
-async function recordDelivery(app: AppName, delivery: string, state: DeliveryState, lock: Start['lock'], token: string): Promise<void> {
+async function recordDelivery(
+  app: AppName,
+  delivery: string,
+  state: DeliveryState,
+  lock: Start['lock'],
+  token: string,
+  taken?: Taken,
+): Promise<void> {
   const file = deliveryFile(app, delivery)
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${randomBytes(6).toString('hex')}`
   try {
-    await writeFile(tmp, `${JSON.stringify({ state, [lock.kind]: lock.number, token })}\n`, { mode: 0o600 })
+    await writeFile(tmp, `${JSON.stringify({ state, [lock.kind]: lock.number, token, ...taken })}\n`, { mode: 0o600 })
     await rename(tmp, file)
   } finally {
     await rm(tmp, { force: true })
@@ -497,8 +509,13 @@ export async function decide(
       if (!(await reserveAttempt(repo, attempt.issue, attempt.limit))) return await stop('attempts')
       reserved = true
     }
-    if (!(await countRun(app, limit))) return await stop('cap')
-    await recordDelivery(app, delivery, 'done', outcome.lock, token)
+    const counted = await countRun(app, limit)
+    if (counted === null) return await stop('cap')
+    await recordDelivery(app, delivery, 'done', outcome.lock, token, {
+      repo,
+      attempt: attempt === undefined ? null : attempt.issue,
+      counted_at: counted,
+    })
   } catch (error) {
     if (reserved && attempt !== undefined) await releaseAttempt(repo, attempt.issue).catch(() => {})
     await releaseFor(outcome.lock, token)
@@ -510,7 +527,74 @@ export async function decide(
   return decided(outcome.action, null, token)
 }
 
+// `route undo`: the router could not launch the thread a decision started,
+// so it gives back what the decision took. It finds the done record that
+// holds `token` (a reconcile line has the token but no delivery id), and,
+// only while the token still owns the decision's lock: deletes the record,
+// so the same delivery is decided again; gives back the build attempt and
+// the counted run; then releases the lock. Running it again finds no record
+// and changes nothing: it exits 0 either way.
+type DeliveryRecord = { state?: unknown; pr?: unknown; issue?: unknown; token?: unknown } & Partial<Taken>
+
+async function findRecord(app: AppName, token: string): Promise<{ file: string; record: DeliveryRecord } | null> {
+  const dir = join(stateRoot(), 'deliveries', app)
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch {
+    return null
+  }
+  for (const name of names) {
+    const file = join(dir, name)
+    try {
+      const record = JSON.parse(await readFile(file, 'utf8')) as DeliveryRecord
+      if (record.token === token) return { file, record }
+    } catch {
+      // A temp file or a record that cannot be read: not this one.
+    }
+  }
+  return null
+}
+
+async function undo(argv: string[]): Promise<string> {
+  const { values } = parse(argv, { app: { type: 'string' }, token: { type: 'string' } }, usage)
+  const app = values.app as AppName
+  if (!APPS.includes(app)) throw usage(`--app must be ${APPS.join(' or ')}`)
+  const token = values.token
+  if (token === undefined || !/^[0-9a-f]{32}$/.test(token)) throw usage('--token must be the lock_token that route printed')
+
+  const found = await findRecord(app, token)
+  const pr = whole(found?.record.pr)
+  const issue = whole(found?.record.issue)
+  if (found === null || (pr === null) === (issue === null)) {
+    return `${JSON.stringify({ undone: false, reason: 'no delivery record holds this token' })}\n`
+  }
+  const lock: Start['lock'] = pr !== null ? { kind: 'pr', number: pr } : { kind: 'issue', number: issue as number }
+  const { record } = found
+  let gave: { attempt: boolean; run: boolean }
+  try {
+    gave = await whileHolding(lock.kind === 'pr' ? prLockFile(lock.number) : issueLockFile(lock.number), token, async () => {
+      await rm(found.file, { force: true })
+      let attempt = false
+      if (typeof record.repo === 'string' && typeof record.attempt === 'number') {
+        await releaseAttempt(record.repo, record.attempt)
+        attempt = true
+      }
+      const run = typeof record.counted_at === 'string' ? await uncountRun(app, record.counted_at) : false
+      return { attempt, run }
+    })
+  } catch (error) {
+    if (error instanceof Failure && /^lost the lock/.test(error.message)) {
+      return `${JSON.stringify({ undone: false, reason: 'the token no longer owns the lock' })}\n`
+    }
+    throw error
+  }
+  const released = await releaseFor(lock, token)
+  return `${JSON.stringify({ undone: true, [lock.kind]: lock.number, ...gave, released })}\n`
+}
+
 async function route(argv: string[]): Promise<string> {
+  if (argv[0] === 'undo') return undo(argv.slice(1))
   const { values } = parse(
     argv,
     { app: { type: 'string' }, event: { type: 'string' }, delivery: { type: 'string' }, payload: { type: 'string' } },

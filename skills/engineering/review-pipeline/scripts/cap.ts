@@ -67,17 +67,35 @@ async function commit(file: string, text: string, lock: string, token: string): 
   }
 }
 
-// Count one run of `app` toward its cap of `limit` runs in 24 hours. False:
-// the cap is reached, and nothing is counted.
-export async function countRun(app: string, limit: number): Promise<boolean> {
+// Count one run of `app` toward its cap of `limit` runs in 24 hours. Returns
+// the time it counted (for `uncountRun`), or null: the cap is reached, and
+// nothing is counted.
+export async function countRun(app: string, limit: number): Promise<string | null> {
   const file = capFile(app)
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const lock = `${file}.lock`
   return withLock(lock, LOCK_TTL_MS, LOCK_WAIT_MS, async (token) => {
     const now = Date.now()
     const runs = (await readRuns(file)).filter((at) => now - Date.parse(at) < DAY)
-    if (runs.length >= limit) return false
-    runs.push(new Date(now).toISOString())
+    if (runs.length >= limit) return null
+    const at = new Date(now).toISOString()
+    runs.push(at)
+    await commit(file, `${JSON.stringify(runs)}\n`, lock, token)
+    return at
+  })
+}
+
+// Give back the run of `app` counted at `at`, for a run that never started.
+// False: that run is not counted (it left the 24 hours, or was given back).
+export async function uncountRun(app: string, at: string): Promise<boolean> {
+  const file = capFile(app)
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 })
+  const lock = `${file}.lock`
+  return withLock(lock, LOCK_TTL_MS, LOCK_WAIT_MS, async (token) => {
+    const runs = await readRuns(file)
+    const index = runs.indexOf(at)
+    if (index === -1) return false
+    runs.splice(index, 1)
     await commit(file, `${JSON.stringify(runs)}\n`, lock, token)
     return true
   })

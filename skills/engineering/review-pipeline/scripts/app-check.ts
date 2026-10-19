@@ -4,11 +4,14 @@
 // settings, so a wrong setting shows up at setup and not in the first run.
 //
 // Items, in this order:
+//   app slug               the slug of the bot login route trusts for this App
 //   permission <name>      each permission the App needs, at exactly that
 //                          level; the Implementer also needs no workflows
 //   event <name>           each event the App needs; any other event is wrong,
 //                          because each delivery costs one agent turn
-//   webhook active         GitHub has a webhook config for the App
+//   webhook active         wrong when GitHub has no webhook config for the App;
+//                          else unverified: the API has no field that shows the
+//                          webhook is active, so the user confirms it
 //   webhook url            the T3 task's webhookUrl (--webhook-url), or set
 //   webhook secret         set (GitHub never shows its value)
 //   webhook content type   json
@@ -18,10 +21,12 @@
 //
 // A wrong item says what to change and on which page. The report never
 // prints the webhook URL (it carries T3's token) or any secret.
-// Exit 0: every item ok. Exit 1: an item is wrong. Exit 4: the App's
+// An unverified item does not change the exit code, and is always listed.
+// Exit 0: no item is wrong. Exit 1: an item is wrong. Exit 4: the App's
 // credentials are broken, or GitHub answers with an error.
 import { APPS, ApiFailure, appApi, type AppApi, type AppName } from './app-token.ts'
 import { parse, repoOption, runMain, usageFor } from './cli.ts'
+import { IMPLEMENTER_BOT, REVIEWER_BOT } from './route.ts'
 
 const usage = usageFor('app-check')
 
@@ -54,7 +59,13 @@ const PERMISSION_LABEL: Record<string, string> = {
 const LEVEL_LABEL: Record<string, string> = { read: 'Read-only', write: 'Read and write', none: 'No access' }
 const EVENT_LABEL: Record<string, string> = { pull_request: 'Pull request', issue_comment: 'Issue comment', issues: 'Issues' }
 
-type Item = { item: string; status: 'ok' | 'wrong'; want: string; has: string; fix: string | null }
+type Item = { item: string; status: 'ok' | 'wrong' | 'unverified'; want: string; has: string; fix: string | null }
+
+// The slug of each App: route trusts only these bot logins.
+const SLUG: Record<AppName, string> = {
+  reviewer: REVIEWER_BOT.replace(/\[bot\]$/, ''),
+  implementer: IMPLEMENTER_BOT.replace(/\[bot\]$/, ''),
+}
 
 type Account = { login?: unknown; type?: unknown }
 
@@ -106,6 +117,8 @@ async function appCheck(argv: string[]): Promise<number> {
   const installation = await readOrNull<Installation>(api, 'find the App installation', `/repos/${repo}/installation`)
 
   const items: Item[] = []
+  items.push(item('app slug', slug === SLUG[app], SLUG[app], slug,
+    `route trusts only ${SLUG[app]}[bot]: use the App named ${SLUG[app]} (its env file is ~/.config/hero-forge/${app}-app.env)`))
   const needs = NEEDS[app]
   const permissions = record(self.permissions)
   for (const [name, level] of Object.entries(needs.permissions)) {
@@ -140,7 +153,13 @@ async function appCheck(argv: string[]): Promise<number> {
     items.push(item('webhook content type', false, 'json', 'no webhook', fixType))
   } else {
     const url = typeof hook.url === 'string' ? hook.url : ''
-    items.push(item('webhook active', true, 'active', 'active', ''))
+    items.push({
+      item: 'webhook active',
+      status: 'unverified',
+      want: 'active',
+      has: 'configured; the API does not show whether it is active',
+      fix: `confirm that Active is ticked under Webhook on ${appPage}`,
+    })
     if (webhookUrl === undefined) {
       items.push(item('webhook url', url !== '', 'set', url === '' ? 'not set' : 'set', fixUrl))
     } else {
@@ -173,7 +192,7 @@ async function appCheck(argv: string[]): Promise<number> {
       `accept the App's new permissions on ${installationPage} (GitHub shows the request there)`))
   }
 
-  const ok = items.every((i) => i.status === 'ok')
+  const ok = items.every((i) => i.status !== 'wrong')
   const report = {
     app,
     app_id: typeof self.id === 'number' ? self.id : null,

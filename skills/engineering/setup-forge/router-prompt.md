@@ -21,4 +21,4 @@ Delivery id: `{{headers.x-github-delivery}}`. Event: `{{headers.x-github-event}}
 
    The PR head: `gh pr view <pr> --repo <repo> --json headRefName --jq .headRefName`. The default branch: `gh repo view <repo> --json defaultBranchRef --jq .defaultBranchRef.name`.
 7. Launch one thread with `t3_thread_launch`: `projectId` the project of step 4, `title` `<<app>> <action> <repo>#<n>`, `workspaceStrategy` `{type: "worktree", baseRef: <base>, startFromOrigin: true}`, and `message` the message of step 6. Exit with `started: <action> <repo>#<n>`.
-   The launch fails: release the lock, `review.ts lock release --pr <pr> --token <lock_token>` (or `--issue <issue>` when `pr` is null), in the `workspaceRoot`. Then exit with `stop: launch failed: <the error>`.
+   The launch fails: give back what the decision took, `review.ts route undo --app <<app>> --token <lock_token>`, in the `workspaceRoot`. It forgets the delivery (so a redelivery is decided again), gives back the build attempt and the counted run, and releases the lock. Then exit with `stop: launch failed: <the error>`.

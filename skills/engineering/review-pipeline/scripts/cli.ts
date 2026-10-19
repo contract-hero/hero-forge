@@ -124,7 +124,10 @@ export const COMMANDS = {
   Prints {action, repo, pr, issue, reason, lock_token} and exits 0 for every decision, ignore included.
   reviewer actions: review, recheck. implementer actions: build-ticket, build-spec, adjudicate, resume.
   Work takes a lock, per PR (or per issue for a build or a resume on an issue), free again after ${LOCK_TTL_HOURS} hours.
-  lock_token is that lock's owner token, for the launched run to release it; null on ignore.`,
+  lock_token is that lock's owner token, for the launched run to release it; null on ignore.
+usage: review.ts route undo --app reviewer|implementer --token <lock_token>
+  The router could not launch the run: while the token still owns the lock, forget the delivery (so it is
+  decided again), give back the build attempt and the counted run, and release the lock. Prints {undone, ...}.`,
   },
   reconcile: {
     summary: 'Sweep the open work a missed webhook should have started, and decide each item as route does.',
@@ -148,8 +151,9 @@ export const COMMANDS = {
   'app-check': {
     summary: "Check a GitHub App's settings for AFK mode: permissions, events, webhook and installation.",
     usage: `usage: review.ts app-check --app reviewer|implementer --repo O/R [--webhook-url <url>]
-  Prints {app, app_id, slug, repo, ok, pages, items}: each item ok or wrong, with what to change.
-  Exit 0 every item ok, 1 an item is wrong, 4 the App's credentials are broken.`,
+  Prints {app, app_id, slug, repo, ok, pages, items}: each item ok, wrong (with what to change), or
+  unverified (the API cannot show it: the user confirms it; webhook active is always unverified or wrong).
+  Exit 0 no item wrong, 1 an item is wrong, 4 the App's credentials are broken.`,
   },
 } as const satisfies Record<string, { summary: string; usage: string }>
 

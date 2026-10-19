@@ -258,14 +258,16 @@ The prompts find the helper CLI through the installed plugin, so a plugin update
 
 **6.3 The App settings.** One App at a time. Run `review.ts app-check --app <app> --repo O/R --webhook-url <that App's webhookUrl>`. It reads the App's settings as the App and prints a report: `pages` (the App's settings page, its permissions page, and the installation page) and `items`, each `ok` or `wrong` with what to change (`fix`).
 
-- Exit 0: every setting is right. Go on to the next App.
-- Exit 1: show the user each wrong item's `fix`, which names the page. Wait until they say they changed it, then run `app-check` again.
+- Exit 0: no setting is wrong. Then ask the user to confirm each `unverified` item (its `fix` says what to look at, on which page): `webhook active` is always unverified, because the API has no field that shows it. Go on to the next App once they confirm. Each unverified item they cannot confirm: help them fix it, then run `app-check` again.
+- Exit 1: show the user each wrong item's `fix`, which names the page, and each `unverified` item. Wait until they say they changed it, then run `app-check` again.
+- A wrong `app slug`: `route` trusts only `contract-reviewer[bot]` and `contract-implementer[bot]`. The App named in the env file is another App: point the env file at the right App.
 - Exit 4: the App's credentials are broken. Show the message and stop, as in step 4.
 
 What `app-check` expects:
 
 | Setting | `reviewer` | `implementer` |
 | --- | --- | --- |
+| App slug | `contract-reviewer` | `contract-implementer` |
 | Repository permissions | Contents: Read-only; Pull requests: Read and write; Commit statuses: Read and write; Metadata: Read-only | Contents: Read and write; Pull requests: Read and write; Issues: Read and write; Metadata: Read-only; Workflows: No access |
 | Subscribe to events (no others: each delivery costs one agent turn) | Pull request; Issue comment | Issues; Issue comment |
 | Webhook | Active; URL: the reviewer task's `webhookUrl`; secret: the reviewer's; content type json | Active; URL: the implementer task's `webhookUrl`; secret: the implementer's; content type json |
