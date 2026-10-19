@@ -12,14 +12,18 @@
 // The guard carries an owner token too. A guard older than GUARD_TTL_MS was
 // left by a crashed process (a holder keeps it for milliseconds). Only the
 // holder of the breaker (`<lock>.guard.break`, an exclusive create) may
-// delete a guard, and it deletes it only when the guard still has the token
-// it saw stale and is still stale. A caller that cannot take the breaker
-// deletes nothing and tries the guard again.
+// delete a guard: a stale break deletes it only when it still has the token
+// the caller saw stale and is still stale, and a holder's own release only
+// when it still has the holder's token. A caller that cannot take the
+// breaker deletes nothing and tries again.
 //
-// The one assumption left: the breaker is never deleted for its age. A
+// Two assumptions are left. The breaker is never deleted for its age: a
 // breaker older than GUARD_TTL_MS means a process crashed in the few
 // microseconds while it held one, and every caller then exits 1 and names
-// it, for a human to remove by hand.
+// it, for a human to remove by hand. And a holder never stalls inside the
+// guard for GUARD_TTL_MS: a guard is a lease with no fencing, so a holder
+// that stalled that long may finish its check and write after another
+// caller broke its guard and took a new one.
 //
 // The per-PR lock that `route` takes is `<state root>/locks/pr-<N>.lock`. It
 // holds for LOCK_TTL_HOURS unless the run releases it with its token.
@@ -59,26 +63,46 @@ async function age(file: string): Promise<number | null> {
   }
 }
 
-// Delete the guard `guard` if it still holds `seen` (the token a caller saw)
-// and is still stale, while holding its breaker. True: this call deleted it.
-// A breaker that another caller holds: false, nothing deleted. A breaker
-// older than GUARD_TTL_MS: exit 1.
-export async function breakGuard(guard: string, seen: string | null): Promise<boolean> {
+// Delete the guard `guard` only if it still holds `token`, while holding its
+// breaker. Every delete of a guard (a stale break, or a holder's own release)
+// goes through here, so no delete can remove a guard another caller took in
+// the meantime. With `stale`, the guard must also be older than GUARD_TTL_MS.
+// 'deleted', 'kept' (another token, or not stale), or 'busy' (another caller
+// holds the breaker). A breaker older than GUARD_TTL_MS: exit 1.
+async function deleteGuard(guard: string, token: string | null, stale: boolean): Promise<'deleted' | 'kept' | 'busy'> {
   const breaker = `${guard}.break`
   if (!(await createOnly(breaker, `${process.pid}\n`))) {
     const breakerAge = await age(breaker)
     if (breakerAge !== null && breakerAge >= GUARD_TTL_MS) {
-      throw new Failure(`${breaker} is older than ${GUARD_TTL_MS / 1000} s: a process crashed while it broke a stale guard. Remove it by hand`, 1)
+      throw new Failure(`${breaker} is older than ${GUARD_TTL_MS / 1000} s: a process crashed while it deleted a guard. Remove it by hand`, 1)
     }
-    return false
+    return 'busy'
   }
   try {
     const now = await age(guard)
-    if (now === null || now < GUARD_TTL_MS || (await tokenOf(guard)) !== seen) return false
+    if (now === null || (stale && now < GUARD_TTL_MS) || (await tokenOf(guard)) !== token) return 'kept'
     await rm(guard, { force: true })
-    return true
+    return 'deleted'
   } finally {
     await rm(breaker, { force: true })
+  }
+}
+
+// Delete the guard `guard` if it still holds `seen` (the token a caller saw)
+// and is still stale. True: this call deleted it. A breaker that another
+// caller holds: false, nothing deleted.
+export async function breakGuard(guard: string, seen: string | null): Promise<boolean> {
+  return (await deleteGuard(guard, seen, true)) === 'deleted'
+}
+
+// Release this caller's own guard: delete it only while it still holds
+// `token` (one broken as stale is another caller's now), waiting out a busy
+// breaker.
+export async function releaseGuard(guard: string, token: string): Promise<void> {
+  const until = Date.now() + GUARD_WAIT_MS
+  while ((await deleteGuard(guard, token, false)) === 'busy') {
+    if (Date.now() >= until) throw new Failure(`cannot release the guard ${guard}: its breaker stays busy`, 1)
+    await sleep(2)
   }
 }
 
@@ -98,8 +122,7 @@ async function underGuard<T>(file: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn()
   } finally {
-    // Only this caller's own guard: one broken as stale is another's now.
-    if ((await tokenOf(guard)) === token) await rm(guard, { force: true })
+    await releaseGuard(guard, token)
   }
 }
 

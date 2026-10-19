@@ -1,12 +1,12 @@
 // Lock races. These few tests call lock.ts's exported functions, not the CLI:
 // the interleavings they check cannot be driven through `review.ts route`.
 import assert from 'node:assert/strict'
-import { readFile, stat, utimes, writeFile } from 'node:fs/promises'
+import { readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Failure } from './cli.ts'
-import { breakGuard, releaseLock, takeLock, whileHolding } from './lock.ts'
+import { breakGuard, releaseGuard, releaseLock, takeLock, whileHolding } from './lock.ts'
 import { tempDir } from './test-helpers.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -120,4 +120,31 @@ test('guard race: of callers that saw one stale guard, one breaks it, and the fr
   assert.equal(await readFile(guard, 'utf8'), fresh)
   release()
   await a
+})
+
+test('guard race: a holder whose release waits on a busy breaker never deletes the guard that replaced its own', async (t) => {
+  const file = join(await tempDir(t), 'pr-42.lock')
+  const guard = `${file}.guard`
+  const breaker = `${guard}.break`
+  // Holder A owns the guard with token 'a', then stalls before its release.
+  await writeFile(guard, `${JSON.stringify({ token: 'a' })}\n`)
+  // B holds the breaker: it is breaking A's guard as stale right now.
+  await writeFile(breaker, 'b\n')
+  let done = false
+  const releasing = releaseGuard(guard, 'a').then(() => (done = true))
+  await sleep(20)
+  assert.equal(done, false, 'the release waits while the breaker is held')
+  // B deletes A's guard, takes a fresh one with token 'b', and frees the breaker.
+  await writeFile(guard, `${JSON.stringify({ token: 'b' })}\n`)
+  await rm(breaker)
+  await releasing
+  assert.equal(await readFile(guard, 'utf8'), `${JSON.stringify({ token: 'b' })}\n`)
+})
+
+test('guard: a holder release deletes its own guard', async (t) => {
+  const file = join(await tempDir(t), 'pr-42.lock')
+  const guard = `${file}.guard`
+  await writeFile(guard, `${JSON.stringify({ token: 'a' })}\n`)
+  await releaseGuard(guard, 'a')
+  assert.equal(await stat(guard).then(() => true, () => false), false)
 })
