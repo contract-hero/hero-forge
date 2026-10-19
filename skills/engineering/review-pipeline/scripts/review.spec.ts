@@ -10,7 +10,10 @@ const SUBCOMMANDS: [string, string][] = [
   ['app-token', 'usage: review.ts app-token --repo O/R [--app reviewer|implementer] [--config <path>] --check | --login'],
   ['post-review', 'usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R'],
   ['reply', 'usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>'],
-  ['implementer', '  review.ts implementer push    --repo O/R --branch <name> [--config <path>]   (in the repo\'s worktree)'],
+  ['implementer', '  review.ts implementer push    --repo O/R --branch <name> [--force-with-lease <old tip sha>] [--config <path>]   (in the repo\'s worktree)'],
+  ['handoff', 'usage: review.ts handoff --app reviewer|implementer --repo O/R --pr N --kind review-posted|recheck-failed|adjudicated --round R [--config <path>]'],
+  ['lock', 'usage: review.ts lock release --pr N | --issue N --token <lock_token>'],
+  ['pause', '  review.ts pause write  --repo O/R --issue N | --pr N --reason <the question>'],
   [
     'codex-exec',
     'usage: review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file> [--schema <file>] [--log <file>] [--config <path>]',
@@ -24,7 +27,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['reconcile', 'usage: review.ts reconcile --repo O/R   (in a checkout of the repo, as route)'],
 ]
 
-const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'] }
+const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'], lock: ['release'], pause: ['write'] }
 
 for (const [name, line] of SUBCOMMANDS) {
   test(`${name} --help prints a summary and the usage to stdout, and exits 0`, async () => {
@@ -45,7 +48,7 @@ for (const [name, line] of SUBCOMMANDS) {
 
   test(`${name} with an unknown option exits 2 with the same usage text that --help prints`, async () => {
     const help = await runCli([name, '--help'])
-    // stack, run-state and implementer take a command first; give them one, so the
+    // stack, run-state, implementer, lock and pause take a command first; give them one, so the
     // unknown option reaches the option parser.
     const command = COMMANDS_FIRST[name] ?? []
     const { code, stdout, stderr } = await runCli([name, ...command, '--no-such-option'])

@@ -9,7 +9,10 @@ import { main as codexExec } from './codex-exec.ts'
 import { main as codexReview } from './codex-review.ts'
 import { main as config } from './config.ts'
 import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as merge } from './finish.ts'
+import { main as handoff } from './handoff-post.ts'
 import { main as implementer } from './implementer.ts'
+import { main as lock } from './lock.ts'
+import { main as pause } from './pause.ts'
 import { main as postReview } from './post-review.ts'
 import { main as reconcile } from './reconcile.ts'
 import { main as reply } from './reply.ts'
@@ -25,6 +28,9 @@ const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
   'post-review': postReview,
   reply,
   implementer,
+  handoff,
+  lock,
+  pause,
   'codex-exec': codexExec,
   'codex-review': codexReview,
   'merge-gate': mergeGate,

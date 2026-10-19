@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { Failure, isRepo } from './cli.ts'
+import { Failure, isRepo, parse, positive, repoOption, runMain, usageFor } from './cli.ts'
 import { stateRoot } from './run-state.ts'
 
 export type PauseSubject = { kind: 'issue' | 'pr'; number: number }
@@ -85,3 +85,36 @@ export async function deletePause(subject: PauseSubject): Promise<boolean> {
     throw error
   }
 }
+
+const usage = usageFor('pause')
+
+// `review.ts pause` (usage in the table in cli.ts): the AFK skills write the
+// record at a one-way door, and the resumed run reads and deletes it.
+async function pause(argv: string[]): Promise<string> {
+  const [command, ...rest] = argv
+  if (command !== 'write' && command !== 'read' && command !== 'delete') throw usage(`unknown command "${command ?? ''}"`)
+  const { values } = parse(
+    rest,
+    { repo: { type: 'string' }, issue: { type: 'string' }, pr: { type: 'string' }, reason: { type: 'string' } },
+    usage,
+  )
+  if ((values.issue === undefined) === (values.pr === undefined)) throw usage(`pause ${command} needs one of --issue and --pr`)
+  const subject: PauseSubject =
+    values.pr !== undefined ? { kind: 'pr', number: positive('pr', values.pr, usage) } : { kind: 'issue', number: positive('issue', values.issue, usage) }
+  if (command === 'write') {
+    const repo = repoOption(values.repo, usage)
+    const reason = values.reason?.trim() ?? ''
+    if (reason === '') throw usage('pause write needs --reason: the question the run asks')
+    const record: PauseRecord = { ...subject, repo, reason, paused_at: new Date().toISOString() }
+    await writePause(record)
+    return `${JSON.stringify(record)}\n`
+  }
+  if (command === 'read') {
+    const record = await readPause(subject)
+    if (record === null) throw new Failure(`no pause record for ${subject.kind} #${subject.number} at ${pauseFile(subject)}`, 3)
+    return `${JSON.stringify(record)}\n`
+  }
+  return `${JSON.stringify({ ...subject, deleted: await deletePause(subject) })}\n`
+}
+
+export const main = runMain('pause', pause)

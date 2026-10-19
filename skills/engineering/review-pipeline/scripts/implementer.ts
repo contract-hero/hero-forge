@@ -1,9 +1,10 @@
 // `review.ts implementer` (usage in the table in cli.ts).
 // Act as the Implementer App with no token in the agent's hands: each verb
 // mints the App's installation token in this process, uses it, and prints
-// only what it did. `push` pushes a local branch, `pr` opens a draft pull
-// request (so the App is its author), and `comment` posts one comment on an
-// issue or a pull request.
+// only what it did. `push` pushes a local branch (with --force-with-lease, a
+// restacked one), `pr` opens a draft pull request (so the App is its author),
+// `comment` posts one comment on an issue or a pull request, and `label` adds
+// or removes one label there.
 //
 // Exit 3: the config has no `implementer.app: enabled` (the Implementer App's
 // own switch, apart from the reviewer App's `app: enabled`), so the caller
@@ -34,6 +35,9 @@ const OPTIONS = {
   title: { type: 'string' },
   'body-file': { type: 'string' },
   issue: { type: 'string' },
+  'force-with-lease': { type: 'string' },
+  add: { type: 'string' },
+  remove: { type: 'string' },
 } as const
 
 type Values = { [K in keyof typeof OPTIONS]?: string }
@@ -116,9 +120,16 @@ function scratchEnv(scratch: string, token?: string): NodeJS.ProcessEnv {
 // token, also when it is written after the mint. No upstream is set: the
 // remote is a URL, not `origin`. Hooks are off, and no prompt or askpass can
 // stand in for the App.
+//
+// With --force-with-lease <old tip>, the push replaces the branch on GitHub
+// only while GitHub still has that tip there: a restack rewrites the layer
+// branch from the tip it started at. The scratch repo has no remote-tracking
+// ref, so the lease always names the tip.
 async function push(repo: string, values: Values): Promise<string> {
   const branch = values.branch
   if (branch === undefined || branch === '') throw usage('--branch is required')
+  const lease = values['force-with-lease']
+  if (lease !== undefined && !/^[0-9a-f]{40}$/.test(lease)) throw usage('--force-with-lease must be the full sha of the old tip on GitHub')
   const app = await implementerApp(repo, values.config)
   const local = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])
   refuse(local.code === 0, `no local branch ${branch} in this repo: run push in the worktree that holds it`)
@@ -140,7 +151,8 @@ async function push(repo: string, values: Values): Promise<string> {
     const pushed = await git(
       ['-c', 'credential.helper=', '-c', `credential.helper=${HELPER}`, '-c', 'http.extraHeader=', '-c', 'http.sslVerify=true',
         '-c', 'http.proxy=', '-c', 'core.askPass=', '-c', 'core.hooksPath=/dev/null',
-        'push', `https://github.com/${repo}.git`, `${commit}:refs/heads/${branch}`],
+        'push', ...(lease === undefined ? [] : [`--force-with-lease=refs/heads/${branch}:${lease}`]),
+        `https://github.com/${repo}.git`, `${commit}:refs/heads/${branch}`],
       scratchEnv(scratch, token),
       scratch,
     )
@@ -190,6 +202,26 @@ async function pr(repo: string, values: Values): Promise<string> {
   return `${JSON.stringify({ number: opened.number, url: opened.html_url, as: me.login })}\n`
 }
 
+// Add or remove one label on an issue or a PR. Removing a label that is not
+// there (GitHub's 404) is not an error: a resumed run may repeat it.
+async function label(repo: string, values: Values): Promise<string> {
+  const issue = positive('issue', values.issue, usage)
+  if ((values.add === undefined) === (values.remove === undefined)) throw usage('label needs one of --add and --remove')
+  const name = (values.add ?? values.remove ?? '').trim()
+  if (name === '') throw usage('the label name is empty')
+  const app = await implementerApp(repo, values.config)
+  const me = await app()
+  if (values.add !== undefined) {
+    const result = await gh(['api', '-X', 'POST', `repos/${repo}/issues/${issue}/labels`, '--input', '-'], JSON.stringify({ labels: [name] }), me.token)
+    refuse(result.code === 0, `GitHub rejected the label ${name} on #${issue}: ${oneLine(result.stderr || result.stdout)}`)
+    return `${JSON.stringify({ issue, label: name, added: true, as: me.login })}\n`
+  }
+  const result = await gh(['api', '-X', 'DELETE', `repos/${repo}/issues/${issue}/labels/${encodeURIComponent(name)}`], '', me.token)
+  const absent = result.code !== 0 && /HTTP 404/.test(result.stderr)
+  refuse(result.code === 0 || absent, `GitHub rejected the removal of the label ${name} on #${issue}: ${oneLine(result.stderr || result.stdout)}`)
+  return `${JSON.stringify({ issue, label: name, removed: !absent, as: me.login })}\n`
+}
+
 async function dispatch(argv: string[]): Promise<string> {
   const [command, ...rest] = argv
   const { values } = parse(rest, OPTIONS, usage)
@@ -201,6 +233,8 @@ async function dispatch(argv: string[]): Promise<string> {
       return pr(repo, values)
     case 'comment':
       return comment(repo, values)
+    case 'label':
+      return label(repo, values)
     default:
       throw usage(`unknown command "${command ?? ''}"`)
   }

@@ -1,13 +1,14 @@
 // Lock races. These few tests call lock.ts's exported functions, not the CLI:
 // the interleavings they check cannot be driven through `review.ts route`.
+// The last ones drive `review.ts lock release`.
 import assert from 'node:assert/strict'
 import { readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Failure } from './cli.ts'
-import { breakGuard, releaseGuard, releaseLock, takeLock, whileHolding } from './lock.ts'
-import { tempDir } from './test-helpers.ts'
+import { breakGuard, releaseGuard, releaseLock, takeIssueLock, takeLock, takePrLock, whileHolding } from './lock.ts'
+import { baseEnv, runCli, tempDir } from './test-helpers.ts'
 
 const HOUR = 60 * 60 * 1000
 
@@ -147,4 +148,67 @@ test('guard: a holder release deletes its own guard', async (t) => {
   await writeFile(guard, `${JSON.stringify({ token: 'a' })}\n`)
   await releaseGuard(guard, 'a')
   assert.equal(await stat(guard).then(() => true, () => false), false)
+})
+
+// `review.ts lock release`: the launched run gives back the lock that route
+// took, with the lock_token route printed. The lock is taken in this process
+// (as route takes it) and released through the CLI.
+async function lockRoot(t: Parameters<typeof tempDir>[0]): Promise<{ root: string; cli: (...args: string[]) => ReturnType<typeof runCli> }> {
+  const root = await tempDir(t)
+  const before = process.env.HERO_FORGE_STATE_DIR
+  process.env.HERO_FORGE_STATE_DIR = root
+  t.after(async () => {
+    if (before === undefined) delete process.env.HERO_FORGE_STATE_DIR
+    else process.env.HERO_FORGE_STATE_DIR = before
+  })
+  return { root, cli: (...args) => runCli(['lock', ...args], { env: { ...baseEnv(), HERO_FORGE_STATE_DIR: root } }) }
+}
+
+for (const [kind, take, file] of [
+  ['pr', takePrLock, (root: string) => join(root, 'locks', 'pr-42.lock')],
+  ['issue', takeIssueLock, (root: string) => join(root, 'locks', 'issue-42.lock')],
+] as const) {
+  test(`lock release --${kind} with the owner token removes the lock and prints released: true`, async (t) => {
+    const s = await lockRoot(t)
+    const token = await take(42, { app: 'implementer' })
+    assert.ok(token !== null)
+    const result = await s.cli('release', `--${kind}`, '42', '--token', token)
+    assert.equal(result.stderr, '')
+    assert.equal(result.code, 0)
+    assert.deepEqual(JSON.parse(result.stdout), { [kind]: 42, released: true })
+    await assert.rejects(stat(file(s.root)))
+    assert.ok((await take(42, {})) !== null, 'the lock is free again')
+  })
+
+  test(`lock release --${kind} with a token that no longer owns the lock exits 0, released: false, and keeps the new lock`, async (t) => {
+    const s = await lockRoot(t)
+    const token = await take(42, {})
+    assert.ok(token !== null)
+    const result = await s.cli('release', `--${kind}`, '42', '--token', 'f'.repeat(32))
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { [kind]: 42, released: false })
+    assert.equal(await tokenIn(file(s.root)), token)
+  })
+
+  test(`lock release --${kind} of a lock that is gone exits 0, released: false`, async (t) => {
+    const s = await lockRoot(t)
+    const result = await s.cli('release', `--${kind}`, '42', '--token', 'a'.repeat(32))
+    assert.equal(result.code, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { [kind]: 42, released: false })
+  })
+}
+
+test('lock release needs exactly one of --pr and --issue, and a lock token: else a usage error (exit 2)', async (t) => {
+  const s = await lockRoot(t)
+  for (const args of [
+    ['release', '--token', 'a'.repeat(32)],
+    ['release', '--pr', '1', '--issue', '2', '--token', 'a'.repeat(32)],
+    ['release', '--pr', '1'],
+    ['release', '--pr', '1', '--token', '../../etc'],
+    ['take', '--pr', '1', '--token', 'a'.repeat(32)],
+  ]) {
+    const result = await s.cli(...args)
+    assert.equal(result.code, 2, args.join(' '))
+    assert.match(result.stderr, /^review\.ts lock: .*\nusage: review\.ts lock release/, args.join(' '))
+  }
 })

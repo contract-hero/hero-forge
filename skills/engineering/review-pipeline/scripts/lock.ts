@@ -33,7 +33,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { Failure, LOCK_TTL_HOURS } from './cli.ts'
+import { Failure, LOCK_TTL_HOURS, parse, positive, runMain, usageFor } from './cli.ts'
 import { stateRoot } from './run-state.ts'
 
 const HOUR = 60 * 60 * 1000
@@ -213,3 +213,27 @@ export function takeIssueLock(issue: number, holder: Record<string, unknown>): P
 export function releaseIssueLock(issue: number, token: string): Promise<boolean> {
   return releaseLock(issueLockFile(issue), token)
 }
+
+const usage = usageFor('lock')
+
+// `review.ts lock release` (usage in the table in cli.ts): the launched run
+// gives back the lock route took, with the lock_token route printed. A token
+// that no longer owns the lock (it expired and another run took it, or it is
+// gone) is not an error: the run is over either way, so it exits 0 with
+// released: false.
+async function lock(argv: string[]): Promise<string> {
+  const [command, ...rest] = argv
+  if (command !== 'release') throw usage(`unknown command "${command ?? ''}"`)
+  const { values } = parse(rest, { pr: { type: 'string' }, issue: { type: 'string' }, token: { type: 'string' } }, usage)
+  if ((values.pr === undefined) === (values.issue === undefined)) throw usage('lock release needs one of --pr and --issue')
+  const token = values.token
+  if (token === undefined || !/^[0-9a-f]{32}$/.test(token)) throw usage('--token must be the lock_token that route printed')
+  if (values.pr !== undefined) {
+    const pr = positive('pr', values.pr, usage)
+    return `${JSON.stringify({ pr, released: await releasePrLock(pr, token) })}\n`
+  }
+  const issue = positive('issue', values.issue, usage)
+  return `${JSON.stringify({ issue, released: await releaseIssueLock(issue, token) })}\n`
+}
+
+export const main = runMain('lock', lock)
