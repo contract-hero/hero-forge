@@ -1,5 +1,10 @@
 # hero-forge
 
+## 1.0.9
+
+- `review-pipeline`: a new `review.ts implementer push|pr|comment` lets the **Implementer** push a branch, open a draft PR and comment as `contract-implementer[bot]`, minting the Implementer App token in its own process (it never reaches argv, a file or the output). `reply` posts as the PR author: as the Implementer App on a PR that App opened, as the user otherwise.
+- `implement-pr`: with `--afk` (passed by the T3 router), steps 4 and 5 push and open the draft PR as the Implementer App. Without it, nothing changes.
+
 ## 1.0.8
 
 - `review-pipeline`: a new `review.ts route --app reviewer --event <name> --delivery <id> --payload <file>` turns one GitHub webhook delivery into one decision, `review` or `ignore` with a reason, for the T3 router. A PR by `contract-implementer[bot]` gets `review` on `opened` or `reopened`; a PR by the maintainer (the local `gh` login) on `ready_for_review`, or on a non-draft `opened`/`reopened`. A push never starts anything, and other authors are ignored. It takes a per-PR lock (3-hour TTL), dedupes delivery ids, and counts runs against a rolling 24-hour cap per App. `review.ts config` gains `paused` (default `false`) and `app_daily_runs` (default `20`).
