@@ -347,3 +347,16 @@ test('a 404 on the detail read names the delivery, not the credentials', async (
   assert.match(stderr, new RegExp(`delivery ${GUID} \\(id 902\\) is listed, but GitHub has no detail for it \\(HTTP 404\\)`))
   assert.doesNotMatch(stderr, /Fix the App credentials/)
 })
+
+test('a non-404 failure on the detail read stays a broken App: exit 4, its HTTP status, and no payload file', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      'GET /app/hook/deliveries/902': { status: 500, body: { message: 'Server Error' } },
+    },
+  })
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(code, 4)
+  assert.match(stderr, /read the webhook delivery failed: HTTP 500 \(Server Error\)/)
+  await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
+})
