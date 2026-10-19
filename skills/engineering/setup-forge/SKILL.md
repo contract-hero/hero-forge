@@ -249,7 +249,7 @@ The T3 tasks copy the provider, the model and the runtime mode of the thread tha
 2. Call `request_secret` with the label `<App slug> webhook secret` and the reason "T3 checks the signature of each GitHub delivery with it. Put the same value in the App's Webhook secret." A `secretRef` works once: one request per App.
 3. Call `schedule_task` with:
    - `title`: `hero-forge router: <app>`;
-   - `prompt`: the text of [router-prompt.md](./router-prompt.md), with each `<<app>>` replaced by `reviewer` or `implementer`, and each `<<clone_root>>` by the absolute path of the folder that holds this repo's checkout (the router clones a repo it does not know there). Leave each `{{...}}` as it is: T3 fills it from the delivery;
+   - `prompt`: the text of [router-prompt.md](./router-prompt.md), with each `<<app>>` replaced by `reviewer` or `implementer`, and each `<<clone_root>>` by the absolute path of the folder that holds this repo's main clone: the parent of the `workspaceRoot` of this repo's project in `t3_project_list`, not of a T3 worktree (the router clones a repo it does not know there). Leave each `{{...}}` as it is: T3 fills it from the delivery;
    - `schedule`: `{type: 'webhook', signature: {header: 'x-hub-signature-256', encoding: 'hex', prefix: 'sha256=', secretRef: <the secretRef>}}`;
    - `bindToCurrentThread`: `false`, so each delivery gets a fresh thread.
 4. Report the task's `webhookUrl`: the user pastes it in the App's Webhook URL. No `webhookUrl` means this environment has no T3 Connect managed tunnel: tell the user to turn on T3 Connect remote access (6.1), then read the task again with `list_scheduled_tasks`.
@@ -275,7 +275,7 @@ The pages, for an App an organization owns: `https://github.com/organizations/<o
 
 **6.4 The reconcile task.** Once both Apps pass. `list_scheduled_tasks`: a task titled `hero-forge reconcile: O/R` already exists: keep it. Else call `schedule_task` with the `title` `hero-forge reconcile: O/R`, the text of [reconcile-prompt.md](./reconcile-prompt.md) as the `prompt` with each `<<repo>>` replaced by `O/R`, `schedule` `{type: 'interval', everyMs: 3600000}`, and `bindToCurrentThread` `false`. Report its `nextRunAt`. Each hour it starts the work that a missed delivery should have started.
 
-**6.5 The ruleset.** A ruleset changes how every change reaches the default branch, so ask before you create it: create it now (recommended), or not now. Say what it does: nobody pushes to the default branch directly any more, and each pull request merges only with the `contract-reviewer/gate` status, which only the reviewer App posts. Without it, AFK mode still runs, but nothing on GitHub stops a merge that skipped the gate.
+**6.5 The ruleset.** A ruleset changes how every change reaches the default branch, so ask before you create it: create it now (recommended), or not now. Say what it does: nobody pushes to the default branch directly any more, and each pull request merges only with the `contract-reviewer/gate` status, which only the reviewer App posts. Without it, AFK mode still runs, but nothing on GitHub stops a merge that skipped the gate. Once the ruleset exists, the pull request that lands this config also needs the gate status: a `/review-pipeline` run by hand with the reviewer App posts it.
 
 On yes, write this JSON to a file outside the repo, with `<app_id>` the `app_id` that `app-check --app reviewer` printed:
 
