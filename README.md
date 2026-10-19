@@ -15,7 +15,23 @@ claude plugin install hero-forge@contract-hero
 
 Updates itself when the marketplace has auto-update on. If `mattpocock-skills` is also installed, uninstall it (`claude plugin uninstall mattpocock-skills`): both plugins ship skills with the same names.
 
-Then run `/setup-forge` once per repo. It asks which issue tracker you use, which labels you apply when you triage, where docs go, and how pull requests get reviewed (`/review-pipeline`): the runtime, the number of reviewer pairs, the models, the round limit, whether a reviewer GitHub App posts the reviews, and whether AFK mode is on (GitHub events start the runs through two GitHub Apps and T3 Code).
+Then run `/setup-forge` once per repo. It asks which issue tracker you use, which labels you apply when you triage, where docs go, and how pull requests get reviewed (`/review-pipeline`): the runtime, the number of reviewer pairs, the models, the round limit, whether a reviewer GitHub App posts the reviews, and whether AFK mode is on (see [AFK mode](#afk-mode)).
+
+## AFK mode
+
+In AFK mode, GitHub events start the runs: you type no slash command.
+
+**What it does.** You add the `ready-for-agent` label to a spec, or to a ticket with no parent, that you wrote. The `contract-implementer` App builds it test-first and opens a draft PR. The `contract-reviewer` App reviews the PR, and the Implementer answers each finding. After the re-check passes, the reviewer App posts the `contract-reviewer/gate` status and approves, and the PR merges. A spec with sub-issues builds as a stack of PRs. A one-way door (a data shape, a public API, a new dependency, a migration, a destructive action) pauses the run: a comment with the question, the `needs-info` label and a push notification. Your reply comment resumes it.
+
+**What it needs.**
+
+- Two GitHub Apps, `contract-implementer` and `contract-reviewer`, that you create yourself (`/setup-forge` never creates one), with their credentials in `~/.config/hero-forge/`.
+- T3 Code, with T3 Connect linked and "Hold webhook requests while this environment is offline" on.
+- Codex for the reviewers, when the review runtime is `codex`.
+
+`/setup-forge` writes the config, creates the router webhook task of each App and the hourly reconcile task, and checks each App setting. After it asks you, it adds a ruleset to the default branch that requires a pull request and the gate status.
+
+**How to control it.** `paused: true` in `docs/agents/review.md` on the default branch stops both Apps. Each App has a daily run cap, and each issue has an attempt cap. Only your own label, on an issue you wrote, starts a build. Each thread the pipeline starts settles itself when it needs nothing from you, so your active T3 list holds only the threads that need you.
 
 ## Skills
 
@@ -32,12 +48,12 @@ Not sure where to start? Ask `/ask-forge`. The skills below are grouped by flow,
 - **[handoff](./skills/productivity/handoff/SKILL.md)**: Compact the current conversation into a handoff document so another agent can continue the work.
 - **[to-spec](./skills/engineering/to-spec/SKILL.md)**: Turn the current conversation into a spec and publish it to the issue tracker.
 - **[to-tickets](./skills/engineering/to-tickets/SKILL.md)**: Break a plan, spec, or conversation into tracer-bullet tickets, each declaring its blocking edges.
-- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge.
+- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge, or, in [AFK mode](#afk-mode), stop at the draft PR.
 - **[implement-spec-stack](./skills/engineering/implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket, reviewed layer by layer and then as a whole, and landed bottom-up.
 - **[tdd](./skills/engineering/tdd/SKILL.md)**: Test-driven development with a red-green loop. Builds features or fixes bugs one vertical slice at a time.
 - **[pr](./skills/engineering/pr/SKILL.md)**: The shape a pull request body should take: the smallest visual that makes the change clear, before/after evidence, and a merge-danger call.
 - **[code-review](./skills/engineering/code-review/SKILL.md)**: Two-axis review of the diff since a fixed point, **Standards** and **Spec**, run as parallel sub-agents and reported in your session.
-- **[review-pipeline](./skills/engineering/review-pipeline/SKILL.md)**: Take one pull request through an independent review on GitHub: an Orchestrator runs Reviewer pairs, consolidates their findings, gates the fixes, and merges.
+- **[review-pipeline](./skills/engineering/review-pipeline/SKILL.md)**: Take one pull request through an independent review on GitHub: an Orchestrator runs Reviewer pairs, consolidates their findings, gates the fixes, and merges. In [AFK mode](#afk-mode) it runs as one part per GitHub event.
 - **[retro](./skills/engineering/retro/SKILL.md)**: After a session, suggest improvements to the coding agent's environment (navigation, automated checks, coding standards, steering files, tooling), most severe first.
 
 ### On-ramps
