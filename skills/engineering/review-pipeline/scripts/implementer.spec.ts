@@ -49,26 +49,34 @@ test('comment posts the body on the issue as the Implementer App and prints no t
   assert.deepEqual(JSON.parse(calls[0]!.stdin), { body: 'Paused: a one-way door needs your call.' })
 })
 
-test('comment without "app: enabled" exits 3, mints nothing and posts nothing', async (t) => {
-  const s = await setup(t, { config: NO_APP })
-  const body = await s.file('comment.md', 'hello')
-  const result = await s.cli('comment', '--issue', '7', '--body-file', body)
-  assert.equal(result.code, 3)
-  assert.equal(result.stdout, '')
-  assert.match(result.stderr, /^review\.ts implementer: no implementer App configured for this repo \(no "app: enabled" in the config\): push and post as the user\n$/)
-  assert.deepEqual(await s.gh.calls(), [])
-  assert.deepEqual(s.api.requests, [])
-})
+// The posting verbs, with arguments that pass the usage checks.
+const POSTS: [string, (body: string) => string[]][] = [
+  ['comment', (body) => ['comment', '--issue', '7', '--body-file', body]],
+  ['pr', (body) => ['pr', '--head', 'ticket/27-x', '--base', 'main', '--title', 'T', '--body-file', body]],
+]
 
-test('comment with a broken Implementer App exits 4 and posts nothing, as the App or as the user', async (t) => {
-  const s = await setup(t, { broken: true })
-  const body = await s.file('comment.md', 'hello')
-  const result = await s.cli('comment', '--issue', '7', '--body-file', body)
-  assert.equal(result.code, 4)
-  assert.equal(result.stdout, '')
-  assert.match(result.stderr, /^review\.ts implementer: the implementer App is enabled but its env file .*implementer-app\.env does not exist/)
-  assert.deepEqual(await s.gh.calls(), [])
-})
+for (const [verb, args] of POSTS) {
+  test(`${verb} without "app: enabled" exits 3, mints nothing and posts nothing`, async (t) => {
+    const s = await setup(t, { config: NO_APP })
+    const body = await s.file('body.md', 'hello')
+    const result = await s.cli(...args(body))
+    assert.equal(result.code, 3)
+    assert.equal(result.stdout, '')
+    assert.match(result.stderr, /^review\.ts implementer: no implementer App configured for this repo \(no "app: enabled" in the config\): push and post as the user\n$/)
+    assert.deepEqual(await s.gh.calls(), [])
+    assert.deepEqual(s.api.requests, [])
+  })
+
+  test(`${verb} with a broken Implementer App exits 4 and posts nothing, as the App or as the user`, async (t) => {
+    const s = await setup(t, { broken: true })
+    const body = await s.file('body.md', 'hello')
+    const result = await s.cli(...args(body))
+    assert.equal(result.code, 4)
+    assert.equal(result.stdout, '')
+    assert.match(result.stderr, /^review\.ts implementer: the implementer App is enabled but its env file .*implementer-app\.env does not exist/)
+    assert.deepEqual(await s.gh.calls(), [])
+  })
+}
 
 for (const [name, text, message] of [
   ['a token', `see ghs_${'Z9'.repeat(18)}`, /contains what looks like a GitHub token\. Nothing was posted/],
