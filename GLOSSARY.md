@@ -44,6 +44,17 @@ The **Implementer**'s answer to a posted review: it accepts or refutes each find
 **Re-checker**:
 A fresh, read-only agent that checks an **Adjudication** against the code: each finding is fixed, validly refuted, or still open. It is never the **Implementer** or that round's **Orchestrator**.
 
+**AFK run**:
+A run of a skill that a T3 router task starts from a GitHub event, with no person at the keyboard. It decides and logs each two-way decision itself, and it stops at a one-way door with a **Pause record**.
+_Avoid_: unattended run, headless run
+
+**Hand-off marker**:
+The hidden line that ends the last comment of one part of an **AFK run** and wakes the next part through the other App's router. Only the helper CLI writes it, and it is not the hidden marker that tags each post of the **Review pipeline**.
+_Avoid_: trigger comment, done marker
+
+**Pause record**:
+The file that holds the one-way-door question of a paused **AFK run** until the maintainer answers it, with what the resumed run needs to start again. The maintainer's reply turns it into a resume.
+
 ## Relationships
 
 - An **Issue tracker** holds many **Issues**
@@ -53,6 +64,9 @@ A fresh, read-only agent that checks an **Adjudication** against the code: each 
 - Each **Reviewer pair** is one **Standards** reviewer plus one **Spec** reviewer
 - Every posted review is followed by **Adjudication** by the pull request's **Implementer**
 - Round 1 is the posted review, its **Adjudication**, and one check by a **Re-checker**; each later round is an **Adjudication** of the findings still open plus a new check, with no new review, up to the repo's round limit
+- A part of an **AFK run** in the **Review pipeline** that leaves work for the other App ends with one **Hand-off marker**, which starts the next part; a part that ends the run (a merge or a stop) posts none
+- An **AFK run** of the **Review pipeline** is split into parts (`review`, `adjudicate`, `recheck`), each in a fresh thread
+- A **Pause record** blocks an **AFK run** until the maintainer replies on its issue or pull request
 
 ## Flagged ambiguities
 
