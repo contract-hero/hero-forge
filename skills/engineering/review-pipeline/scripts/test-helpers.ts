@@ -242,7 +242,9 @@ export async function appKey(dir: string, name = 'reviewer-app.pem'): Promise<{ 
 }
 
 // `headers` go out with the answer (a `Link` header for a paged list).
-export type FakeApiRoute = { status: number; body: unknown; headers?: Record<string, string> }
+// `raw`: send this exact text as the body in place of JSON.stringify(body), for
+// JSON a JS value cannot hold (an integer above 2^53).
+export type FakeApiRoute = { status: number; body: unknown; headers?: Record<string, string>; raw?: string }
 
 export type FakeApiRequest = {
   method: string
@@ -313,7 +315,7 @@ export async function fakeGitHubApi(
         : (routes[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } })
       void (onRequest?.(request) ?? Promise.resolve()).then(() => {
         res.writeHead(route.status, { 'content-type': 'application/json', ...route.headers })
-        res.end(JSON.stringify(route.body))
+        res.end(route.raw ?? JSON.stringify(route.body))
       })
     })
   })

@@ -150,7 +150,7 @@ async function request<T>(step: string, jwt: string, method: string, path: strin
   }
   let parsed: unknown = null
   try {
-    parsed = await response.json()
+    parsed = parseExact(await response.text())
   } catch {
     // Some error answers have no JSON body; the status says enough.
   }
@@ -159,6 +159,14 @@ async function request<T>(step: string, jwt: string, method: string, path: strin
     throw new ApiFailure(`${step} failed: HTTP ${response.status}${typeof said === 'string' ? ` (${said})` : ''}. ${FIX}.`, response.status)
   }
   return { parsed: (parsed ?? {}) as T, link: response.headers.get('link') }
+}
+
+// JSON.parse, but an integer a JS number cannot hold exactly (above 2^53, as
+// GitHub's webhook delivery ids are) stays as its exact digits, a string.
+function parseExact(text: string): unknown {
+  return JSON.parse(text, (_key, value, context?: { source?: string }) =>
+    typeof value === 'number' && !Number.isSafeInteger(value) && /^-?\d+$/.test(context?.source ?? '') ? context!.source : value,
+  )
 }
 
 // An HTTP error answer from GitHub (exit 4), with its status, so a caller can
