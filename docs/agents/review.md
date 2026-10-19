@@ -6,7 +6,8 @@ Every pull request in this repo goes through `review-pipeline`: an Orchestrator 
 - Orchestrator: `gpt-6-astra` at low effort. Reviewers: `gpt-6.1-sol` at high effort.
 - Reviewer pairs per round: 2.
 - Failed re-check rounds before the pipeline stops and asks: 2.
-- Reviewer identity: the `contract-reviewer` GitHub App (`contract-reviewer[bot]`). It approves the PR or requests changes.
+- Reviewer identity: the `contract-reviewer` GitHub App (`contract-reviewer[bot]`). It approves the PR or requests changes, and posts the `contract-reviewer/gate` status.
+- AFK mode (ADR 0006): on. The `contract-implementer` App builds issues labelled `ready-for-agent` by the maintainer and adjudicates reviews; each App runs at most 20 times a day, and an issue gets 3 build attempts. `paused: true` stops both Apps.
 
 Edit the block below, or re-run `/setup-forge`. Agents read only the block.
 
@@ -21,4 +22,10 @@ reviewer:
   effort: high
 max_rounds: 2
 app: enabled
+paused: false
+app_daily_runs: 20
+implementer:
+  app: enabled
+  attempts: 3
+  daily_runs: 20
 ```
