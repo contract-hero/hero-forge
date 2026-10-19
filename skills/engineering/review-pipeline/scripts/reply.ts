@@ -11,10 +11,10 @@
 // The PR author answers the review. On a PR the Implementer App opened (an
 // AFK build), the replies and the comment post as that App, with a token this
 // process mints; on any other PR they post as the user. GitHub says who the
-// author is: with `app: enabled`, a bot author is checked against the login
-// the Implementer App's own credentials give. With no Implementer env file,
-// the user answers. Broken Implementer credentials on a bot-authored PR exit
-// 4 and post nothing.
+// author is: with `implementer.app: enabled`, a bot author is checked against
+// the login the Implementer App's own credentials give. Without it, or with
+// no Implementer env file, the user answers. Broken Implementer credentials
+// on a bot-authored PR exit 4 and post nothing.
 import { access } from 'node:fs/promises'
 import { appEnvPath } from './app-token.ts'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
@@ -129,7 +129,7 @@ async function reply(argv: string[]): Promise<string> {
   const commentPost = { body: summary(round, targets, commentMarker(pr, round, runReview)) }
   refuseSecretsIn([...targets.map((e) => replyPost(pr, round, e)), commentPost], `ledger ${ledgerPath}`)
 
-  const me = await poster(repo, pr, loaded.config.app)
+  const me = await poster(repo, pr, loaded.config.implementer.app)
   const comments = await listInlineComments(repo, pr, me.token)
   const reviewIds = state.reviews.filter((r) => r.kind === 'review').map((r) => r.id)
   const posted = postedFindings(comments, reviewIds)

@@ -5,9 +5,9 @@
 // request (so the App is its author), and `comment` posts one comment on an
 // issue or a pull request.
 //
-// Exit 3: the config has no `app: enabled`, so the caller pushes and posts as
-// the user (the Implementer App answers to that key until the `implementer:`
-// config block gives it its own switch).
+// Exit 3: the config has no `implementer.app: enabled` (the Implementer App's
+// own switch, apart from the reviewer App's `app: enabled`), so the caller
+// pushes and posts as the user.
 // Exit 4: the config is invalid, or the App is enabled but broken. Nothing is
 // pushed or posted, as the App or as the user.
 //
@@ -43,8 +43,8 @@ type Values = { [K in keyof typeof OPTIONS]?: string }
 async function implementerApp(repo: string, config: string | undefined): Promise<() => Promise<Identity>> {
   const loaded = await loadConfig(config)
   if (!loaded.ok) throw new Failure(loaded.message, 4)
-  if (!loaded.config.app) {
-    throw new Failure('no implementer App configured for this repo (no "app: enabled" in the config): push and post as the user', 3)
+  if (!loaded.config.implementer.app) {
+    throw new Failure('no implementer App configured for this repo (no "implementer.app: enabled" in the config): push and post as the user', 3)
   }
   return () => appIdentity(repo, 'implementer')
 }
