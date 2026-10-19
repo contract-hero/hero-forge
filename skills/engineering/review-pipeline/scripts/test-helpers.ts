@@ -349,6 +349,28 @@ export async function implementerApp(
   return { env: { HERO_FORGE_IMPLEMENTER_APP_ENV: envFile, HERO_FORGE_GITHUB_API_URL: api.url }, api }
 }
 
+export const REVIEWER_TOKEN = 'ghs_reviewer0123456789abcdef'
+
+// A working reviewer App for `repo`, as implementerApp gives the Implementer
+// App: a fresh key, its env file, and a fake GitHub API that mints
+// REVIEWER_TOKEN for slug `contract-reviewer`.
+export async function reviewerApp(
+  t: { after: (fn: () => Promise<void>) => void },
+  dir: string,
+  repo: string,
+  options: { missing?: boolean } = {},
+): Promise<{ env: Record<string, string>; api: FakeGitHubApi }> {
+  const key = await appKey(dir, 'reviewer-app.pem')
+  const api = await fakeGitHubApi(t, key.publicKey, {
+    [`GET /repos/${repo}/installation`]: { status: 200, body: { id: 4242 } },
+    'POST /app/installations/4242/access_tokens': { status: 201, body: { token: REVIEWER_TOKEN } },
+    'GET /app': { status: 200, body: { slug: 'contract-reviewer' } },
+  })
+  const envFile = join(dir, 'reviewer-app.env')
+  if (options.missing !== true) await writeFile(envFile, `HERO_FORGE_REVIEWER_APP_ID=555\nHERO_FORGE_REVIEWER_APP_KEY=${key.pem}\n`)
+  return { env: { HERO_FORGE_REVIEWER_APP_ENV: envFile, HERO_FORGE_GITHUB_API_URL: api.url }, api }
+}
+
 // `password` is what the push's own credential config gives a real `git
 // credential fill` for https://github.com, `evil_password` the same for another
 // host (null: no password). `config` is the real `git config --list
@@ -368,7 +390,9 @@ export type FakeGitPush = {
 // How the fake answers a push. `{password}` in `stderr` becomes the password
 // the push's credential config gave, as a git that echoed it would print.
 // With `remote` (a bare repo path) and no failing `exit`, the fake also runs
-// the real push there, with the same options and env, over the file protocol.
+// the real push there, with the same options and env, over the file protocol,
+// and with the push's own flags (a --force-with-lease) before the URL. A real
+// push that fails makes the fake fail with its code.
 export type FakeGitSpec = { exit?: number; stderr?: string; remote?: string }
 
 const fakeGitScript = (realGit: string, log: string, specFile: string) => `import { appendFileSync, readFileSync } from 'node:fs'
@@ -393,7 +417,7 @@ const config = (listed.stdout ?? '').split('\\n').filter((line) => line !== '')
 const spec = JSON.parse(readFileSync(${JSON.stringify(specFile)}, 'utf8'))
 let landed = null
 if (spec.remote !== undefined && (spec.exit ?? 0) === 0) {
-  const real = spawnSync(${JSON.stringify(realGit)}, [...configs.flatMap((c) => ['-c', c]), 'push', '-q', spec.remote, argv.at(-1)],
+  const real = spawnSync(${JSON.stringify(realGit)}, [...configs.flatMap((c) => ['-c', c]), 'push', '-q', ...argv.slice(i + 1, -2), spec.remote, argv.at(-1)],
     { encoding: 'utf8', env: { ...process.env, GIT_ALLOW_PROTOCOL: 'file' } })
   landed = real.status
   if (real.status !== 0) process.stderr.write(real.stderr)
@@ -401,7 +425,7 @@ if (spec.remote !== undefined && (spec.exit ?? 0) === 0) {
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, cwd: process.cwd(), password, evil_password: fill('evil.example'), config,
   env: process.env, landed }) + '\\n')
 process.stderr.write((spec.stderr ?? 'To https://github.com/x/y.git\\n * [new branch] x -> x\\n').replaceAll('{password}', password ?? ''))
-process.exitCode = spec.exit ?? 0
+process.exitCode = spec.exit ?? (landed === null || landed === 0 ? 0 : landed)
 `
 
 // Put a fake `git` first on PATH. Every git command but `push` runs the real

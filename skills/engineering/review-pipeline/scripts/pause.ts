@@ -6,13 +6,21 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { Failure, isRepo } from './cli.ts'
+import { Failure, isRepo, parse, positive, repoOption, runMain, usageFor } from './cli.ts'
 import { stateRoot } from './run-state.ts'
 
 export type PauseSubject = { kind: 'issue' | 'pr'; number: number }
 
 // `reason`: the question the run asks the maintainer. `paused_at`: an ISO time.
-export type PauseRecord = PauseSubject & { repo: string; reason: string; paused_at: string }
+// `branch` and `tip`, together or not at all: the branch on GitHub that the
+// paused build pushed its work to, and the commit it pushed, so the resumed
+// run starts from that tip.
+// `decisions`: the PR body's Decisions entries made before the pause, as
+// markdown, so the resumed run puts them back.
+export type PauseRecord = PauseSubject & { repo: string; reason: string; paused_at: string; branch?: string; tip?: string; decisions?: string }
+
+const isBranch = (v: unknown) => typeof v === 'string' && v !== '' && !v.startsWith('-') && !/[\s:~^?*[\\]|\.\./.test(v)
+const isSha = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v)
 
 const FIELDS: Record<keyof PauseRecord, (v: unknown) => boolean> = {
   kind: (v) => v === 'issue' || v === 'pr',
@@ -20,6 +28,9 @@ const FIELDS: Record<keyof PauseRecord, (v: unknown) => boolean> = {
   repo: isRepo,
   reason: (v) => typeof v === 'string' && v !== '',
   paused_at: (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v)),
+  branch: (v) => v === undefined || isBranch(v),
+  tip: (v) => v === undefined || isSha(v),
+  decisions: (v) => v === undefined || (typeof v === 'string' && v.trim() !== ''),
 }
 
 export function pauseFile({ kind, number }: PauseSubject): string {
@@ -32,6 +43,7 @@ function problem(value: unknown, subject: PauseSubject): string | undefined {
   const obj = value as Record<string, unknown>
   for (const key of Object.keys(obj)) if (!Object.hasOwn(FIELDS, key)) return `unknown field "${key}"`
   for (const [key, ok] of Object.entries(FIELDS)) if (!ok(obj[key])) return `bad or missing "${key}"`
+  if ((obj.branch === undefined) !== (obj.tip === undefined)) return '"branch" and "tip" go together'
   if (obj.kind !== subject.kind || obj.number !== subject.number) return `it is the record of ${String(obj.kind)} ${String(obj.number)}`
   return undefined
 }
@@ -66,9 +78,9 @@ export async function writePause(record: PauseRecord): Promise<void> {
   const file = pauseFile(record)
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.${randomBytes(6).toString('hex')}`
-  const { kind, number, repo, reason, paused_at } = record
+  const { kind, number, repo, reason, paused_at, branch, tip, decisions } = record
   try {
-    await writeFile(tmp, `${JSON.stringify({ kind, number, repo, reason, paused_at })}\n`, { mode: 0o600 })
+    await writeFile(tmp, `${JSON.stringify({ kind, number, repo, reason, paused_at, branch, tip, decisions })}\n`, { mode: 0o600 })
     await rename(tmp, file)
   } finally {
     await rm(tmp, { force: true })
@@ -85,3 +97,54 @@ export async function deletePause(subject: PauseSubject): Promise<boolean> {
     throw error
   }
 }
+
+const usage = usageFor('pause')
+
+// `review.ts pause` (usage in the table in cli.ts): the AFK skills write the
+// record at a one-way door, and the resumed run reads and deletes it.
+async function pause(argv: string[]): Promise<string> {
+  const [command, ...rest] = argv
+  if (command !== 'write' && command !== 'read' && command !== 'delete') throw usage(`unknown command "${command ?? ''}"`)
+  const { values } = parse(
+    rest,
+    { repo: { type: 'string' }, issue: { type: 'string' }, pr: { type: 'string' }, reason: { type: 'string' }, branch: { type: 'string' }, tip: { type: 'string' }, 'decisions-file': { type: 'string' } },
+    usage,
+  )
+  if ((values.issue === undefined) === (values.pr === undefined)) throw usage(`pause ${command} needs one of --issue and --pr`)
+  const subject: PauseSubject =
+    values.pr !== undefined ? { kind: 'pr', number: positive('pr', values.pr, usage) } : { kind: 'issue', number: positive('issue', values.issue, usage) }
+  if (command === 'write') {
+    const repo = repoOption(values.repo, usage)
+    const reason = values.reason?.trim() ?? ''
+    if (reason === '') throw usage('pause write needs --reason: the question the run asks')
+    const { branch, tip } = values
+    if ((branch === undefined) !== (tip === undefined)) throw usage('--branch and --tip go together: the branch the work was pushed to, and its tip')
+    if (branch !== undefined && !isBranch(branch)) throw usage('--branch must be a branch name')
+    if (tip !== undefined && !isSha(tip)) throw usage('--tip must be the full sha of the pushed tip')
+    let decisions: string | undefined
+    const from = values['decisions-file']
+    if (from !== undefined) {
+      try {
+        decisions = await readFile(from, 'utf8')
+      } catch (error) {
+        throw new Failure(`cannot read ${from}: ${(error as Error).message}`, 1)
+      }
+      if (decisions.trim() === '') throw usage(`${from} is empty: leave out --decisions-file when no decision was made yet`)
+    }
+    const record: PauseRecord = {
+      ...subject, repo, reason, paused_at: new Date().toISOString(),
+      ...(branch === undefined ? {} : { branch, tip }),
+      ...(decisions === undefined ? {} : { decisions }),
+    }
+    await writePause(record)
+    return `${JSON.stringify(record)}\n`
+  }
+  if (command === 'read') {
+    const record = await readPause(subject)
+    if (record === null) throw new Failure(`no pause record for ${subject.kind} #${subject.number} at ${pauseFile(subject)}`, 3)
+    return `${JSON.stringify(record)}\n`
+  }
+  return `${JSON.stringify({ ...subject, deleted: await deletePause(subject) })}\n`
+}
+
+export const main = runMain('pause', pause)

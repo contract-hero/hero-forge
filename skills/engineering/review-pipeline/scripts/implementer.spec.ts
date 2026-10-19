@@ -307,3 +307,171 @@ test('an unknown verb or a bad option is a usage error (exit 2) that mints nothi
   assert.deepEqual(await s.gh.calls(), [])
   assert.deepEqual(s.api.requests, [])
 })
+
+// A restack rewrites the layer branch, so its push must replace the tip on
+// GitHub, and only the tip the restack started from.
+async function restacked(s: Awaited<ReturnType<typeof pushSetup>>): Promise<string> {
+  const tree = (await run('git', ['-C', s.repo, 'rev-parse', 'ticket/27-x^{tree}'])).stdout.trim()
+  const rewritten = await run('git', ['-C', s.repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit-tree', tree, '-m', 'restacked'])
+  assert.equal(rewritten.code, 0, rewritten.stderr)
+  const sha = rewritten.stdout.trim()
+  assert.equal((await run('git', ['-C', s.repo, 'branch', '-f', 'ticket/27-x', sha])).code, 0)
+  return sha
+}
+
+test('push --force-with-lease <old tip> replaces the branch on GitHub when GitHub still has that tip, from the same isolated push', async (t) => {
+  const s = await pushSetup(t)
+  assert.equal((await s.push('--branch', 'ticket/27-x')).code, 0)
+  const old = s.sha
+  const sha = await restacked(s)
+  const result = await s.push('--branch', 'ticket/27-x', '--force-with-lease', old)
+  assert.equal(result.stderr, '')
+  assert.equal(result.code, 0)
+  noToken(result)
+  assert.deepEqual(JSON.parse(result.stdout), { branch: 'ticket/27-x', commit: sha, as: 'contract-implementer[bot]' })
+  const push = (await s.pushes())[1]!
+  assert.deepEqual(push.argv.slice(-4), ['push', `--force-with-lease=refs/heads/ticket/27-x:${old}`, `https://github.com/${REPO}.git`, `${sha}:refs/heads/ticket/27-x`])
+  const options: string[] = []
+  for (let i = 0; push.argv[i] === '-c'; i += 2) options.push(push.argv[i + 1]!.startsWith('credential.helper=!') ? 'credential.helper=<the App helper>' : push.argv[i + 1]!)
+  assert.deepEqual(options, PUSH_OPTIONS)
+  assert.equal(push.password, IMPLEMENTER_TOKEN)
+  assert.equal(await s.landed(), sha)
+})
+
+test('push --force-with-lease with a tip GitHub no longer has exits 1 and leaves the branch on GitHub as it was', async (t) => {
+  const s = await pushSetup(t)
+  assert.equal((await s.push('--branch', 'ticket/27-x')).code, 0)
+  await restacked(s)
+  const result = await s.push('--branch', 'ticket/27-x', '--force-with-lease', 'b'.repeat(40))
+  assert.equal(result.code, 1)
+  assert.equal(result.stdout, '')
+  noToken(result)
+  assert.match(result.stderr, /^review\.ts implementer: GitHub refused the push of ticket\/27-x: .*stale info/)
+  assert.equal(await s.landed(), s.sha)
+})
+
+test('a rewritten branch pushed without --force-with-lease is refused, as before', async (t) => {
+  const s = await pushSetup(t)
+  assert.equal((await s.push('--branch', 'ticket/27-x')).code, 0)
+  await restacked(s)
+  assert.equal((await s.push('--branch', 'ticket/27-x')).code, 1)
+  assert.equal(await s.landed(), s.sha)
+})
+
+test('push --force-with-lease takes only a full commit sha: anything else is a usage error that mints nothing', async (t) => {
+  const s = await pushSetup(t)
+  for (const lease of ['', 'HEAD~1', 'abc123', '--delete', `${'a'.repeat(40)}x`]) {
+    const result = await s.push('--branch', 'ticket/27-x', `--force-with-lease=${lease}`)
+    assert.equal(result.code, 2, lease)
+    assert.match(result.stderr, /--force-with-lease must be the full sha of the old tip/, lease)
+  }
+  assert.deepEqual(await s.pushes(), [])
+  assert.deepEqual(s.api.requests, [])
+})
+
+// `label`: the Implementer App adds needs-info at a pause and removes it at
+// the resume.
+test('label --add puts the label on the issue as the Implementer App and prints no token', async (t) => {
+  const s = await setup(t, { responses: [{ match: 'issues/7/labels', stdout: JSON.stringify([{ name: 'needs-info' }]) }] })
+  const result = await s.cli('label', '--issue', '7', '--add', 'needs-info')
+  assert.equal(result.stderr, '')
+  assert.equal(result.code, 0)
+  noToken(result)
+  assert.deepEqual(JSON.parse(result.stdout), { issue: 7, label: 'needs-info', added: true, as: 'contract-implementer[bot]' })
+  const calls = await s.gh.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [['api', '-X', 'POST', `repos/${REPO}/issues/7/labels`, '--input', '-']])
+  assert.equal(calls[0]!.gh_token, IMPLEMENTER_TOKEN)
+  assert.deepEqual(JSON.parse(calls[0]!.stdin), { labels: ['needs-info'] })
+})
+
+test('label --remove takes the label off as the Implementer App', async (t) => {
+  const s = await setup(t, { responses: [{ match: 'issues/7/labels/needs-info', stdout: '[]' }] })
+  const result = await s.cli('label', '--issue', '7', '--remove', 'needs-info')
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), { issue: 7, label: 'needs-info', removed: true, as: 'contract-implementer[bot]' })
+  const calls = await s.gh.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [['api', '-X', 'DELETE', `repos/${REPO}/issues/7/labels/needs-info`]])
+  assert.equal(calls[0]!.gh_token, IMPLEMENTER_TOKEN)
+})
+
+test('label --remove of a label the issue does not have exits 0 with removed: false, so a resumed run can repeat it', async (t) => {
+  const s = await setup(t, { responses: [{ match: 'labels/needs-info', stdout: '{"message":"Label does not exist","status":"404"}', stderr: 'gh: Label does not exist (HTTP 404)\n', exit: 1 }] })
+  const result = await s.cli('label', '--issue', '7', '--remove', 'needs-info')
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), { issue: 7, label: 'needs-info', removed: false, as: 'contract-implementer[bot]' })
+})
+
+test('a label name is sent as one path segment', async (t) => {
+  const s = await setup(t)
+  assert.equal((await s.cli('label', '--issue', '7', '--remove', 'needs info/x')).code, 0)
+  assert.deepEqual((await s.gh.calls())[0]!.argv, ['api', '-X', 'DELETE', `repos/${REPO}/issues/7/labels/needs%20info%2Fx`])
+})
+
+test('GitHub refusing the label exits 1 with its message', async (t) => {
+  const s = await setup(t, { responses: [{ match: 'issues/7/labels', stderr: 'gh: Resource not accessible by integration (HTTP 403)\n', exit: 1 }] })
+  const result = await s.cli('label', '--issue', '7', '--add', 'needs-info')
+  assert.equal(result.code, 1)
+  assert.match(result.stderr, /^review\.ts implementer: GitHub rejected the label needs-info on #7: gh: Resource not accessible by integration \(HTTP 403\)\n$/)
+})
+
+for (const [name, config, missing, code] of [
+  ['no App in the config', NO_APP, false, 3],
+  ['only the reviewer App enabled', REVIEWER_ONLY, false, 3],
+  ['a broken Implementer App', WITH_APP, true, 4],
+] as const) {
+  test(`label with ${name} exits ${code} and labels nothing, as the App or as the user`, async (t) => {
+    const s = await setup(t, { config, missing })
+    const result = await s.cli('label', '--issue', '7', '--add', 'needs-info')
+    assert.equal(result.code, code)
+    assert.equal(result.stdout, '')
+    assert.deepEqual(await s.gh.calls(), [])
+  })
+}
+
+test('label needs exactly one of --add and --remove, with a name: else a usage error (exit 2)', async (t) => {
+  const s = await setup(t)
+  for (const args of [['label', '--issue', '7'], ['label', '--issue', '7', '--add', 'a', '--remove', 'b'], ['label', '--issue', '7', '--add', ' '], ['label', '--add', 'a']]) {
+    const result = await s.cli(...args)
+    assert.equal(result.code, 2, args.join(' '))
+    assert.match(result.stderr, /^review\.ts implementer: .*\nusage:\n/, args.join(' '))
+  }
+  assert.deepEqual(await s.gh.calls(), [])
+  assert.deepEqual(s.api.requests, [])
+})
+
+// An AFK thread works in a fresh worktree on a local branch the router names,
+// so it pushes that branch's tip to the PR's head ref on GitHub.
+test('push --to <remote branch> sends the local branch tip to that branch on GitHub', async (t) => {
+  const s = await pushSetup(t)
+  assert.equal((await run('git', ['-C', s.repo, 'branch', 'afk/adjudicate-41-abcd1234', 'ticket/27-x'])).code, 0)
+  const result = await s.push('--branch', 'afk/adjudicate-41-abcd1234', '--to', 'ticket/27-x')
+  assert.equal(result.stderr, '')
+  assert.equal(result.code, 0)
+  noToken(result)
+  assert.deepEqual(JSON.parse(result.stdout), { branch: 'ticket/27-x', commit: s.sha, as: 'contract-implementer[bot]' })
+  const push = (await s.pushes())[0]!
+  assert.deepEqual(push.argv.slice(-3), ['push', `https://github.com/${REPO}.git`, `${s.sha}:refs/heads/ticket/27-x`])
+  assert.equal(await s.landed(), s.sha)
+})
+
+test('push --to with --force-with-lease leases the remote branch', async (t) => {
+  const s = await pushSetup(t)
+  assert.equal((await s.push('--branch', 'ticket/27-x')).code, 0)
+  const sha = await restacked(s)
+  assert.equal((await run('git', ['-C', s.repo, 'branch', 'afk/x', sha])).code, 0)
+  const result = await s.push('--branch', 'afk/x', '--to', 'ticket/27-x', '--force-with-lease', s.sha)
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual((await s.pushes())[1]!.argv.slice(-4, -2), ['push', `--force-with-lease=refs/heads/ticket/27-x:${s.sha}`])
+  assert.equal(await s.landed(), sha)
+})
+
+test('push --to that is not a branch name is a usage error that mints nothing', async (t) => {
+  const s = await pushSetup(t)
+  for (const to of ['', '-f', 'a b', 'x:y', 'a..b', 'refs/heads/../x']) {
+    const result = await s.push('--branch', 'ticket/27-x', `--to=${to}`)
+    assert.equal(result.code, 2, to)
+    assert.match(result.stderr, /--to must be a branch name/, to)
+  }
+  assert.deepEqual(await s.pushes(), [])
+  assert.deepEqual(s.api.requests, [])
+})

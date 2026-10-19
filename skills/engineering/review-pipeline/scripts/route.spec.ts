@@ -499,6 +499,15 @@ const flows: [string, App, string, Remote, ((r: Router) => Promise<void>) | null
   // adjudicate
   ['the review-posted hand-off', 'implementer', 'issue_comment.created.review-posted.json', { review: implementerMd() }, phase('review-posted'), onPr('adjudicate')],
   ['the recheck-failed hand-off', 'implementer', 'issue_comment.created.recheck-failed.json', { review: implementerMd() }, phase('review-posted'), onPr('adjudicate')],
+  // A paused Adjudication goes on only through resume, on the maintainer's answer.
+  [
+    'the review-posted hand-off on a PR whose Adjudication is paused',
+    'implementer',
+    'issue_comment.created.review-posted.json',
+    { review: implementerMd() },
+    (r) => phase('review-posted')(r).then(() => paused('pr', 42)(r)),
+    onPr('ignore', 'paused-run'),
+  ],
   [
     'the review-posted hand-off before the run reached review-posted',
     'implementer',
@@ -979,12 +988,49 @@ test('route --app implementer: a reply to an earlier pause, delivered after a ne
   await seedPause(r, 'issue', 28, REPO, '2026-10-19T11:00:00.000Z')
   const late = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T10:00:00Z'), 'implementer'))
   assert.deepEqual(late, onIssue('ignore', 'stale-reply'))
-  // A reply at the same second as the pause is not later than it.
-  const same = await decision(r.routeChanged('issue_comment.created.resume.json', D2, replyAt('2026-10-19T11:00:00Z'), 'implementer'))
-  assert.deepEqual(same, onIssue('ignore', 'stale-reply'))
+  // A reply a second before the pause began does not answer it.
+  const before = await decision(r.routeChanged('issue_comment.created.resume.json', D2, replyAt('2026-10-19T10:59:59Z'), 'implementer'))
+  assert.deepEqual(before, onIssue('ignore', 'stale-reply'))
   // The maintainer's answer to the second pause resumes the run.
   const answer = await decision(r.routeChanged('issue_comment.created.resume.json', D3, replyAt('2026-10-19T11:05:00Z'), 'implementer'))
   assert.deepEqual(answer, onIssue('resume'))
+})
+
+// The pause record is written before the question comment and the label
+// (the pause boundary comes first), so a reply in the seconds while the
+// pause is still being set up is later than paused_at: it is the answer.
+test('route --app implementer: a reply after paused_at but before the question comment landed resumes the run', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await seedPause(r, 'issue', 28, REPO, '2026-10-19T09:00:00.000Z')
+  // The question comment and the needs-info label came at 09:00:02.
+  const early = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T09:00:01Z'), 'implementer'))
+  assert.deepEqual(early, onIssue('resume'))
+})
+
+// GitHub gives comment times in whole seconds, and paused_at has
+// milliseconds: a reply in the same second as the pause began is counted.
+test('route --app implementer: a reply in the same whole second as paused_at resumes the run', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await seedPause(r, 'issue', 28, REPO, '2026-10-19T09:00:00.700Z')
+  const same = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T09:00:00Z'), 'implementer'))
+  assert.deepEqual(same, onIssue('resume'))
+})
+
+// A stack owns its layers and its stack PR: a late ready_for_review or
+// opened on one never starts a single-mode review, whatever its phase.
+for (const [mode, phase] of [['layer', 'complete'], ['layer', 'review-posted'], ['stack-final', 'complete'], ['stack-final', 'adjudicated']] as const) {
+  test(`route --app reviewer: a ready_for_review on a PR whose run is a ${mode} run at ${phase} is ignore (stack)`, async (t) => {
+    const r = await router(t)
+    await seedState(r.state, { pr: 42, mode, phase })
+    assert.deepEqual(await decision(r.route('pull_request.ready_for_review.json', D1)), onPr('ignore', 'stack'))
+    assert.deepEqual(await decision(r.route('pull_request.opened.implementer.json', D2)), onPr('ignore', 'stack'))
+  })
+}
+
+test('route --app reviewer: a single run that is over still lets a ready_for_review start a new review', async (t) => {
+  const r = await router(t)
+  await seedState(r.state, { pr: 42, mode: 'single', phase: 'complete' })
+  assert.deepEqual(await decision(r.route('pull_request.ready_for_review.json', D1)), review())
 })
 
 test('route --app implementer: a reply with no creation time is ignore (stale-reply)', async (t) => {

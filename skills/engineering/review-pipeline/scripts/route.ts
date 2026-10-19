@@ -19,8 +19,10 @@
 //                                                   ignore, no-config
 //   5. the PR author is not the maintainer or contract-implementer[bot]
 //                                                   ignore, author
-//   6. a run state that is not terminal             ignore, locked
-//   7. review
+//   6. a run state of a stack (mode layer or stack-final), terminal or not:
+//      the stack owns the PR                        ignore, stack
+//   7. a run state that is not terminal             ignore, locked
+//   8. review
 // --app reviewer, an issue_comment event:
 //   3. not created (an edit never counts)           ignore, action:<name>
 //   4. not on a PR                                  ignore, not-pull-request
@@ -57,6 +59,8 @@
 //      this PR                                      ignore, marker
 //      the PR is not contract-implementer[bot]'s    ignore, author
 //      the run state phase is not review-posted     ignore, phase
+//      a pause record for the PR (only resume goes on)
+//                                                   ignore, paused-run
 //      adjudicate
 //      sender the maintainer: no needs-info label   ignore, not-paused
 //      no pause record for the issue or PR          ignore, no-pause-record
@@ -256,8 +260,13 @@ async function forgetDelivery(app: AppName, delivery: string): Promise<void> {
 // The run state phase of PR `pr`, or null when it has no run state. A
 // corrupt state file exits 4.
 async function phaseOf(pr: number): Promise<Phase | null> {
+  return (await runOf(pr))?.phase ?? null
+}
+
+// The run state of PR `pr`, or null when it has none. Corrupt: exit 4.
+async function runOf(pr: number): Promise<{ phase: Phase; mode: string } | null> {
   try {
-    return (await loadState(pr)).phase
+    return await loadState(pr)
   } catch (error) {
     if (error instanceof Failure && error.code === 3) return null
     throw error
@@ -291,8 +300,11 @@ async function reviewRule(e: Event): Promise<Outcome> {
   if (!sameLogin(author, IMPLEMENTER_BOT) && !sameLogin(author, await e.maintainer())) return why('author')
   // A pull_request event always carries its number: a payload without one is not GitHub's.
   if (e.pr === null) throw new Failure('the pull_request payload has no pull_request.number', 1)
-  const phase = await phaseOf(e.pr)
-  if (phase !== null && !TERMINAL.includes(phase)) return why('locked')
+  const run = await runOf(e.pr)
+  // A stack owns its layers and its stack PR, terminal or not: a late
+  // ready_for_review or opened never starts a single-mode review of one.
+  if (run !== null && run.mode !== 'single') return why('stack')
+  if (run !== null && !TERMINAL.includes(run.phase)) return why('locked')
   return { action: 'review', lock: { kind: 'pr', number: e.pr } }
 }
 
@@ -356,6 +368,8 @@ async function commentRule(e: Event): Promise<Outcome> {
     if (handoff === null || !ADJUDICATE_ON.includes(handoff.kind) || handoff.pr !== e.pr) return why('marker')
     if (!sameLogin(text(e.payload.issue?.user?.login), IMPLEMENTER_BOT)) return why('author')
     if ((await phaseOf(e.pr)) !== 'review-posted') return why('phase')
+    // A paused Adjudication goes on only through resume, on the maintainer's answer.
+    if ((await readPause({ kind: 'pr', number: e.pr })) !== null) return why('paused-run')
     return { action: 'adjudicate', lock: { kind: 'pr', number: e.pr } }
   }
   if (e.sender === undefined || !sameLogin(e.sender, await e.maintainer())) return why('sender')
@@ -366,10 +380,19 @@ async function commentRule(e: Event): Promise<Outcome> {
   const record = await readPause(subject)
   if (record === null || record.repo !== e.repo) return why('no-pause-record')
   // The record is the current pause. A reply written before it (a late
-  // delivery of the answer to an earlier pause) does not answer it.
+  // delivery of the answer to an earlier pause) does not answer it. GitHub
+  // gives comment times in whole seconds, so a reply counts from the second
+  // the pause began (pauseSecond): one written while the pause was being set
+  // up answers it.
   const written = Date.parse(text(e.payload.comment?.created_at) ?? '')
-  if (!(written > Date.parse(record.paused_at))) return why('stale-reply')
+  if (!(written >= pauseSecond(record.paused_at))) return why('stale-reply')
   return { action: 'resume', lock: subject }
+}
+
+// The start of the whole second a pause began in, as epoch milliseconds
+// (NaN for an unreadable time, which no reply passes).
+export function pauseSecond(pausedAt: string): number {
+  return Math.floor(Date.parse(pausedAt) / 1000) * 1000
 }
 
 function takeFor(lock: Start['lock'], holder: Record<string, unknown>): Promise<string | null> {

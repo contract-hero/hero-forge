@@ -53,14 +53,35 @@ export const COMMANDS = {
     summary: 'Post the Adjudication: one reply per inline finding and one PR comment with every answer.',
     usage: `usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>
                        [--recheck <recheck-r(R-1).json>]   (round 2 and later)
+                       [--as implementer]   (AFK: the Implementer App only, never the user)
                        [--config <path>]`,
   },
   implementer: {
-    summary: 'Push a branch, open a draft PR, or comment, as the Implementer App (it mints its own token).',
+    summary: 'Push a branch, open a draft PR, comment, or label, as the Implementer App (it mints its own token).',
     usage: `usage:
-  review.ts implementer push    --repo O/R --branch <name> [--config <path>]   (in the repo's worktree)
+  review.ts implementer push    --repo O/R --branch <local> [--to <branch on GitHub>] [--force-with-lease <old tip sha>] [--config <path>]   (in the repo's worktree)
   review.ts implementer pr      --repo O/R --head <branch> --base <ref> --title <text> --body-file <file> [--config <path>]
-  review.ts implementer comment --repo O/R --issue N --body-file <file> [--config <path>]   (an issue or a PR)`,
+  review.ts implementer comment --repo O/R --issue N --body-file <file> [--config <path>]   (an issue or a PR)
+  review.ts implementer label   --repo O/R --issue N --add <label> | --remove <label> [--config <path>]   (an issue or a PR)`,
+  },
+  handoff: {
+    summary: 'Post the hand-off marker comment, as the App named, as the last action of an AFK part.',
+    usage: `usage: review.ts handoff --app reviewer|implementer --repo O/R --pr N --kind review-posted|recheck-failed|adjudicated --round R [--config <path>]
+  reviewer: review-posted, recheck-failed (at phase review-posted). implementer: adjudicated (at phase adjudicated).
+  Posts at most one comment per run, kind and round (recorded in the run dir); a re-run prints already: true.`,
+  },
+  lock: {
+    summary: 'Release the lock that route took for an AFK run, with its owner token.',
+    usage: `usage: review.ts lock release --pr N | --issue N --token <lock_token>
+  Exits 0 also when the token no longer owns the lock (released: false).`,
+  },
+  pause: {
+    summary: 'Write, read or delete the pause record of an AFK run stopped at a one-way door.',
+    usage: `usage:
+  review.ts pause write  --repo O/R --issue N | --pr N --reason <the question>
+                         [--branch <branch on GitHub> --tip <its pushed sha>] [--decisions-file <the Decisions entries so far>]
+  review.ts pause read   --issue N | --pr N    (exit 3: no pause record)
+  review.ts pause delete --issue N | --pr N`,
   },
   'codex-exec': {
     summary: 'Run one Codex role read-only on a brief, and check its output against a schema.',

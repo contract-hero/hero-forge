@@ -251,6 +251,15 @@ test('reconcile: a PR whose run is at another head and not over is the ignore (l
   assert.deepEqual(await swept(m.reconcile()), [expected])
 })
 
+test('reconcile: a completed layer of a stack, at another head, is the ignore (stack) route gives a late ready_for_review', async (t) => {
+  const seed = (m: { state: string }) => seedState(m.state, { pr: 42, phase: 'complete', mode: 'layer' }).then(() => {})
+  const m = await machine(t, pr42(MAINTAINER, false))
+  await seed(m)
+  const expected = await routed(t, {}, 'reviewer', 'pull_request.ready_for_review.json', seed)
+  assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: 42, issue: null, reason: 'stack', app: 'reviewer' })
+  assert.deepEqual(await swept(m.reconcile()), [expected])
+})
+
 test('reconcile: a PR whose last run is over at another head gets a review', async (t) => {
   const m = await machine(t, pr42(IMPLEMENTER_BOT, false))
   await seedState(m.state, { pr: 42, phase: 'complete' })
@@ -302,6 +311,18 @@ test('reconcile: only the newest hand-off of an App counts: plain comments and t
   assert.deepEqual(await swept(m.reconcile()), [{ action: 'adjudicate', repo: REPO, pr: 42, issue: null, reason: null, app: 'implementer' }])
 })
 
+test('reconcile: a review-posted hand-off on a PR whose Adjudication is paused is the ignore (paused-run) route gives: only resume goes on', async (t) => {
+  const m = await machine(t, handoffs(reviewPosted))
+  await atPhase('review-posted')(m)
+  await seedPause(m.state, 'pr', 42)
+  const expected = await routed(t, {}, 'implementer', 'issue_comment.created.review-posted.json', async (r) => {
+    await atPhase('review-posted')(r)
+    await seedPause(r.state, 'pr', 42)
+  })
+  assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: 42, issue: null, reason: 'paused-run', app: 'implementer' })
+  assert.deepEqual(await swept(m.reconcile()), [expected])
+})
+
 test('reconcile: a PR with no hand-off prints no hand-off line', async (t) => {
   const m = await machine(t, handoffs({ id: 3456000010, author: MAINTAINER, body: 'Hi', created_at: '2026-10-19T10:30:00Z' }))
   await atPhase('review-posted')(m)
@@ -332,6 +353,8 @@ const pausedPr = (...comments: Comment[]): GitHub => ({
 const missedAnswers: [string, GitHub, 'issue' | 'pr', number, string, Partial<Decision>][] = [
   ['the maintainer answers a paused ticket', pausedTicket(answer(3456000008, MAINTAINER, '2026-10-19T10:00:00Z')), 'issue', 28, 'issue_comment.created.resume.json', { action: 'resume', pr: null, issue: 28 }],
   ['the maintainer answers a paused PR', pausedPr(answer(3456000009, MAINTAINER, '2026-10-19T10:00:00Z')), 'pr', 42, 'issue_comment.created.resume-pr.json', { action: 'resume', pr: 42, issue: null }],
+  // GitHub gives whole seconds: an answer in the second the pause began counts.
+  ['the maintainer answers a paused ticket in the second the pause began', pausedTicket(answer(3456000010, MAINTAINER, '2026-10-19T09:00:00Z')), 'issue', 28, 'issue_comment.created.resume.json', { action: 'resume', pr: null, issue: 28 }],
 ]
 
 for (const [name, github, kind, number, fixture, outcome] of missedAnswers) {

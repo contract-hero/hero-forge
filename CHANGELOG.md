@@ -1,5 +1,10 @@
 # hero-forge
 
+## 1.0.12
+
+- `implement-pr`, `review-pipeline`, `implement-spec-stack`: an AFK mode for router-launched threads. `implement-pr --afk` logs each two-way decision in the PR body's "Decisions" section, pauses on a one-way door (a comment, `needs-info`, a pause record and a push notification) and ends at the draft PR. `review-pipeline <pr> --afk review|adjudicate|recheck` runs one part of a run, then saves its state, releases its lock and posts a hand-off marker as its last action. `implement-spec-stack --afk` pushes each restacked layer as the Implementer App. By hand, nothing changes.
+- `review-pipeline`: new `review.ts handoff`, `lock release`, `pause`, `implementer label`, and `implementer push --to <ref> --force-with-lease <sha>`. Spec reviewers check each entry of the PR body's "Decisions" section against the spec.
+
 ## 1.0.11
 
 - `review-pipeline`: a new `review.ts reconcile --repo O/R` finds work a missed webhook should have started (labelled tickets and specs with no run, open PRs with no run at their head, hand-offs due, answered pauses) and routes each item through the same decision code as `route`, so caps, `paused`, locks and the sender and author rules give the same answers. It prints one JSON line per item, the `route` decision plus `app`. Synthetic delivery ids are deterministic, so a second sweep starts nothing new. A ticket that an open PR by the maintainer or the Implementer App closes is `ignore` with reason `has-pr`.

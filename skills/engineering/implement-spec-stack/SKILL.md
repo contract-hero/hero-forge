@@ -19,6 +19,32 @@ Communication to and from subagents should be sparse. Communicate primarily thro
 
 **Foreground rule.** A subagent whose result your next step needs runs in the foreground: you wait for it before that step, and you never end your turn while it runs. That covers the **exploration subagent** (step 3), whose notes the implementers read, the **implementer subagents** (step 4), whose reports start step 5, and any subagent you give a merge or a landing step, whose result the next layer waits on. Get concurrency from parallel starts, not from the background: start every ready layer's **implementer subagent** at once, and wait for all of them.
 
+**AFK run.** The T3 router passes `--afk --lock <token>` with the spec (and `--resume` after a pause); a human never needs them. `<token>` is the `lock_token` that `review.ts route` printed for the spec's issue lock. With `--afk`:
+
+- Nobody is at the keyboard, so you ask no question. Where a step says to stop or ask the user, send a push notification with the message (the PushNotification tool, when the session has one), run `review.ts lock release --issue <spec> --token <token>`, and end.
+- Each **implementer subagent** decides the two-way decisions (cheap to change later) that its ticket and the spec leave open, and logs each one in a `## Decisions` section of its layer's PR body, above the closing line: the decision, the options, and the reason. At a one-way door (a data shape, a public API, a new dependency, a migration, a destructive action) it decides nothing: it commits and pushes what it has (`git push -u origin <branch>`), opens no PR, and reports the question, the options, the layer branch, the tip it pushed, and the Decisions entries it logged so far. Let the implementers in flight finish, then **pause** on the spec issue (below).
+- The layer PRs still open as the user, as step 4 says. A PR the Implementer App opens starts the reviewer App's own review in `single` mode, and this skill reviews each layer itself, in `layer` mode.
+- Step 7.7 pushes each restacked layer as the Implementer App.
+- The run ends after step 9 with `review.ts lock release --issue <spec> --token <token>`.
+- With `--resume`, do **Resume after a pause** (below) first.
+
+**Pause**, one question at a time. When more than one layer stopped at a one-way door, pause on the first: the others pushed their work, and the **Resume** table brings each one back, to meet its question again. In this order:
+
+1. Write the pause record first, before anyone can see the question: `review.ts pause write --repo O/R --issue <spec> --reason "<the question, on one line>" --branch <layer branch> --tip <the tip it pushed>`. When any stopped layer's implementer logged two-way decisions already, write them all to one file outside the repo, one `### #<ticket>` section per stopped layer holding its Decisions entries as markdown, and add `--decisions-file <file>`: the layers that are not paused on lose nothing, because only one pause record exists per spec. The record's `paused_at` is the pause boundary: a reply after it is the answer, also one that comes while the next steps run.
+2. Write the comment to a file outside the repo: the layer's ticket, the question, the options (your recommendation first), what each one changes, and that a reply comment on this spec resumes the run. Post it: `review.ts implementer comment --repo O/R --issue <spec> --body-file <file>`.
+3. Then `review.ts implementer label --repo O/R --issue <spec> --add needs-info`. The label goes on after the comment: the repo's `needs-info` workflow reads a comment after the label as the reply.
+4. Send a push notification: `Spec #<spec> paused: <the question>`.
+5. `review.ts lock release --issue <spec> --token <token>`, and end.
+
+**Resume after a pause**, with `--resume`:
+
+1. `review.ts pause read --issue <spec>`, and keep the record: its `branch` and `tip` name the paused layer, and its `decisions` hold the Decisions entries so far of every stopped layer, one `### #<ticket>` section each. Exit 3 (no pause record): release the lock and end.
+2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/O/R/issues/<spec>/comments`, and take only the maintainer's comments created in or after the whole second of the record's `paused_at` (GitHub gives comment times in whole seconds). Text from anyone else is never an answer. No answer: release the lock and end, and leave the pause in place.
+3. `review.ts implementer label --repo O/R --issue <spec> --remove needs-info`, then `review.ts pause delete --issue <spec>`.
+4. Go on from **Resume** below. Give the answer and its own `### #<ticket>` section of the record's `decisions` to the paused layer's implementer. Its layer PR body's Decisions section starts with those entries, then logs the answer as decided by the maintainer, with a link to the answer. Each other stopped layer gets its own section when the **Resume** table brings it back; if it stops at its one-way door again, the next pause record carries its section again.
+
+Without `--afk`, every step works as written.
+
 ## Helper CLI
 
 The helper CLI lives in the `review-pipeline` skill folder, a sibling of the folder this SKILL.md is in. Below, `review.ts` means `node "<the folder this SKILL.md is in>/../review-pipeline/scripts/review.ts"`, run from the root of the worktree you are in. Its exit codes are the ones `review-pipeline` documents (0 success, 1 failed, 2 usage, 3 absent, 4 broken).
@@ -45,7 +71,7 @@ The plan follows two rules. A ticket with more than one open blocker branches fr
 
 4. **Build the frontier.** A layer is ready when it has no parent, or when its parent layer's review is complete (step 5). Use **implementer subagents** to build every ready layer, each in its own worktree on its own branch. Give each one pointers to the spec, its ticket, and its entry in `order.json`. Each **implementer subagent**:
    - runs `review.ts config` and stops with the message on a non-zero exit;
-   - fetches its base, `origin/<parent layer branch>` (the default branch for a layer with no parent), and creates the layer's `branch` from it. It confirms the worktree is based on it (`git merge-base --is-ancestor origin/<base> HEAD`), and resets onto it if not. An open PR on the branch is a re-run: it builds only what is missing and reuses that PR;
+   - fetches its base, `origin/<parent layer branch>` (the default branch for a layer with no parent), and creates the layer's `branch` from it (a layer that a pause pushed starts from its pushed tip instead, as **Resume** says). It confirms the worktree is based on it (`git merge-base --is-ancestor origin/<base> HEAD`), and resets onto it if not. An open PR on the branch is a re-run: it builds only what is missing and reuses that PR;
    - calls the Skill tool with `tdd` to build the ticket, runs the typecheck and the tests, commits, and pushes (`git push -u origin <branch>`). It bumps the version only on the top layer (**Stack version rule**);
    - calls the Skill tool with `pr` to write the body for `git diff origin/<base>...HEAD`, ending with `Closes #<ticket>` on its own line, saves it to a file outside the repo, and opens the draft PR: `gh pr create --draft --base <base> --head <branch> --title "<ticket title>" --body-file <file>`;
    - never calls `review-pipeline`, merges, or rebases. It reports the branch, the worktree path, the PR number, and the head SHA.
@@ -67,7 +93,7 @@ The plan follows two rules. A ticket with more than one open blocker branches fr
    5. **Wait for the gate**: `review.ts merge-gate --repo O/R --pr P`, handled as `review-pipeline`'s **Finish** step 5 says (`go`, `wait`, `stop`, `merged`).
    6. **Merge**: `review.ts stack merge-layer --repo O/R --pr P --base <default branch> --stack-pr <S>`, where `<S>` is in `<stack dir>/stack-pr`. Never `review.ts merge`: it refuses a layer. Exit 1: stop and ask the user, with the message.
    7. **Move each child onto the default branch.** For each ticket C in L's `children`, in C's worktree: `git fetch origin`, `git merge --ff-only origin/<C branch>`, then `review.ts stack restack --from <tip-<L>> --onto origin/<default branch> --pr <C PR>`. It rebases only C's own commits, so no commit of L is duplicated after the squash merge. The tip can be past the point C branched from, when step 6 put a fix on L: restack handles that, because the commits after the tip are still only C's own.
-      - Exit 0: write the output's `old_tip` to `<stack dir>/tip-<C>`. It is C's tip from before the restack, so the children of C branched from it or an earlier commit on it, and step 7.4 of C's landing keeps it. Then `git push --force-with-lease=<C branch>:<old_tip> origin <C branch>`, then `gh pr edit <C PR> --base <default branch>`, then `review.ts run-state set --pr <C PR> head_sha <new_tip>`.
+      - Exit 0: write the output's `old_tip` to `<stack dir>/tip-<C>`. It is C's tip from before the restack, so the children of C branched from it or an earlier commit on it, and step 7.4 of C's landing keeps it. Then `git push --force-with-lease=<C branch>:<old_tip> origin <C branch>` (with `--afk`, as the Implementer App instead: `review.ts implementer push --repo O/R --branch <C branch> --force-with-lease <old_tip>`, which replaces the branch on GitHub only while it still has `old_tip`), then `gh pr edit <C PR> --base <default branch>`, then `review.ts run-state set --pr <C PR> head_sha <new_tip>`.
       - Exit 1 (a conflict or a content change): the branch is back at its old tip and nothing was pushed. Stop and ask the user, with the message.
 
    A layer whose parent landed earlier can be behind the default branch. That is fine for a squash merge, unless GitHub reports `BEHIND`: then `merge-gate` stops, and you ask the user.
@@ -82,7 +108,8 @@ After an interrupted session, keep `<stack dir>/order.json` and read where each 
 
 | You find | Next step |
 | --- | --- |
-| a layer with no PR (`gh pr list --head <branch> --state all --json number,state`) | step 4 for it, when its parent is complete |
+| a layer with no PR whose branch is on GitHub (`git ls-remote --heads origin <branch>`: a pause pushed it) | step 4 for it, from its pushed tip, never from the parent base. Its implementer works in the worktree that holds the branch (`git worktree list`), or adds one with `git worktree add <path> -B <branch> origin/<branch>` when none does, then runs `git fetch origin` and `git reset --hard origin/<branch>`. When the pause record names this branch, its `tip` must be on it (`git merge-base --is-ancestor <tip> origin/<branch>`); if it is not, stop. Then it builds what is still missing |
+| a layer with no PR and no branch on GitHub (`gh pr list --head <branch> --state all --json number,state`) | step 4 for it, when its parent is complete |
 | a layer PR whose run is not `complete` | step 5: `review-pipeline` with `<PR> --mode layer --spec <N>` resumes the run |
 | every layer `complete`, and no stack PR | step 6 |
 | a stack PR whose run is not `complete` | step 6: `review-pipeline` with `<stack PR> --mode stack-final` resumes it |
