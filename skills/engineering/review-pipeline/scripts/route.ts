@@ -68,7 +68,8 @@
 // Then, for every decision that starts work: a held lock (per PR, or per
 // issue for a build or a resume on an issue) is ignore, locked; the App's
 // daily run cap is ignore, cap. Else take the lock, record the delivery,
-// count the run (and, for a build, the attempt), and print the decision.
+// count the run (and, for a build, the attempt), and print the decision
+// with the lock's owner token (lock_token), for the run to release it.
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -106,8 +107,17 @@ function triggers(action: string, author: string | undefined, draft: boolean): b
 type Action = 'review' | 'recheck' | 'build-ticket' | 'build-spec' | 'adjudicate' | 'resume' | 'ignore'
 
 // `pr` is set when the delivery is about a PR, `issue` when it is about an
-// issue that is not a PR (a label, or a comment on an issue).
-type Decision = { action: Action; repo: string | null; pr: number | null; issue: number | null; reason: string | null }
+// issue that is not a PR (a label, or a comment on an issue). `lock_token` is
+// the owner token of the lock that work took, for the launched thread to
+// release it at its end; null on an ignore, which takes no lock.
+type Decision = {
+  action: Action
+  repo: string | null
+  pr: number | null
+  issue: number | null
+  reason: string | null
+  lock_token: string | null
+}
 
 // What a rule found: an ignore with its reason, or work to start. Work names
 // the lock it takes and, for a build, the ticket whose attempt it counts.
@@ -372,11 +382,11 @@ async function route(argv: string[]): Promise<string> {
   const onPr = payload.issue !== undefined && payload.issue.pull_request !== undefined && payload.issue.pull_request !== null
   const pr = whole(payload.pull_request?.number) ?? (onPr ? issueNumber : null)
   const issue = onPr || payload.pull_request !== undefined ? null : issueNumber
-  const decide = (action: Action, reason: string | null): string =>
-    `${JSON.stringify({ action, repo, pr, issue, reason } satisfies Decision)}\n`
+  const decide = (action: Action, reason: string | null, token: string | null = null): string =>
+    `${JSON.stringify({ action, repo, pr, issue, reason, lock_token: token } satisfies Decision)}\n`
   // An ignore about another issue than the delivery's names that issue.
   const decideOn = (other: number, reason: string): string =>
-    `${JSON.stringify({ action: 'ignore', repo, pr: null, issue: other, reason } satisfies Decision)}\n`
+    `${JSON.stringify({ action: 'ignore', repo, pr: null, issue: other, reason, lock_token: null } satisfies Decision)}\n`
 
   const branch = payload.repository?.default_branch
   const config = repo === null ? null : await remoteConfig(repo, typeof branch === 'string' ? branch : undefined)
@@ -427,7 +437,7 @@ async function route(argv: string[]): Promise<string> {
     await forgetDelivery(app, delivery).catch(() => {})
     throw error
   }
-  return decide(outcome.action, null)
+  return decide(outcome.action, null, token)
 }
 
 export const main = runMain('route', route)

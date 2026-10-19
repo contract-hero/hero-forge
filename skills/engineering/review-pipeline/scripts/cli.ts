@@ -94,9 +94,10 @@ export const COMMANDS = {
   route: {
     summary: 'Decide whether one GitHub webhook delivery starts work for an App: print the action or ignore, with the reason.',
     usage: `usage: review.ts route --app reviewer|implementer --event <X-GitHub-Event> --delivery <X-GitHub-Delivery> --payload <file>
-  Prints {action, repo, pr, issue, reason} and exits 0 for every decision, ignore included.
+  Prints {action, repo, pr, issue, reason, lock_token} and exits 0 for every decision, ignore included.
   reviewer actions: review, recheck. implementer actions: build-ticket, build-spec, adjudicate, resume.
-  Work takes a lock, per PR (or per issue for a build or a resume on an issue), free again after ${LOCK_TTL_HOURS} hours.`,
+  Work takes a lock, per PR (or per issue for a build or a resume on an issue), free again after ${LOCK_TTL_HOURS} hours.
+  lock_token is that lock's owner token, for the launched run to release it; null on ignore.`,
   },
 } as const satisfies Record<string, { summary: string; usage: string }>
 

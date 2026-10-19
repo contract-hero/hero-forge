@@ -108,6 +108,16 @@ const commentBody = (body: string) => (payload: Payload) => {
 type Action = 'review' | 'recheck' | 'build-ticket' | 'build-spec' | 'adjudicate' | 'resume' | 'ignore'
 type Decision = { action: Action; repo: string | null; pr: number | null; issue: number | null; reason: string | null }
 
+// The decision `stdout` prints, without its lock_token, once the token has
+// the right form: the 32-hex owner token of the lock that work takes, or
+// null on an ignore, which takes no lock.
+function decided(stdout: string): Decision {
+  const { lock_token: token, ...rest } = JSON.parse(stdout) as Decision & { lock_token?: unknown }
+  if (rest.action === 'ignore') assert.equal(token, null)
+  else assert.match(String(token), /^[0-9a-f]{32}$/)
+  return rest
+}
+
 const review = (pr = 42): Decision => ({ action: 'review', repo: REPO, pr, issue: null, reason: null })
 const ignore = (reason: string, pr: number | null = 42): Decision => ({ action: 'ignore', repo: REPO, pr, issue: null, reason })
 // A decision on PR #42.
@@ -148,7 +158,7 @@ for (const [name, fixture, remote, expected] of cases) {
     const { code, stdout, stderr } = await r.route(fixture, '6f1e2d3c-0000-11f0-8a1b-0123456789ab')
     assert.equal(stderr, '')
     assert.equal(code, 0)
-    assert.deepEqual(JSON.parse(stdout), expected)
+    assert.deepEqual(decided(stdout), expected)
   })
 }
 
@@ -161,7 +171,7 @@ async function decision(result: Promise<{ code: number | null; stdout: string; s
   const { code, stdout, stderr } = await result
   assert.equal(stderr, '')
   assert.equal(code, 0)
-  return JSON.parse(stdout) as Decision
+  return decided(stdout)
 }
 
 test('route: a second event for a PR whose lock is held is ignore (locked)', async (t) => {
@@ -569,7 +579,7 @@ for (const [name, app, fixture, remote, before, expected] of flows) {
     const { code, stdout, stderr } = await r.route(fixture, '6f1e2d3c-0000-11f0-8a1b-0123456789ab', app)
     assert.equal(stderr, '')
     assert.equal(code, 0)
-    assert.deepEqual(JSON.parse(stdout), expected)
+    assert.deepEqual(decided(stdout), expected)
   })
 }
 
@@ -691,7 +701,7 @@ for (const [name, app, fixture, change, before, expected] of changed) {
     const { code, stdout, stderr } = await r.routeChanged(fixture, D1, change, app)
     assert.equal(stderr, '')
     assert.equal(code, 0)
-    assert.deepEqual(JSON.parse(stdout), expected)
+    assert.deepEqual(decided(stdout), expected)
   })
 }
 
@@ -932,4 +942,16 @@ test('route --app implementer: a spec reads every page of its sub-issues as the 
     (await r.gh.calls()).map((c) => c.argv).filter((argv) => argv.join(' ').includes('/sub_issues')),
     [['api', '--paginate', '--jq', '.[] | {number, author: .user.login}', `repos/${REPO}/issues/23/sub_issues?per_page=100`]],
   )
+})
+
+test('route: the lock_token is the owner token in the lock that the decision took', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  const tokenIn = async (lock: string) => (JSON.parse(await readFile(join(r.state, 'locks', lock), 'utf8')) as { token: string }).token
+  const build = JSON.parse((await r.route('issues.labeled.json', D1, 'implementer')).stdout)
+  assert.equal(build.lock_token, await tokenIn('issue-28.lock'))
+  const pr = JSON.parse((await r.route('pull_request.opened.json', D2)).stdout)
+  assert.equal(pr.lock_token, await tokenIn('pr-42.lock'))
+  assert.notEqual(build.lock_token, pr.lock_token)
+  // A held lock is an ignore, with no token.
+  assert.equal(JSON.parse((await r.route('pull_request.ready_for_review.json', D3)).stdout).lock_token, null)
 })
