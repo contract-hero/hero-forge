@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.16
+
+- `setup-forge`: the router and reconcile prompt templates settle their own T3 thread on a clean exit, in place of archiving it. Archiving the calling thread takes effect at once and cuts the turn, so the run failed before it wrote its line; settling takes effect when the turn ends. A `stop: ...` line or a failed launch still marks the thread unread.
+
 ## 1.0.15
 
 - `setup-forge`: the router and reconcile prompt templates end each run by organizing their own T3 thread. A run that ends with `ignore: ...` or `started: ...` (reconcile: `failed 0`) archives it; a `stop: ...` line or a failed launch marks it unread, so the maintainer sees it. Steps 6.2 and 6.4 update an existing task's prompt in place (`update_scheduled_task`, prompt only) when it differs from the current template, so a plugin update that changes a template reaches the live tasks when the AFK part runs again.
