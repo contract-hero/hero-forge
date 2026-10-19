@@ -380,10 +380,19 @@ async function commentRule(e: Event): Promise<Outcome> {
   const record = await readPause(subject)
   if (record === null || record.repo !== e.repo) return why('no-pause-record')
   // The record is the current pause. A reply written before it (a late
-  // delivery of the answer to an earlier pause) does not answer it.
+  // delivery of the answer to an earlier pause) does not answer it. GitHub
+  // gives comment times in whole seconds, so a reply counts from the second
+  // the pause began (pauseSecond): one written while the pause was being set
+  // up answers it.
   const written = Date.parse(text(e.payload.comment?.created_at) ?? '')
-  if (!(written > Date.parse(record.paused_at))) return why('stale-reply')
+  if (!(written >= pauseSecond(record.paused_at))) return why('stale-reply')
   return { action: 'resume', lock: subject }
+}
+
+// The start of the whole second a pause began in, as epoch milliseconds
+// (NaN for an unreadable time, which no reply passes).
+export function pauseSecond(pausedAt: string): number {
+  return Math.floor(Date.parse(pausedAt) / 1000) * 1000
 }
 
 function takeFor(lock: Start['lock'], holder: Record<string, unknown>): Promise<string | null> {

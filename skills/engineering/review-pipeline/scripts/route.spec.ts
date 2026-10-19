@@ -988,9 +988,9 @@ test('route --app implementer: a reply to an earlier pause, delivered after a ne
   await seedPause(r, 'issue', 28, REPO, '2026-10-19T11:00:00.000Z')
   const late = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T10:00:00Z'), 'implementer'))
   assert.deepEqual(late, onIssue('ignore', 'stale-reply'))
-  // A reply at the same second as the pause is not later than it.
-  const same = await decision(r.routeChanged('issue_comment.created.resume.json', D2, replyAt('2026-10-19T11:00:00Z'), 'implementer'))
-  assert.deepEqual(same, onIssue('ignore', 'stale-reply'))
+  // A reply a second before the pause began does not answer it.
+  const before = await decision(r.routeChanged('issue_comment.created.resume.json', D2, replyAt('2026-10-19T10:59:59Z'), 'implementer'))
+  assert.deepEqual(before, onIssue('ignore', 'stale-reply'))
   // The maintainer's answer to the second pause resumes the run.
   const answer = await decision(r.routeChanged('issue_comment.created.resume.json', D3, replyAt('2026-10-19T11:05:00Z'), 'implementer'))
   assert.deepEqual(answer, onIssue('resume'))
@@ -1005,6 +1005,15 @@ test('route --app implementer: a reply after paused_at but before the question c
   // The question comment and the needs-info label came at 09:00:02.
   const early = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T09:00:01Z'), 'implementer'))
   assert.deepEqual(early, onIssue('resume'))
+})
+
+// GitHub gives comment times in whole seconds, and paused_at has
+// milliseconds: a reply in the same second as the pause began is counted.
+test('route --app implementer: a reply in the same whole second as paused_at resumes the run', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await seedPause(r, 'issue', 28, REPO, '2026-10-19T09:00:00.700Z')
+  const same = await decision(r.routeChanged('issue_comment.created.resume.json', D1, replyAt('2026-10-19T09:00:00Z'), 'implementer'))
+  assert.deepEqual(same, onIssue('resume'))
 })
 
 // A stack owns its layers and its stack PR: a late ready_for_review or

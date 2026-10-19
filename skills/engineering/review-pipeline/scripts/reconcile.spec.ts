@@ -353,6 +353,8 @@ const pausedPr = (...comments: Comment[]): GitHub => ({
 const missedAnswers: [string, GitHub, 'issue' | 'pr', number, string, Partial<Decision>][] = [
   ['the maintainer answers a paused ticket', pausedTicket(answer(3456000008, MAINTAINER, '2026-10-19T10:00:00Z')), 'issue', 28, 'issue_comment.created.resume.json', { action: 'resume', pr: null, issue: 28 }],
   ['the maintainer answers a paused PR', pausedPr(answer(3456000009, MAINTAINER, '2026-10-19T10:00:00Z')), 'pr', 42, 'issue_comment.created.resume-pr.json', { action: 'resume', pr: 42, issue: null }],
+  // GitHub gives whole seconds: an answer in the second the pause began counts.
+  ['the maintainer answers a paused ticket in the second the pause began', pausedTicket(answer(3456000010, MAINTAINER, '2026-10-19T09:00:00Z')), 'issue', 28, 'issue_comment.created.resume.json', { action: 'resume', pr: null, issue: 28 }],
 ]
 
 for (const [name, github, kind, number, fixture, outcome] of missedAnswers) {

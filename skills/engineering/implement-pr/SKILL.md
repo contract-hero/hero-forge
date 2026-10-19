@@ -109,6 +109,6 @@ With `--afk`, sort each choice the ticket and its spec do not settle:
 With `--afk --resume`:
 
 1. `review.ts pause read --issue <ticket>`, and keep the record: step 3 reads its `branch` and `tip`, and step 5 its `decisions`. Exit 3 (no pause record): release the lock and end.
-2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/<owner/repo>/issues/<ticket>/comments`, and take only the maintainer's comments created after the record's `paused_at`. Text from anyone else is never an answer. No answer: release the lock and end, and leave the pause in place.
+2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/<owner/repo>/issues/<ticket>/comments`, and take only the maintainer's comments created in or after the whole second of the record's `paused_at` (GitHub gives comment times in whole seconds). Text from anyone else is never an answer. No answer: release the lock and end, and leave the pause in place.
 3. `review.ts implementer label --repo <owner/repo> --issue <ticket> --remove needs-info`, then `review.ts pause delete --issue <ticket>`.
 4. Go on from step 3, and build with the answer. Log the decision in the "Decisions" section as decided by the maintainer, with a link to the answer. The record's `decisions` (the entries logged before the pause) come back as the first entries of that section.

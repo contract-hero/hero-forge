@@ -54,7 +54,7 @@ test('implement-pr --afk logs its two-way decisions in the PR body and hands not
   const handOff = section(IMPLEMENT_PR, '6. Hand off to the review pipeline')
   assert.match(handOff, /With `--afk`, do not call `review-pipeline`.*Run `review\.ts lock release --issue <ticket> --token <token>`/)
   const resume = section(IMPLEMENT_PR, 'Resume after a pause')
-  inOrder(resume, ['review.ts pause read --issue <ticket>', 'created after the record\'s `paused_at`', '--remove needs-info', 'review.ts pause delete --issue <ticket>'])
+  inOrder(resume, ['review.ts pause read --issue <ticket>', 'created in or after the whole second of the record\'s `paused_at`', '--remove needs-info', 'review.ts pause delete --issue <ticket>'])
 })
 
 test('review-pipeline --afk: each part ends with advance, then the lock release, then the hand-off as the last action', () => {

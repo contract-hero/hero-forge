@@ -49,6 +49,7 @@ import {
   IMPLEMENTER_BOT,
   liveContext,
   PAUSED_LABEL,
+  pauseSecond,
   REVIEWER_BOT,
   sameLogin,
   subIssues,
@@ -274,9 +275,10 @@ async function resumeItem(repo: string, paused: Listed, comments: (number: numbe
   const record = await readPause({ kind: paused.pull_request ? 'pr' : 'issue', number: paused.number })
   if (record === null) return null
   const maintainer = await context.maintainer()
-  const since = Date.parse(record.paused_at)
+  // From the second the pause began, as route counts a reply (pauseSecond).
+  const since = pauseSecond(record.paused_at)
   const last = (await comments(paused.number))
-    .filter((c) => sameLogin(c.author ?? undefined, maintainer) && Date.parse(c.created_at) > since)
+    .filter((c) => sameLogin(c.author ?? undefined, maintainer) && Date.parse(c.created_at) >= since)
     .at(-1)
   if (last === undefined) return null
   const payload: Payload = {
