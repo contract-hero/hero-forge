@@ -268,9 +268,13 @@ test('--app implementer --login prints the implementer App bot login', async (t)
   assert.deepEqual(await s.mint('--login'), { code: 0, stdout: 'hero-implementer[bot]\n', stderr: '' })
 })
 
-test('--app implementer does not read "app: enabled", which is the reviewer App switch: no exit 3', async (t) => {
+test('--app implementer with no App in the config exits 3 like the reviewer form, and calls no API', async (t) => {
   const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER, config: NO_APP })
-  assert.deepEqual(await s.mint('--login'), { code: 0, stdout: 'hero-implementer[bot]\n', stderr: '' })
+  const { code, stdout, stderr } = await s.mint('--login')
+  assert.equal(code, 3)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts app-token: no implementer App configured for this repo \(no "app: enabled" in the config\): post as the user/m)
+  assert.deepEqual(s.api.requests, [])
 })
 
 test('--app implementer with no override reads ~/.config/hero-forge/implementer-app.env', async (t) => {
