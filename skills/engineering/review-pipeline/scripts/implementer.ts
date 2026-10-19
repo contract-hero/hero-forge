@@ -83,11 +83,33 @@ const HELPER =
   '!f() { test "$1" = get || exit 0; while IFS= read -r line; do case "$line" in protocol=*) p="${line#protocol=}";; host=*) h="${line#host=}";; esac; done; ' +
   `test "$p" = https && test "$h" = github.com || exit 0; echo username=x-access-token; echo "password=$${TOKEN_VAR}"; }; f`
 
+// git config that could carry another identity than the App past the
+// credential helper: an HTTP header (an Authorization header is sent as is),
+// or a URL rewrite to another host or to SSH. Matched against git's canonical
+// key names, which are lower case outside the URL.
+const TRANSPORT = '^(http\\..*extraheader|url\\..*\\.(insteadof|pushinsteadof))$'
+
+// Config a caller can inject through the environment. The check below sees
+// it; the push's git never gets it.
+const INJECTED = /^GIT_CONFIG_(COUNT|PARAMETERS|KEY_[0-9]+|VALUE_[0-9]+)$/
+
+// Fail closed on any such key in the config the push would read (system,
+// global, the repo, and the env). The message names the key, never its value,
+// which may be a credential.
+async function refuseTransportAuth(): Promise<void> {
+  const found = await git(['config', '--name-only', '--get-regexp', TRANSPORT])
+  refuse(found.code === 0 || found.code === 1, `cannot read the git config: ${oneLine(found.stderr)}`)
+  const key = found.stdout.split('\n').find((line) => line.trim() !== '')
+  refuse(key === undefined, `the git config sets ${key}, which could push as another identity than the App. Nothing was pushed. Remove it and run again.`)
+}
+
 // Push the local branch to the same branch on GitHub, over https (an App token
 // does not work over SSH, and `origin` may be an SSH remote). No upstream is
-// set: the remote is a URL, not `origin`. Hooks are off, so no hook script
-// runs with the token in its env; no prompt, askpass or other protocol can
-// stand in for the App.
+// set: the remote is a URL, not `origin`. Config that could carry another
+// identity is refused before the token is minted, and the push also clears
+// `http.extraHeader` and drops the env-injected config. Hooks are off, so no
+// hook script runs with the token in its env; no prompt, askpass or other
+// protocol can stand in for the App.
 async function push(repo: string, values: Values): Promise<string> {
   const branch = values.branch
   if (branch === undefined || branch === '') throw usage('--branch is required')
@@ -95,16 +117,18 @@ async function push(repo: string, values: Values): Promise<string> {
   const local = await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])
   refuse(local.code === 0, `no local branch ${branch} in this repo: run push in the worktree that holds it`)
   const commit = local.stdout.trim()
+  await refuseTransportAuth()
 
   const me = await app()
   const token = me.token as string
   const env: NodeJS.ProcessEnv = { ...process.env, [TOKEN_VAR]: token, GIT_TERMINAL_PROMPT: '0', GIT_ALLOW_PROTOCOL: 'https' }
   for (const name of Object.keys(env)) {
-    if (name === 'GIT_ASKPASS' || name === 'SSH_ASKPASS' || name.startsWith('GIT_TRACE')) delete env[name]
+    if (name === 'GIT_ASKPASS' || name === 'SSH_ASKPASS' || name.startsWith('GIT_TRACE') || INJECTED.test(name)) delete env[name]
   }
   const ref = `refs/heads/${branch}`
   const pushed = await git(
-    ['-c', 'credential.helper=', '-c', `credential.helper=${HELPER}`, '-c', 'core.askPass=', '-c', 'core.hooksPath=/dev/null',
+    ['-c', 'credential.helper=', '-c', `credential.helper=${HELPER}`, '-c', 'http.extraHeader=', '-c', 'core.askPass=',
+      '-c', 'core.hooksPath=/dev/null',
       'push', `https://github.com/${repo}.git`, `${ref}:${ref}`],
     env,
   )

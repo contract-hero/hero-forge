@@ -61,9 +61,9 @@ const SUMMARY_1 = [
 ].join('\n')
 
 // `app`: the config has `app: enabled` and the machine has the Implementer
-// App (`broken`: its env file is missing). `author`: the PR author GitHub
-// reports, read only with `app`.
-type Setup = { ledger?: unknown; recheck?: unknown; noState?: boolean; app?: { broken?: boolean }; author?: string }
+// App (`missing`: no env file; `broken`: an env file that names no key).
+// `author`: the PR author GitHub reports, read only with `app`.
+type Setup = { ledger?: unknown; recheck?: unknown; noState?: boolean; app?: { missing?: boolean; broken?: boolean }; author?: string }
 
 // A PR with the pipeline's round 1 review (id 555) recorded in run state,
 // and a ledger. `reply(round)` runs the subcommand.
@@ -354,20 +354,38 @@ test('on a PR a human opened, reply posts as the user and mints no App token, al
   assert.deepEqual(s.requests(), [])
 })
 
-test("on a PR another App opened, reply posts as the user", async (t) => {
+const USER_PATH = [AUTHOR, USER, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST]
+
+test('on a PR another App opened, reply posts as the user, after the Implementer App login shows it is not that App', async (t) => {
   const s = await setup(t, { app: {}, author: 'dependabot[bot]' })
   const { code } = await s.reply(1)
   assert.equal(code, 0)
   const calls = await s.calls()
-  assert.deepEqual(calls.map((c) => c.argv), [AUTHOR, USER, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST])
+  assert.deepEqual(calls.map((c) => c.argv), USER_PATH)
   assert.ok(calls.every((c) => c.gh_token === null))
+  assert.ok(s.requests().some((r) => r.path === '/app'), 'the Implementer App login was not read')
 })
 
-test('on a PR an App opened, a broken Implementer App exits 4 and posts nothing, as the App or as the user', async (t) => {
+// With no env file the machine has no Implementer App, so no PR here is its
+// AFK build: the user answers, as before the App existed.
+for (const [name, author] of [['another App', 'dependabot[bot]'], ['an App with the Implementer App\'s login', BOT]] as const) {
+  test(`on a PR ${name} opened, with no Implementer env file, reply posts as the user and mints nothing`, async (t) => {
+    const s = await setup(t, { app: { missing: true }, author })
+    const { code, stderr } = await s.reply(1)
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    const calls = await s.calls()
+    assert.deepEqual(calls.map((c) => c.argv), USER_PATH)
+    assert.ok(calls.every((c) => c.gh_token === null))
+    assert.deepEqual(s.requests(), [])
+  })
+}
+
+test('on a PR an App opened, broken Implementer credentials exit 4 and post nothing, as the App or as the user', async (t) => {
   const s = await setup(t, { app: { broken: true }, author: BOT })
   const { code, stdout, stderr } = await s.reply(1)
   assert.equal(code, 4)
   assert.equal(stdout, '')
-  assert.match(stderr, /^review\.ts reply: the implementer App is enabled but its env file .*implementer-app\.env does not exist/)
+  assert.match(stderr, /^review\.ts reply: .*implementer-app\.env sets no HERO_FORGE_IMPLEMENTER_APP_KEY/)
   assert.deepEqual((await s.calls()).map((c) => c.argv), [AUTHOR])
 })

@@ -12,8 +12,11 @@
 // AFK build), the replies and the comment post as that App, with a token this
 // process mints; on any other PR they post as the user. GitHub says who the
 // author is: with `app: enabled`, a bot author is checked against the login
-// the Implementer App's own credentials give. A broken Implementer App on a
-// bot-authored PR exits 4 and posts nothing.
+// the Implementer App's own credentials give. With no Implementer env file,
+// the user answers. Broken Implementer credentials on a bot-authored PR exit
+// 4 and post nothing.
+import { access } from 'node:fs/promises'
+import { appEnvPath } from './app-token.ts'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { loadConfig } from './config.ts'
 import {
@@ -61,12 +64,17 @@ function summary(round: number, targets: LedgerEntry[], marker: string): string 
 }
 
 // Who answers: the Implementer App when it is the PR's author, else the user.
+// No Implementer env file means no Implementer App on this machine, so the
+// user answers. With one, the App's own login tells it from another bot, and
+// broken credentials throw Failure 4: the CLI cannot tell whose PR it is.
 async function poster(repo: string, pr: number, app: boolean): Promise<Identity> {
   if (!app) return userIdentity()
   const read = await gh(['api', `repos/${repo}/pulls/${pr}`, '--jq', '.user.login'])
   const author = read.stdout.trim()
   refuse(read.code === 0 && author !== '', `cannot read the author of PR #${pr}: ${oneLine(read.stderr)}`)
   if (!author.endsWith('[bot]')) return userIdentity()
+  const envFile = await access(appEnvPath('implementer')).then(() => true, () => false)
+  if (!envFile) return userIdentity()
   const implementer = await appIdentity(repo, 'implementer')
   return implementer.login === author ? implementer : userIdentity()
 }

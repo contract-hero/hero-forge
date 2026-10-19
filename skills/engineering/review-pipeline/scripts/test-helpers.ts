@@ -321,13 +321,14 @@ export const IMPLEMENTER_TOKEN = 'ghs_implementer0123456789abcdef'
 
 // A working Implementer App for `repo`: a fresh key, its env file, and a fake
 // GitHub API that mints IMPLEMENTER_TOKEN for slug `contract-implementer`.
-// `broken` leaves out the env file, as on a machine with no credentials.
-// Merge `env` into the env of the CLI call.
+// `missing` leaves out the env file, as on a machine with no Implementer App;
+// `broken` writes one that names no key. Merge `env` into the env of the CLI
+// call.
 export async function implementerApp(
   t: { after: (fn: () => Promise<void>) => void },
   dir: string,
   repo: string,
-  options: { broken?: boolean } = {},
+  options: { missing?: boolean; broken?: boolean } = {},
 ): Promise<{ env: Record<string, string>; api: FakeGitHubApi }> {
   const key = await appKey(dir, 'implementer-app.pem')
   const api = await fakeGitHubApi(t, key.publicKey, {
@@ -336,7 +337,8 @@ export async function implementerApp(
     'GET /app': { status: 200, body: { slug: 'contract-implementer' } },
   })
   const envFile = join(dir, 'implementer-app.env')
-  if (options.broken !== true) {
+  if (options.broken === true) await writeFile(envFile, 'HERO_FORGE_IMPLEMENTER_APP_ID=777\n')
+  else if (options.missing !== true) {
     await writeFile(envFile, `HERO_FORGE_IMPLEMENTER_APP_ID=777\nHERO_FORGE_IMPLEMENTER_APP_KEY=${key.pem}\n`)
   }
   return { env: { HERO_FORGE_IMPLEMENTER_APP_ENV: envFile, HERO_FORGE_GITHUB_API_URL: api.url }, api }
