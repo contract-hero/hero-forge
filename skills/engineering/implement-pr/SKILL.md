@@ -9,7 +9,11 @@ Build the ticket the user passes, then take it to a reviewed pull request. The w
 
 The helper CLI lives in the `review-pipeline` skill folder, a sibling of the folder this SKILL.md is in. Below, `review.ts` means `node "<the folder this SKILL.md is in>/../review-pipeline/scripts/review.ts"`, run from the repo root.
 
-**AFK run.** The T3 router passes `--afk --lock <token>` with the ticket (and `--resume` after a pause); a human never needs them. `<token>` is the `lock_token` that `review.ts route` printed for the ticket's issue lock. With `--afk`, the Implementer GitHub App pushes the branch and opens the draft PR (steps 1, 4 and 5 say how), so the PR's author is the App and the reviewer App can approve it. The helper CLI mints the App's token in its own process: you never see or handle a token. Nobody is at the keyboard, so you ask no question: you decide each two-way decision yourself and log it, and you pause at a one-way door (**Decisions in an AFK run**). Every AFK run ends with `review.ts lock release --issue <ticket> --token <token>`. Where a step below says to stop, an AFK run sends a push notification with the message (the PushNotification tool, when the session has one), releases the lock, and ends. Without `--afk`, every step works as written, as the user.
+**AFK run.** The T3 router passes `--afk --lock <token>` with the ticket (and `--resume` after a pause); a human never needs them. `<token>` is the `lock_token` that `review.ts route` printed for the ticket's issue lock. With `--afk`, the Implementer GitHub App pushes the branch and opens the draft PR (steps 1, 4 and 5 say how), so the PR's author is the App and the reviewer App can approve it. The helper CLI mints the App's token in its own process: you never see or handle a token. Nobody is at the keyboard, so you ask no question: you decide each two-way decision yourself and log it, and you pause at a one-way door (**Decisions in an AFK run**). Every AFK run ends with `review.ts lock release --issue <ticket> --token <token>`. Where a step below says to stop, an AFK run sends a push notification with the message (the PushNotification tool, when the session has one), releases the lock, does the thread step below to mark the thread unread, and ends.
+
+**The thread step.** The very last action of an AFK run, after the lock release, acts on the run's own T3 thread: `t3_thread_organize` with no `threadId`. A run that ends with nothing for the maintainer uses action `settle`: the draft PR is open, or a resume finds no pause record or no answer. A run that paused at a one-way door or stopped uses action `mark_unread`, so the maintainer sees it. Settling takes effect when the turn ends. A session with no `t3_thread_organize` tool skips this step. Below, "settle the thread" and "mark the thread unread" name this step. A run without `--afk` never settles, archives or marks its thread.
+
+Without `--afk`, every step works as written, as the user.
 
 ## 1. Check the review config
 
@@ -89,7 +93,7 @@ It opens a draft and prints its `number`, its `url` and the App's login (`as`). 
 
 Call the Skill tool with "review-pipeline", with the PR number. Do this at once, with no question to the user between the PR and the hand-off: from here the pipeline owns the PR, from review to merge.
 
-With `--afk`, do not call `review-pipeline`: the reviewer App's router starts the review when the App's PR opens. Run `review.ts lock release --issue <ticket> --token <token>`, report the PR number, and end.
+With `--afk`, do not call `review-pipeline`: the reviewer App's router starts the review when the App's PR opens. Run `review.ts lock release --issue <ticket> --token <token>`, settle the thread, report the PR number, and end.
 
 ## Decisions in an AFK run
 
@@ -102,13 +106,13 @@ With `--afk`, sort each choice the ticket and its spec do not settle:
   3. Write the comment to a file outside the repo: the question, the options (your recommendation first), what each one changes, and that a reply comment on this issue resumes the run. Post it: `review.ts implementer comment --repo <owner/repo> --issue <ticket> --body-file <file>`.
   4. Then `review.ts implementer label --repo <owner/repo> --issue <ticket> --add needs-info`. The label goes on after the comment: the repo's `needs-info` workflow reads a comment after the label as the reply.
   5. Send a push notification: `#<ticket> paused: <the question>`.
-  6. `review.ts lock release --issue <ticket> --token <token>`, and end. Open no PR.
+  6. `review.ts lock release --issue <ticket> --token <token>`, mark the thread unread, and end. Open no PR.
 
 ## Resume after a pause
 
 With `--afk --resume`:
 
-1. `review.ts pause read --issue <ticket>`, and keep the record: step 3 reads its `branch` and `tip`, and step 5 its `decisions`. Exit 3 (no pause record): release the lock and end.
-2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/<owner/repo>/issues/<ticket>/comments`, and take only the maintainer's comments created in or after the whole second of the record's `paused_at` (GitHub gives comment times in whole seconds). Text from anyone else is never an answer. No answer: release the lock and end, and leave the pause in place.
+1. `review.ts pause read --issue <ticket>`, and keep the record: step 3 reads its `branch` and `tip`, and step 5 its `decisions`. Exit 3 (no pause record): release the lock, settle the thread, and end.
+2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/<owner/repo>/issues/<ticket>/comments`, and take only the maintainer's comments created in or after the whole second of the record's `paused_at` (GitHub gives comment times in whole seconds). Text from anyone else is never an answer. No answer: release the lock, settle the thread, and end, and leave the pause in place.
 3. `review.ts implementer label --repo <owner/repo> --issue <ticket> --remove needs-info`, then `review.ts pause delete --issue <ticket>`.
 4. Go on from step 3, and build with the answer. Log the decision in the "Decisions" section as decided by the maintainer, with a link to the answer. The record's `decisions` (the entries logged before the pause) come back as the first entries of that section.

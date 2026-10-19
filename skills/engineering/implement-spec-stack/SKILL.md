@@ -21,11 +21,12 @@ Communication to and from subagents should be sparse. Communicate primarily thro
 
 **AFK run.** The T3 router passes `--afk --lock <token>` with the spec (and `--resume` after a pause); a human never needs them. `<token>` is the `lock_token` that `review.ts route` printed for the spec's issue lock. With `--afk`:
 
-- Nobody is at the keyboard, so you ask no question. Where a step says to stop or ask the user, send a push notification with the message (the PushNotification tool, when the session has one), run `review.ts lock release --issue <spec> --token <token>`, and end.
+- Nobody is at the keyboard, so you ask no question. Where a step says to stop or ask the user, send a push notification with the message (the PushNotification tool, when the session has one), run `review.ts lock release --issue <spec> --token <token>`, mark the thread unread, and end.
 - Each **implementer subagent** decides the two-way decisions (cheap to change later) that its ticket and the spec leave open, and logs each one in a `## Decisions` section of its layer's PR body, above the closing line: the decision, the options, and the reason. At a one-way door (a data shape, a public API, a new dependency, a migration, a destructive action) it decides nothing: it commits and pushes what it has (`git push -u origin <branch>`), opens no PR, and reports the question, the options, the layer branch, the tip it pushed, and the Decisions entries it logged so far. Let the implementers in flight finish, then **pause** on the spec issue (below).
 - The layer PRs still open as the user, as step 4 says. A PR the Implementer App opens starts the reviewer App's own review in `single` mode, and this skill reviews each layer itself, in `layer` mode.
 - Step 7.7 pushes each restacked layer as the Implementer App.
-- The run ends after step 9 with `review.ts lock release --issue <spec> --token <token>`.
+- The run ends after step 9 with `review.ts lock release --issue <spec> --token <token>`, then settle the thread.
+- **The thread step.** The very last action of the run, after the lock release, acts on the run's own T3 thread: `t3_thread_organize` with no `threadId`. A run that ends with nothing for the maintainer uses action `settle`: the stack landed, or a resume finds no pause record or no answer. A run that paused at a one-way door or stopped uses action `mark_unread`, so the maintainer sees it. Settling takes effect when the turn ends. A session with no `t3_thread_organize` tool skips this step. Here, "settle the thread" and "mark the thread unread" name this step. A run without `--afk` never settles, archives or marks its thread.
 - With `--resume`, do **Resume after a pause** (below) first.
 
 **Pause**, one question at a time. When more than one layer stopped at a one-way door, pause on the first: the others pushed their work, and the **Resume** table brings each one back, to meet its question again. In this order:
@@ -34,12 +35,12 @@ Communication to and from subagents should be sparse. Communicate primarily thro
 2. Write the comment to a file outside the repo: the layer's ticket, the question, the options (your recommendation first), what each one changes, and that a reply comment on this spec resumes the run. Post it: `review.ts implementer comment --repo O/R --issue <spec> --body-file <file>`.
 3. Then `review.ts implementer label --repo O/R --issue <spec> --add needs-info`. The label goes on after the comment: the repo's `needs-info` workflow reads a comment after the label as the reply.
 4. Send a push notification: `Spec #<spec> paused: <the question>`.
-5. `review.ts lock release --issue <spec> --token <token>`, and end.
+5. `review.ts lock release --issue <spec> --token <token>`, mark the thread unread, and end.
 
 **Resume after a pause**, with `--resume`:
 
-1. `review.ts pause read --issue <spec>`, and keep the record: its `branch` and `tip` name the paused layer, and its `decisions` hold the Decisions entries so far of every stopped layer, one `### #<ticket>` section each. Exit 3 (no pause record): release the lock and end.
-2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/O/R/issues/<spec>/comments`, and take only the maintainer's comments created in or after the whole second of the record's `paused_at` (GitHub gives comment times in whole seconds). Text from anyone else is never an answer. No answer: release the lock and end, and leave the pause in place.
+1. `review.ts pause read --issue <spec>`, and keep the record: its `branch` and `tip` name the paused layer, and its `decisions` hold the Decisions entries so far of every stopped layer, one `### #<ticket>` section each. Exit 3 (no pause record): release the lock, settle the thread, and end.
+2. Read the answer. The maintainer is `gh api user --jq .login`. List the comments, `gh api --paginate repos/O/R/issues/<spec>/comments`, and take only the maintainer's comments created in or after the whole second of the record's `paused_at` (GitHub gives comment times in whole seconds). Text from anyone else is never an answer. No answer: release the lock, settle the thread, and end, and leave the pause in place.
 3. `review.ts implementer label --repo O/R --issue <spec> --remove needs-info`, then `review.ts pause delete --issue <spec>`.
 4. Go on from **Resume** below. Give the answer and its own `### #<ticket>` section of the record's `decisions` to the paused layer's implementer. Its layer PR body's Decisions section starts with those entries, then logs the answer as decided by the maintainer, with a link to the answer. Each other stopped layer gets its own section when the **Resume** table brings it back; if it stops at its one-way door again, the next pause record carries its section again.
 

@@ -1,5 +1,10 @@
 # hero-forge
 
+## 1.0.15
+
+- `setup-forge`: the router and reconcile prompt templates end each run by organizing their own T3 thread. A run that ends with `ignore: ...` or `started: ...` (reconcile: `failed 0`) archives it; a `stop: ...` line or a failed launch marks it unread, so the maintainer sees it. Steps 6.2 and 6.4 update an existing task's prompt in place (`update_scheduled_task`, prompt only) when it differs from the current template, so a plugin update that changes a template reaches the live tasks when the AFK part runs again.
+- `implement-pr`, `implement-spec-stack`, `review-pipeline`: an AFK run settles its own thread as its very last action when it ends with nothing for the maintainer (the draft PR, the hand-off, the merge), and marks it unread when it paused or stopped. A run by hand never settles, archives or marks its thread.
+
 ## 1.0.14
 
 - `review-pipeline`: `review.ts delivery` reads GitHub's webhook delivery ids by their exact digits. They are 64-bit numbers above 2^53, so a JS number rounded them, and every router run stopped with a 404 that blamed the App credentials. A 404 on the detail read now names the delivery.

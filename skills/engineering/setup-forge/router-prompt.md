@@ -1,4 +1,4 @@
-hero-forge router for the <<app>> App. One GitHub webhook delivery came in. Route it and start at most one thread. Run only the steps below: no other command, no edits, no questions. Each exit is one line, as each step says.
+hero-forge router for the <<app>> App. One GitHub webhook delivery came in. Route it and start at most one thread. Run only the steps below: no other command, no edits, no questions. Each exit is one line, as each step says, and the last step comes before it.
 
 Delivery id: `{{headers.x-github-delivery}}`. Event: `{{headers.x-github-event}}`. Repo: `{{body.repository.full_name}}`.
 
@@ -22,3 +22,4 @@ Delivery id: `{{headers.x-github-delivery}}`. Event: `{{headers.x-github-event}}
    The PR head: `gh pr view <pr> --repo <repo> --json headRefName --jq .headRefName`. The default branch: `gh repo view <repo> --json defaultBranchRef --jq .defaultBranchRef.name`.
 7. Launch one thread with `t3_thread_launch`: `projectId` the project of step 4, `title` `<<app>> <action> <repo>#<n>`, `workspaceStrategy` `{type: "worktree", baseRef: <base>, startFromOrigin: true}`, and `message` the message of step 6. Exit with `started: <action> <repo>#<n>`.
    The launch fails: give back what the decision took, `review.ts route undo --app <<app>> --token <lock_token>`, in the `workspaceRoot`. It forgets the delivery (so a redelivery is decided again), gives back the build attempt and the counted run, and releases the lock. Then exit with `stop: launch failed: <the error>`.
+8. Every exit above: as the last action, before you write its line, call `t3_thread_organize` with no `threadId`, which acts on this thread. Use action `archive` for an `ignore: ...` or `started: ...` exit: the thread holds nothing for the maintainer. Use action `mark_unread` for a `stop: ...` exit, so the maintainer sees it. A session with no `t3_thread_organize` tool skips this step.
