@@ -1,13 +1,16 @@
 // `review.ts app-token` (usage in the table in cli.ts).
-// Check that the reviewer GitHub App can mint an installation token for the
-// repo, from the credentials in ~/.config/hero-forge/ (never in the repo),
-// or print its bot login.
+// Check that a GitHub App can mint an installation token for the repo, from
+// its credentials in ~/.config/hero-forge/ (never in the repo), or print its
+// bot login. Two Apps, each with its own env file: `reviewer` (the default)
+// posts the reviews and merges, `implementer` builds the tickets.
 //
 // It never prints the token: any agent with a shell could take it and
 // approve its own PR. post-review mints its own token in-process
 // (mintAppToken) for each post.
 //
 // Exit 3: the config has no `app: enabled`, so the caller posts as the user.
+// Both Apps answer to that key for now, with the same exit and message; the
+// implementer gets its own switch with the `implementer:` config block.
 // Exit 4: the App is enabled but something is wrong (credentials, key, an
 // HTTP error, the App not installed on the repo), so the caller stops. A
 // broken App never falls back to the user: that would quietly turn the
@@ -24,12 +27,24 @@ import { Failure, parse, runMain, usageFor } from './cli.ts'
 
 const FIX = 'Fix the App credentials, or re-run /setup-forge'
 
-export const ID_KEY = 'HERO_FORGE_REVIEWER_APP_ID'
-export const KEY_KEY = 'HERO_FORGE_REVIEWER_APP_KEY'
+export const APPS = ['reviewer', 'implementer'] as const
 
-// The env file, overridable for tests with HERO_FORGE_REVIEWER_APP_ENV.
-export function appEnvPath(): string {
-  return process.env.HERO_FORGE_REVIEWER_APP_ENV || join(homedir(), '.config', 'hero-forge', 'reviewer-app.env')
+export type AppName = (typeof APPS)[number]
+
+// Each App's env file holds HERO_FORGE_<NAME>_APP_ID and HERO_FORGE_<NAME>_APP_KEY
+// (a path to the PEM key). The token asks only for what the App does: the
+// reviewer posts reviews, the implementer also pushes, comments and labels.
+const APP: Record<AppName, { prefix: string; permissions: Record<string, string> }> = {
+  reviewer: { prefix: 'HERO_FORGE_REVIEWER_APP', permissions: { pull_requests: 'write', contents: 'read' } },
+  implementer: {
+    prefix: 'HERO_FORGE_IMPLEMENTER_APP',
+    permissions: { contents: 'write', pull_requests: 'write', issues: 'write' },
+  },
+}
+
+// The env file, overridable for tests with HERO_FORGE_<NAME>_APP_ENV.
+export function appEnvPath(app: AppName = 'reviewer'): string {
+  return process.env[`${APP[app].prefix}_ENV`] || join(homedir(), '.config', 'hero-forge', `${app}-app.env`)
 }
 
 function apiBase(): string {
@@ -66,14 +81,16 @@ export function parseEnvFile(text: string): Map<string, string> {
   return values
 }
 
-async function loadCredentials(): Promise<{ id: string; key: KeyObject }> {
-  const file = appEnvPath()
+async function loadCredentials(app: AppName): Promise<{ id: string; key: KeyObject }> {
+  const file = appEnvPath(app)
+  const ID_KEY = `${APP[app].prefix}_ID`
+  const KEY_KEY = `${APP[app].prefix}_KEY`
   let text: string
   try {
     text = await readFile(file, 'utf8')
   } catch (error) {
     const missing = (error as { code?: string }).code === 'ENOENT'
-    throw broken(`the reviewer App is enabled but its env file ${file} ${missing ? 'does not exist' : 'cannot be read'}`)
+    throw broken(`the ${app} App is enabled but its env file ${file} ${missing ? 'does not exist' : 'cannot be read'}`)
   }
   const values = parseEnvFile(text)
   const id = values.get(ID_KEY) ?? ''
@@ -141,9 +158,9 @@ async function call<T>(step: string, jwt: string, method: string, path: string, 
 export type AppIdentity = { token: string; login: string }
 
 // Mint a token for one repo and read the App's bot login. Throws Failure 4.
-export async function mintAppToken(repo: string): Promise<AppIdentity> {
+export async function mintAppToken(repo: string, app: AppName = 'reviewer'): Promise<AppIdentity> {
   const [owner, name] = repo.split('/')
-  const { id, key } = await loadCredentials()
+  const { id, key } = await loadCredentials(app)
   const jwt = appJwt(id, key)
 
   let installation: { id?: unknown }
@@ -151,7 +168,7 @@ export async function mintAppToken(repo: string): Promise<AppIdentity> {
     installation = await call('find the App installation', jwt, 'GET', `/repos/${owner}/${name}/installation`)
   } catch (error) {
     if (error instanceof Failure && / HTTP 404/.test(error.message)) {
-      throw broken(`the reviewer App is not installed on ${repo} (HTTP 404)`)
+      throw broken(`the ${app} App is not installed on ${repo} (HTTP 404)`)
     }
     throw error
   }
@@ -159,13 +176,13 @@ export async function mintAppToken(repo: string): Promise<AppIdentity> {
 
   const access = await call<{ token?: unknown }>('mint the installation token', jwt, 'POST', `/app/installations/${installation.id}/access_tokens`, {
     repositories: [name],
-    permissions: { pull_requests: 'write', contents: 'read' },
+    permissions: APP[app].permissions,
   })
   if (typeof access.token !== 'string' || access.token === '') throw broken('mint the installation token: GitHub sent no token')
 
-  const app = await call<{ slug?: unknown }>('read the App', jwt, 'GET', '/app')
-  if (typeof app.slug !== 'string' || app.slug === '') throw broken('read the App: GitHub sent no slug')
-  return { token: access.token, login: `${app.slug}[bot]` }
+  const self = await call<{ slug?: unknown }>('read the App', jwt, 'GET', '/app')
+  if (typeof self.slug !== 'string' || self.slug === '') throw broken('read the App: GitHub sent no slug')
+  return { token: access.token, login: `${self.slug}[bot]` }
 }
 
 const usage = usageFor('app-token')
@@ -175,6 +192,7 @@ async function appToken(argv: string[]): Promise<string> {
     argv,
     {
       repo: { type: 'string' },
+      app: { type: 'string', default: 'reviewer' },
       config: { type: 'string' },
       login: { type: 'boolean' },
       check: { type: 'boolean' },
@@ -183,6 +201,8 @@ async function appToken(argv: string[]): Promise<string> {
   )
   const { repo } = values
   if (repo === undefined || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw usage('--repo must be OWNER/REPO')
+  const app = values.app as AppName
+  if (!APPS.includes(app)) throw usage(`--app must be ${APPS.join(' or ')}`)
   if (values.login && values.check) throw usage('--login and --check do not go together')
   if (!values.login && !values.check) throw usage('app-token needs --check or --login: it never prints a token (post-review mints its own)')
 
@@ -190,10 +210,10 @@ async function appToken(argv: string[]): Promise<string> {
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, 4)
   if (!loaded.config.app) {
-    throw new Failure('no reviewer App configured for this repo (no "app: enabled" in the config): post as the user', 3)
+    throw new Failure(`no ${app} App configured for this repo (no "app: enabled" in the config): post as the user`, 3)
   }
 
-  const minted = await mintAppToken(repo)
+  const minted = await mintAppToken(repo, app)
   return values.login ? `${minted.login}\n` : ''
 }
 

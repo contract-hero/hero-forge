@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.6
+
+- `review-pipeline`: `app-token` takes `--app reviewer|implementer` (default `reviewer`). Each App has its own env file under `~/.config/hero-forge/` (`reviewer-app.env`, `implementer-app.env`), its own env-var names and its own test override. Every reviewer path works as before with no new flag, and no subcommand prints a token for either App.
+
 ## 1.0.5
 
 - `review-pipeline`: with no spec, each Standards reviewer gets `scope-prompt.md` and the PR body. The PR body is the stated scope, and a changed file it does not account for is a low-severity finding. Both runtimes fill the same text.

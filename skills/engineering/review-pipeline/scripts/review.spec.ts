@@ -7,7 +7,7 @@ import { runCli } from './test-helpers.ts'
 const SUBCOMMANDS: [string, string][] = [
   ['config', 'usage: review.ts config [--config <path>]'],
   ['run-state', '  review.ts run-state path    --pr N'],
-  ['app-token', 'usage: review.ts app-token --repo O/R [--config <path>] --check | --login'],
+  ['app-token', 'usage: review.ts app-token --repo O/R [--app reviewer|implementer] [--config <path>] --check | --login'],
   ['post-review', 'usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R'],
   ['reply', 'usage: review.ts reply --repo O/R --pr N --round R --ledger <findings.json>'],
   [

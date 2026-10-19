@@ -20,6 +20,7 @@ const WORKING: Record<string, FakeApiRoute> = {
 // `env`: the env file's text, a function of the temp dir that returns it, or
 // null for no env file.
 type Setup = {
+  app?: 'reviewer' | 'implementer'
   config?: string
   env?: string | ((dir: string) => string) | null
   routes?: Record<string, FakeApiRoute>
@@ -35,15 +36,18 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const key = await appKey(dir)
   const trusted = options.wrongKey ? (await appKey(dir, 'other.pem')).publicKey : key.publicKey
   const api = await fakeGitHubApi(t, trusted, options.routes ?? WORKING)
-  const envFile = join(dir, 'reviewer-app.env')
+  // With `app`, the env file and env var of that App, and `--app` on every call.
+  const NAME = (options.app ?? 'reviewer').toUpperCase()
+  const envFile = join(dir, `${options.app ?? 'reviewer'}-app.env`)
   if (options.env !== null) {
     const text = typeof options.env === 'function' ? options.env(dir) : options.env
-    await writeFile(envFile, text ?? `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${key.pem}\n`)
+    await writeFile(envFile, text ?? `HERO_FORGE_${NAME}_APP_ID=123456\nHERO_FORGE_${NAME}_APP_KEY=${key.pem}\n`)
   }
-  const env = { ...baseEnv(), HERO_FORGE_REVIEWER_APP_ENV: envFile, HERO_FORGE_GITHUB_API_URL: api.url }
+  const env = { ...baseEnv(), [`HERO_FORGE_${NAME}_APP_ENV`]: envFile, HERO_FORGE_GITHUB_API_URL: api.url }
+  const appFlag = options.app === undefined ? [] : ['--app', options.app]
   // `--check` unless the test names its own flags.
   const mint = (...extra: string[]) =>
-    runCli(['app-token', '--repo', REPO, '--config', configPath, ...(extra.length === 0 ? ['--check'] : extra)], { env })
+    runCli(['app-token', '--repo', REPO, '--config', configPath, ...appFlag, ...(extra.length === 0 ? ['--check'] : extra)], { env })
   return { dir, key, api, envFile, mint, env, configPath }
 }
 
@@ -233,4 +237,127 @@ test('the env file is read as data: export, quotes, comments and a ~/ key path',
   assert.equal(code, 0)
   assert.equal(stdout, 'hero-reviewer[bot]\n')
   assert.equal(api.requests[0]?.iss, 'Iv23liFAKE')
+})
+
+// The implementer App: its own env file and key names, its own slug.
+const IMPLEMENTER: Record<string, FakeApiRoute> = { ...WORKING, 'GET /app': { status: 200, body: { slug: 'hero-implementer' } } }
+
+test('--app implementer --check mints a token from the implementer env file and prints nothing', async (t) => {
+  const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER })
+  const { code, stdout, stderr } = await s.mint('--check')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.equal(stdout, '')
+  assert.deepEqual(
+    s.api.requests.map((r) => [r.method, r.path, r.jwt_ok, r.iss]),
+    [
+      ['GET', `/repos/${REPO}/installation`, true, '123456'],
+      ['POST', '/app/installations/4242/access_tokens', true, '123456'],
+      ['GET', '/app', true, '123456'],
+    ],
+  )
+  // The Implementer pushes branches, opens pull requests, comments and labels.
+  assert.deepEqual(s.api.requests[1]?.body, {
+    repositories: ['hero-forge'],
+    permissions: { contents: 'write', pull_requests: 'write', issues: 'write' },
+  })
+})
+
+test('--app implementer --login prints the implementer App bot login', async (t) => {
+  const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER })
+  assert.deepEqual(await s.mint('--login'), { code: 0, stdout: 'hero-implementer[bot]\n', stderr: '' })
+})
+
+test('--app implementer with no App in the config exits 3 like the reviewer form, and calls no API', async (t) => {
+  const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER, config: NO_APP })
+  const { code, stdout, stderr } = await s.mint('--login')
+  assert.equal(code, 3)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts app-token: no implementer App configured for this repo \(no "app: enabled" in the config\): post as the user/m)
+  assert.deepEqual(s.api.requests, [])
+})
+
+test('--app implementer with no override reads ~/.config/hero-forge/implementer-app.env', async (t) => {
+  const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER })
+  const home = join(s.dir, 'home')
+  const configDir = join(home, '.config', 'hero-forge')
+  await mkdir(configDir, { recursive: true })
+  await writeFile(join(configDir, 'implementer-app.env'), `HERO_FORGE_IMPLEMENTER_APP_ID=123456\nHERO_FORGE_IMPLEMENTER_APP_KEY=${s.key.pem}\n`)
+  // A reviewer env file at its default path too: the implementer must not pick it.
+  await writeFile(join(configDir, 'reviewer-app.env'), 'HERO_FORGE_REVIEWER_APP_ID=999\nHERO_FORGE_REVIEWER_APP_KEY=/no/such/key.pem\n')
+  const env: Record<string, string | undefined> = { ...s.env, HOME: home }
+  delete env.HERO_FORGE_IMPLEMENTER_APP_ENV
+  delete env.HERO_FORGE_REVIEWER_APP_ENV
+  const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, '--app', 'implementer', '--login'], { env })
+  assert.deepEqual({ code, stdout, stderr }, { code: 0, stdout: 'hero-implementer[bot]\n', stderr: '' })
+})
+
+test('--app implementer never reads the reviewer env file', async (t) => {
+  // A working reviewer env file, and no implementer env var: the default
+  // implementer path is one baseEnv points at nothing.
+  const s = await setup(t)
+  const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, '--app', 'implementer', '--check'], { env: s.env })
+  assert.equal(code, 4)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts app-token: the implementer App is enabled but its env file .*implementer-app\.env does not exist/)
+  assert.deepEqual(s.api.requests, [])
+})
+
+const BROKEN_IMPLEMENTER: [string, Setup, RegExp][] = [
+  ['the env file is missing', { env: null }, /the implementer App is enabled but its env file .*implementer-app\.env does not exist/],
+  [
+    'the env file uses the reviewer key names',
+    { env: (dir) => `HERO_FORGE_REVIEWER_APP_ID=1\nHERO_FORGE_REVIEWER_APP_KEY=${join(dir, 'reviewer-app.pem')}\n` },
+    /sets no HERO_FORGE_IMPLEMENTER_APP_ID/,
+  ],
+  ['the env file has no key path', { env: 'HERO_FORGE_IMPLEMENTER_APP_ID=1\n' }, /sets no HERO_FORGE_IMPLEMENTER_APP_KEY/],
+  [
+    'the key file is not a PEM key',
+    { env: (dir) => `HERO_FORGE_IMPLEMENTER_APP_ID=1\nHERO_FORGE_IMPLEMENTER_APP_KEY=${join(dir, 'review.md')}\n` },
+    /the App private key .*review\.md is not a valid PEM private key/,
+  ],
+  ['the key is not the App key (GitHub answers 401)', { wrongKey: true }, /find the App installation failed: HTTP 401/],
+  [
+    'the App is not installed on the repo (404)',
+    { routes: { ...IMPLEMENTER, [`GET /repos/${REPO}/installation`]: { status: 404, body: { message: 'Not Found' } } } },
+    /the implementer App is not installed on contract-hero\/hero-forge \(HTTP 404\)/,
+  ],
+  [
+    'the App lacks a permission the token asks for (422)',
+    { routes: { ...IMPLEMENTER, 'POST /app/installations/4242/access_tokens': { status: 422, body: { message: 'permission contents not granted' } } } },
+    /mint the installation token failed: HTTP 422 \(permission contents not granted\)/,
+  ],
+  ['the config is invalid', { config: '```yaml\nruntime: claude\napp: yes\n```\n' }, /app must be "enabled" or left out/],
+]
+
+for (const [name, options, message] of BROKEN_IMPLEMENTER) {
+  test(`a broken implementer App exits 4 and prints no token: ${name}`, async (t) => {
+    const s = await setup(t, { app: 'implementer', routes: IMPLEMENTER, ...options })
+    const { code, stdout, stderr } = await s.mint()
+    assert.equal(code, 4)
+    assert.equal(stdout, '')
+    assert.match(stderr, /^review\.ts app-token: /)
+    assert.match(stderr, message)
+    assert.doesNotMatch(stderr, new RegExp(TOKEN))
+    assert.doesNotMatch(stderr, /PRIVATE KEY/)
+  })
+}
+
+test('--app reviewer is the same as no --app', async (t) => {
+  const s = await setup(t)
+  const plain = await s.mint('--login')
+  assert.deepEqual(await s.mint('--app', 'reviewer', '--login'), plain)
+  const none = await setup(t, { config: NO_APP })
+  assert.deepEqual(await none.mint('--app', 'reviewer', '--check'), await none.mint('--check'))
+})
+
+test('an unknown --app is a usage error (exit 2) and calls no API', async (t) => {
+  const s = await setup(t)
+  for (const args of [['--app', 'bogus'], ['--app', 'Reviewer'], ['--app', '']]) {
+    const { code, stdout, stderr } = await runCli(['app-token', '--repo', REPO, '--config', s.configPath, ...args, '--check'], { env: s.env })
+    assert.equal(code, 2, `${args.join(' ')}: ${stderr}`)
+    assert.equal(stdout, '')
+    assert.match(stderr, /^review\.ts app-token: --app must be reviewer or implementer\nusage: review\.ts app-token/)
+  }
+  assert.deepEqual(s.api.requests, [])
 })
