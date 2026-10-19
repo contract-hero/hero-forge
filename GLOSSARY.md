@@ -44,6 +44,17 @@ The **Implementer**'s answer to a posted review: it accepts or refutes each find
 **Re-checker**:
 A fresh, read-only agent that checks an **Adjudication** against the code: each finding is fixed, validly refuted, or still open. It is never the **Implementer** or that round's **Orchestrator**.
 
+**AFK run**:
+A run of a skill that a T3 router task starts from a GitHub event, with no person at the keyboard. The router passes `--afk` and a lock token. The run asks no question: it decides each two-way decision itself and logs it (a build in the pull request body's "Decisions" section, an **Adjudication** in its ledger), and it pauses at a one-way door with a **Pause record**. In the **Review pipeline**, an AFK run is split into parts (`review`, `adjudicate`, `recheck`), each in a fresh thread, and a **Hand-off marker** starts the next part.
+_Avoid_: unattended run, headless run
+
+**Hand-off marker**:
+The hidden line (`<!-- hero-forge:handoff kind=<kind> pr=<N> round=<R> -->`) that one part of an **AFK run** posts as the last line of its last comment, after it saves the run state and releases its lock. Anywhere else in a comment, the line is no hand-off. The comment's webhook wakes the next part through the other App's router: `review-posted` and `recheck-failed` start an **Adjudication**, and `adjudicated` starts a re-check. Only the helper CLI writes it: the CLI refuses agent text that holds one. It is not the **Review pipeline**'s own hidden marker (`hero-forge:review-pipeline`).
+_Avoid_: trigger comment, done marker
+
+**Pause record**:
+The file that holds the one-way-door question of a paused **AFK run** until the maintainer answers it: one per paused issue or pull request, under the run state root. The run writes it before it posts the question, so only a reply at or after its `paused_at` is the answer. It also keeps the branch and the commit that the run pushed, and the decisions it logged, so that the resumed run starts from them. The maintainer's reply comment turns it into a resume, and the resumed run deletes it.
+
 ## Relationships
 
 - An **Issue tracker** holds many **Issues**
@@ -53,6 +64,9 @@ A fresh, read-only agent that checks an **Adjudication** against the code: each 
 - Each **Reviewer pair** is one **Standards** reviewer plus one **Spec** reviewer
 - Every posted review is followed by **Adjudication** by the pull request's **Implementer**
 - Round 1 is the posted review, its **Adjudication**, and one check by a **Re-checker**; each later round is an **Adjudication** of the findings still open plus a new check, with no new review, up to the repo's round limit
+- A part of an **AFK run** in the **Review pipeline** that leaves work for the other App ends with one **Hand-off marker**, which starts the next part; a part that ends the run (a merge or a stop) posts none
+- A **Hand-off marker** comes only from the helper CLI, after the run state is saved and the lock is released
+- A **Pause record** blocks an **AFK run** until the maintainer replies on its issue or pull request
 
 ## Flagged ambiguities
 
