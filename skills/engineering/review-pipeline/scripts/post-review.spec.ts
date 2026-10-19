@@ -843,6 +843,21 @@ test('with the App, a missing commit-status permission exits 4 naming it, record
   const statuses = (await s.calls()).filter(isStatus)
   assert.deepEqual(statuses.map((c) => c.gh_token), [TOKEN])
   assert.deepEqual(await s.gates(), [])
+
+  // After the fix, a re-run finds the re-check on GitHub, posts only the
+  // status, and records the pass.
+  await s.gh.respond([
+    { match: 'pulls/13/comments', stdout: POSTED },
+    { match: '--paginate', stdout: listed({ id: 666, body: `## Re-check: round 1\n\n${RECHECK_MARKER}`, commit_id: FIXED, login: BOT }) },
+  ])
+  const again = await s.gated('recheck')
+  assert.equal(again.stderr, '')
+  assert.equal(again.code, 0)
+  assert.deepEqual(JSON.parse(again.stdout), { posted: false, duplicate: true, id: 666, gate: 'pass', problems: [] })
+  const calls = await s.calls()
+  assert.deepEqual(calls.filter(isStatus).map((c) => c.argv), [STATUS(FIXED), STATUS(FIXED)])
+  assert.equal(calls.filter((c) => c.argv.join(' ').includes('pulls/13/reviews --input')).length, 1)
+  assert.deepEqual(await s.gates(), [{ round: 1, commit: FIXED, result: 'pass' }])
 })
 
 test('with the App, a zero-finding review posts the gate success status at the pinned head', async (t) => {
