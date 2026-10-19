@@ -4,16 +4,20 @@
 // for each item the event and payload that `route` would have received, and
 // decides it with route's own `decide`, so caps, paused, locks, sender and
 // author rules give the same answers. It never holds a rule of its own, but
-// one: a ticket or spec that a trusted open PR closes is ignore, has-pr.
+// one: a ticket or spec that a trusted open PR closes is ignore, has-pr. The
+// lists pick which comment stands for an item; route still judges it.
 //
 // The items, each with its App and its delivery id. A delivery id is the
 // same on every sweep, so a done record makes the next sweep a duplicate:
 //   - an open issue labelled ready-for-agent: issues.labeled, sent by the
 //     actor of the issue's latest labeled event for that label (implementer)
 //                                         reconcile-label-<N>-<event id>
-//     A ticket that an open PR closes, or a spec one of whose sub-issues an
-//     open PR closes, is ignore, has-pr, and route is not asked. Only a PR
-//     by the maintainer or contract-implementer[bot] counts.
+//     An issue with a pause record of this repo is no item here: its build
+//     goes on only through the answer (the last kind). A ticket that an open
+//     PR closes, or a spec one of whose sub-issues an open PR closes, is
+//     ignore, has-pr, after route's paused and duplicate rules and before
+//     its App rules. Only a PR by the maintainer or contract-implementer[bot]
+//     counts.
 //   - an open PR with no run state, or with a run state at another head:
 //     pull_request.opened, or ready_for_review for a PR that is not a draft
 //     and not contract-implementer[bot]'s (reviewer)
@@ -22,6 +26,10 @@
 //     contract-implementer[bot] posted on an open PR: issue_comment.created
 //     (implementer for review-posted and recheck-failed, reviewer for
 //     adjudicated)                        reconcile-handoff-<N>-<comment id>
+//   - the newest comment by the maintainer on an open PR whose first line is
+//     exactly /recheck, newer than the last hand-off of contract-reviewer[bot]
+//     there: issue_comment.created (reviewer)
+//                                         reconcile-recheck-<N>-<comment id>
 //   - an open issue or PR with needs-info and a pause record, with a comment
 //     by the maintainer newer than the record's paused_at: the newest such
 //     comment, as issue_comment.created (implementer)
@@ -126,10 +134,9 @@ async function hasPr(repo: string, issue: number, closed: Set<number>): Promise<
 const labelsOf = (names: string[]) => names.map((name) => ({ name }))
 
 // A missed label: the labeled event of its latest adder.
-async function labelItem(repo: string, issue: Listed, closed: Set<number>, context: Context): Promise<Line> {
-  if (!issue.pull_request && (await hasPr(repo, issue.number, closed))) {
-    return { action: 'ignore', repo, pr: null, issue: issue.number, reason: 'has-pr', lock_token: null, app: 'implementer' }
-  }
+async function labelItem(repo: string, issue: Listed, closed: Set<number>, context: Context): Promise<Line | null> {
+  // A build that paused goes on only through its answer (resumeItem).
+  if ((await readPause({ kind: issue.pull_request ? 'pr' : 'issue', number: issue.number }))?.repo === repo) return null
   const events = await listLines<{ id: number; label: string | null; actor: string | null }>(
     [
       'api',
@@ -154,7 +161,9 @@ async function labelItem(repo: string, issue: Listed, closed: Set<number>, conte
     label: { name: BUILD_LABEL },
   }
   const delivery = `reconcile-label-${issue.number}-${labeled?.id ?? 'none'}`
-  return { ...(await decide('implementer', 'issues', delivery, payload, context)), app: 'implementer' }
+  // has-pr comes after paused and duplicate, as route's rules for both Apps come first.
+  const hasPrNow = async () => (!issue.pull_request && (await hasPr(repo, issue.number, closed)) ? 'has-pr' : null)
+  return { ...(await decide('implementer', 'issues', delivery, payload, context, hasPrNow)), app: 'implementer' }
 }
 
 // An open PR as the PR list gives it.
@@ -240,6 +249,27 @@ async function handoffItem(repo: string, pull: Pull, comments: Comment[], contex
 }
 
 // A missed answer: the maintainer's newest comment after the run paused.
+// A missed /recheck: the maintainer's newest one since the reviewer last
+// handed off. An older /recheck answered an earlier round.
+async function recheckItem(repo: string, pull: Pull, comments: Comment[], context: Context): Promise<Line | null> {
+  const maintainer = await context.maintainer()
+  const handedOff = comments.findLastIndex((c) => sameLogin(c.author ?? undefined, REVIEWER_BOT) && parseHandoff(c.body) !== null)
+  const last = comments
+    .slice(handedOff + 1)
+    .filter((c) => sameLogin(c.author ?? undefined, maintainer) && (c.body ?? '').split('\n')[0]?.replace(/\r$/, '') === '/recheck')
+    .at(-1)
+  if (last === undefined) return null
+  const payload: Payload = {
+    action: 'created',
+    repository: { full_name: repo },
+    sender: { login: last.author ?? undefined },
+    issue: { number: pull.number, user: { login: pull.author ?? undefined }, labels: labelsOf(pull.labels), pull_request: prUrl(repo, pull.number) },
+    comment: { body: last.body, created_at: last.created_at },
+  }
+  const delivery = `reconcile-recheck-${pull.number}-${last.id}`
+  return { ...(await decide('reviewer', 'issue_comment', delivery, payload, context)), app: 'reviewer' }
+}
+
 async function resumeItem(repo: string, paused: Listed, comments: (number: number) => Promise<Comment[]>, context: Context): Promise<Line | null> {
   const record = await readPause({ kind: paused.pull_request ? 'pr' : 'issue', number: paused.number })
   if (record === null) return null
@@ -286,6 +316,7 @@ async function reconcile(argv: string[]): Promise<number> {
     ...labelled.map((issue) => () => labelItem(repo, issue, closed, context)),
     ...pulls.map((pull) => () => pullItem(repo, pull, context)),
     ...pulls.map((pull) => async () => handoffItem(repo, pull, await comments(pull.number), context)),
+    ...pulls.map((pull) => async () => recheckItem(repo, pull, await comments(pull.number), context)),
     ...paused.map((issue) => () => resumeItem(repo, issue, comments, context)),
   ]
 

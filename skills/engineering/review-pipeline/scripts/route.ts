@@ -397,8 +397,17 @@ export function liveContext(): Context {
 
 // Decide one delivery for `app`, and for work take its lock, reserve the
 // attempt, record the delivery and count the run, as the rules at the top of
-// this file say.
-export async function decide(app: AppName, name: string, delivery: string, payload: Payload, context: Context): Promise<Decision> {
+// this file say. `before` is a caller's own ignore reason, asked after the
+// rules for both Apps (paused, duplicate) and before the App's rules; route
+// gives none.
+export async function decide(
+  app: AppName,
+  name: string,
+  delivery: string,
+  payload: Payload,
+  context: Context,
+  before?: () => Promise<string | null>,
+): Promise<Decision> {
   const full = payload.repository?.full_name
   const repo = isRepo(full) ? full : null
   // A comment or a label on a PR comes as an issue event with issue.pull_request set.
@@ -417,6 +426,8 @@ export async function decide(app: AppName, name: string, delivery: string, paylo
 
   if (config?.paused === true) return decided('ignore', 'paused')
   if (await doneDelivery(app, delivery)) return decided('ignore', 'duplicate')
+  const vetoed = (await before?.()) ?? null
+  if (vetoed !== null) return decided('ignore', vetoed)
 
   const event: Event = {
     name,

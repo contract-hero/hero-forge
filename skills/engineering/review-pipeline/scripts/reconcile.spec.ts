@@ -458,7 +458,8 @@ test('reconcile: an item that fails prints its error, and the other items still 
   await m.gh.respond([{ match: `repos/${REPO}/issues/42/comments`, stderr: 'gh: Server Error (HTTP 502)\n', exit: 1 }, ...responses(everyKind())])
   const { code, stdout, stderr } = await m.reconcile()
   assert.equal(code, 1)
-  assert.equal(stderr, `review.ts reconcile: cannot list the comments of #42: gh: Server Error (HTTP 502)\n`)
+  // Both items of PR #42 that read its comments (the hand-off and the /recheck) fail.
+  assert.equal(stderr, `review.ts reconcile: cannot list the comments of #42: gh: Server Error (HTTP 502)\n`.repeat(2))
   assert.deepEqual(stdout.split('\n').filter((l) => l !== '').map(decided), [
     line('build-ticket', 'implementer', { issue: 28 }),
     line('review', 'reviewer', { pr: 43 }),
@@ -523,4 +524,74 @@ test('reconcile: a ticket at its attempt cap is the ignore (attempts) route give
   assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: null, issue: 28, reason: 'attempts', app: 'implementer' })
   assert.deepEqual(await swept(m.reconcile()), [expected])
   await assert.rejects(readFile(join(m.caps, 'implementer-app-runs.json')), { code: 'ENOENT' })
+})
+
+// --- Review round 1 ------------------------------------------------------------
+
+// Ticket #28 still has ready-for-agent, and its build paused with needs-info.
+const pausedBuild = (...comments: Comment[]): GitHub => ({
+  ...ticket28(),
+  labelled: [{ number: 28, author: MAINTAINER, labels: ['enhancement', 'ready-for-agent', 'needs-info'], pull_request: false }],
+  needsInfo: [{ number: 28, author: MAINTAINER, labels: ['enhancement', 'ready-for-agent', 'needs-info'], pull_request: false }],
+  comments: { 28: comments },
+})
+
+test('reconcile: a labelled ticket whose build paused and has no answer prints no line: no build, no attempt', async (t) => {
+  const m = await machine(t, pausedBuild(answer(3456000006, MAINTAINER, '2026-10-19T08:00:00Z')))
+  await seedPause(m.state, 'issue', 28)
+  assert.deepEqual(await swept(m.reconcile()), [])
+  await assert.rejects(readFile(join(m.caps, 'implementer-app-attempts.json')), { code: 'ENOENT' })
+})
+
+test('reconcile: a labelled ticket whose build paused and has an answer is resume, not a build', async (t) => {
+  const m = await machine(t, pausedBuild(answer(3456000008, MAINTAINER, '2026-10-19T10:00:00Z')))
+  await seedPause(m.state, 'issue', 28)
+  assert.deepEqual(await swept(m.reconcile()), [line('resume', 'implementer', { issue: 28 })])
+  await assert.rejects(readFile(join(m.caps, 'implementer-app-attempts.json')), { code: 'ENOENT' })
+})
+
+test('reconcile: a pause record of another repo does not stop the build of a labelled ticket', async (t) => {
+  const m = await machine(t, ticket28())
+  await seedPause(m.state, 'issue', 28, 'contract-hero/other')
+  assert.deepEqual(await swept(m.reconcile()), [line('build-ticket', 'implementer', { issue: 28 })])
+})
+
+test('reconcile: has-pr comes after paused and duplicate, as route orders its rules', async (t) => {
+  const paused = await machine(t, { ...ticket28(), ...pr50(IMPLEMENTER_BOT, 28), review: reviewMd('paused: true') })
+  assert.deepEqual((await swept(paused.reconcile()))[0], line('ignore', 'implementer', { issue: 28 }, 'paused'))
+  // A build that started from this item before its PR opened is a duplicate.
+  const started = await machine(t, ticket28())
+  assert.deepEqual((await swept(started.reconcile()))[0], line('build-ticket', 'implementer', { issue: 28 }))
+  await started.gh.respond(responses({ ...ticket28(), ...pr50(IMPLEMENTER_BOT, 28) }))
+  assert.deepEqual((await swept(started.reconcile()))[0], line('ignore', 'implementer', { issue: 28 }, 'duplicate'))
+})
+
+// The maintainer's PR #42 of issue_comment.created.recheck.json, its run at
+// its head, with these comments.
+const ownPr = (...comments: Comment[]): GitHub => ({ ...pr42(MAINTAINER, false), comments: { 42: comments } })
+const recheck = (id: number, at: string, body = '/recheck'): Comment => ({ id, author: MAINTAINER, body, created_at: at })
+
+test('reconcile: a missed /recheck on a maintainer PR at adjudicated is the recheck route gives', async (t) => {
+  const github = ownPr(reviewPosted, recheck(3456000004, '2026-10-19T12:00:00Z'))
+  const m = await machine(t, github)
+  await atPhase('adjudicated')(m)
+  const expected = await routed(t, {}, 'reviewer', 'issue_comment.created.recheck.json', atPhase('adjudicated'))
+  assert.deepEqual(expected, { action: 'recheck', repo: REPO, pr: 42, issue: null, reason: null, app: 'reviewer' })
+  const lines = await swept(m.reconcile())
+  // The review-posted hand-off on the maintainer's PR is route's ignore (author), for the Implementer.
+  assert.deepEqual(lines, [line('ignore', 'implementer', { pr: 42 }, 'author'), expected])
+})
+
+test('reconcile: only a /recheck newer than the last review hand-off counts, and only as the whole first line', async (t) => {
+  const m = await machine(
+    t,
+    ownPr(
+      recheck(3456000004, '2026-10-19T09:00:00Z'),
+      { ...reviewPosted, created_at: '2026-10-19T10:00:00Z' },
+      recheck(3456000005, '2026-10-19T11:00:00Z', '/recheck please'),
+      { ...recheck(3456000006, '2026-10-19T11:30:00Z'), author: 'mallory' },
+    ),
+  )
+  await atPhase('adjudicated')(m)
+  assert.deepEqual(await swept(m.reconcile()), [line('ignore', 'implementer', { pr: 42 }, 'author')])
 })
