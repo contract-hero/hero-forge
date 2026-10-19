@@ -6,13 +6,16 @@
 //
 // GitHub can take a moment to list a delivery it has just sent, so the list
 // is read up to DELIVERY_TRIES times, HERO_FORGE_DELIVERY_RETRY_MS apart.
+// Exit 1: GitHub sent the delivery more than MAX_DELIVERY_AGE_HOURS ago (its
+// signature has no timestamp, so an old one is a replay), or --out already
+// exists (a file or a symlink: it is created new, never followed).
 // Exit 3: GitHub still does not list the delivery. Exit 4: the App's
 // credentials are broken, or GitHub answers with an error (a 404 for an App
 // with no webhook). Output: {event, action, repo}; never a token or key.
 import { writeFile } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { APPS, ApiFailure, appApi, type AppName } from './app-token.ts'
-import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
+import { Failure, isRepo, MAX_DELIVERY_AGE_HOURS, parse, runMain, usageFor } from './cli.ts'
 
 const usage = usageFor('delivery')
 
@@ -26,7 +29,7 @@ function retryMs(): number {
 
 // GitHub's list entry for one delivery: `id` is GitHub's own number, `guid`
 // the X-GitHub-Delivery value.
-type Listed = { id?: unknown; guid?: unknown; event?: unknown; action?: unknown }
+type Listed = { id?: unknown; guid?: unknown; event?: unknown; action?: unknown; delivered_at?: unknown }
 
 type Detail = Listed & { request?: { payload?: unknown } }
 
@@ -61,14 +64,28 @@ async function delivery(argv: string[]): Promise<string> {
     await sleep(retryMs())
   }
 
+  const sent = typeof found.delivered_at === 'string' ? Date.parse(found.delivered_at) : Number.NaN
+  if (Number.isNaN(sent)) throw new Failure(`GitHub sent no delivery time for delivery ${guid}`, 1)
+  if (Date.now() - sent > MAX_DELIVERY_AGE_HOURS * 3600 * 1000) {
+    throw new Failure(
+      `delivery ${guid} was sent at ${found.delivered_at as string}, more than ${MAX_DELIVERY_AGE_HOURS} hours ago: a replay, or a request held too long`,
+      1,
+    )
+  }
+
   const detail = await api<Detail>('read the webhook delivery', 'GET', `/app/hook/deliveries/${found.id as number}`)
   const payload = detail.request?.payload
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new Failure(`GitHub sent no JSON payload for delivery ${guid}`, 1)
   }
+  // `wx` creates the file new: a path that exists, a symlink included (even
+  // a dangling one), fails, so the payload never lands where a link points.
   try {
-    await writeFile(values.out, `${JSON.stringify(payload)}\n`, { mode: 0o600 })
+    await writeFile(values.out, `${JSON.stringify(payload)}\n`, { mode: 0o600, flag: 'wx' })
   } catch (error) {
+    if ((error as { code?: string }).code === 'EEXIST') {
+      throw new Failure(`${values.out} already exists: pass a fresh path in a private directory (mktemp -d)`, 1)
+    }
     throw new Failure(`cannot write ${values.out}: ${(error as Error).message}`, 1)
   }
 

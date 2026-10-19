@@ -1,7 +1,7 @@
 // `review.ts delivery`: the router's payload comes from the App's own webhook
 // deliveries on GitHub, never from the router prompt.
 import assert from 'node:assert/strict'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { appKey, baseEnv, fakeGitHubApi, runCli, tempDir, type FakeApiRequest, type FakeApiRoute } from './test-helpers.ts'
@@ -18,10 +18,10 @@ const PAYLOAD = {
 
 // GitHub's list entry for a delivery: `id` is GitHub's number, `guid` the
 // X-GitHub-Delivery header value.
-const entry = (id: number, guid: string, event = 'issues', action: string | null = 'labeled') => ({
+const entry = (id: number, guid: string, event = 'issues', action: string | null = 'labeled', deliveredAt = new Date().toISOString()) => ({
   id,
   guid,
-  delivered_at: '2026-10-19T10:00:00Z',
+  delivered_at: deliveredAt,
   redelivery: false,
   status: 'OK',
   status_code: 202,
@@ -191,3 +191,67 @@ for (const [name, args, message] of USAGE) {
     assert.deepEqual(s.api.requests, [])
   })
 }
+
+const HOURS = 3600 * 1000
+
+// GitHub's signature has no timestamp, so a captured request could be sent to
+// the T3 URL again later. T3 holds a request for at most 24 hours.
+test('a delivery GitHub sent more than 25 hours ago is refused with exit 1 (a replay)', async (t) => {
+  const old = new Date(Date.now() - 26 * HOURS).toISOString()
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID, 'issues', 'labeled', old)] },
+      'GET /app/hook/deliveries/902': { status: 200, body: { ...detail(902, GUID, PAYLOAD), delivered_at: old } },
+    },
+  })
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.equal(stderr, `review.ts delivery: delivery ${GUID} was sent at ${old}, more than 25 hours ago: a replay, or a request held too long\n`)
+  await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
+})
+
+test('a delivery GitHub sent 23 hours ago is still fetched', async (t) => {
+  const recent = new Date(Date.now() - 23 * HOURS).toISOString()
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID, 'issues', 'labeled', recent)] },
+      'GET /app/hook/deliveries/902': { status: 200, body: { ...detail(902, GUID, PAYLOAD), delivered_at: recent } },
+    },
+  })
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(await readFile(s.out, 'utf8')), PAYLOAD)
+})
+
+test('an --out path that exists is refused with exit 1 and left as it was', async (t) => {
+  const s = await setup(t)
+  await writeFile(s.out, 'keep me\n')
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.equal(stderr, `review.ts delivery: ${s.out} already exists: pass a fresh path in a private directory (mktemp -d)\n`)
+  assert.equal(await readFile(s.out, 'utf8'), 'keep me\n')
+})
+
+test('an --out path that is a symlink is refused with exit 1, and its target is not written', async (t) => {
+  const s = await setup(t)
+  const target = join(s.dir, 'target.txt')
+  await writeFile(target, 'keep me\n')
+  await symlink(target, s.out)
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.match(stderr, /already exists: pass a fresh path/)
+  assert.equal(await readFile(target, 'utf8'), 'keep me\n')
+})
+
+test('a dangling symlink at --out is refused too', async (t) => {
+  const s = await setup(t)
+  const target = join(s.dir, 'nowhere.txt')
+  await symlink(target, s.out)
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.match(stderr, /already exists: pass a fresh path/)
+  await assert.rejects(readFile(target, 'utf8'), { code: 'ENOENT' })
+})

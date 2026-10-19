@@ -16,6 +16,12 @@ export const SETTABLE = ['round', 'head_sha', 'explainer']
 // usage line states it.
 export const LOCK_TTL_HOURS = 3
 
+// The oldest webhook delivery that `delivery` fetches, by the time GitHub
+// sent it. GitHub's signature has no timestamp, so this bounds a replay of a
+// captured request. T3 Connect holds a request for at most 24 hours while the
+// machine is offline. The usage line states it.
+export const MAX_DELIVERY_AGE_HOURS = 25
+
 // The usage table: the one place that holds each subcommand's one-line
 // summary and usage text. The dispatcher, `--help` and every usage error read
 // from it.
@@ -135,7 +141,9 @@ export const COMMANDS = {
     summary: "Fetch one webhook delivery's payload from the App's own deliveries on GitHub, for route.",
     usage: `usage: review.ts delivery --app reviewer|implementer --delivery <X-GitHub-Delivery> --out <file>
   Finds the delivery in the App's webhook deliveries (with a short retry while GitHub lists it),
-  writes its payload to <file>, and prints {event, action, repo}. Exit 3: GitHub does not list it.`,
+  writes its payload to <file>, and prints {event, action, repo}. Exit 3: GitHub does not list it.
+  Exit 1: GitHub sent it more than ${MAX_DELIVERY_AGE_HOURS} hours ago (a replay), or <file> already exists
+  (pass a fresh path in a private directory, such as one from mktemp -d).`,
   },
   'app-check': {
     summary: "Check a GitHub App's settings for AFK mode: permissions, events, webhook and installation.",
