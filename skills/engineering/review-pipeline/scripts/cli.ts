@@ -105,9 +105,9 @@ export const COMMANDS = {
   Lists open issues labelled ready-for-agent, open PRs with no run state at their head, the newest hand-off on
   each open PR, and needs-info issues and PRs with a maintainer comment after their pause record.
   Prints one line per item: route's decision plus app (reviewer or implementer), and exits 0. Work takes its lock
-  as route does: start a run for each line whose action is not ignore. A ticket or spec that an open PR closes
-  (itself, or one of its sub-issues) is ignore, has-pr. An item that fails prints its error on stderr, the other
-  lines still stand, and the exit code is the first failure's.`,
+  as route does: start a run for each line whose action is not ignore. A ticket or spec that an open PR by the
+  maintainer or contract-implementer[bot] closes (itself, or one of its sub-issues) is ignore, has-pr. An item
+  that fails prints its error on stderr, the other lines still stand, and the exit code is the first failure's.`,
   },
 } as const satisfies Record<string, { summary: string; usage: string }>
 

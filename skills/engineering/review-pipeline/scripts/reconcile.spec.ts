@@ -25,7 +25,8 @@ type Listed = { number: number; author: string; labels: string[]; pull_request: 
 type LabelEvent = { id: number; label: string; actor: string }
 type Pull = { number: number; author: string; draft: boolean; head_sha: string; labels: string[] }
 type Comment = { id: number; author: string; body: string; created_at: string }
-type Closer = { number: number; closes: { number: number; repo: string }[] }
+// `author` and `bot` as GraphQL gives them: a bot's login has no [bot] suffix.
+type Closer = { number: number; author: string | null; bot: boolean; closes: { number: number; repo: string }[] }
 type Sub = { number: number; author: string }
 
 type GitHub = {
@@ -160,11 +161,21 @@ test('reconcile: a missed label on a spec is the build-spec that route gives the
   assert.deepEqual(await swept(m.reconcile()), [expected])
 })
 
-// An open PR #50 by the bot, that closes `closes` (and an issue of another repo).
-const pr50 = (author: string, ...closes: number[]): Pick<GitHub, 'pulls' | 'closers'> => ({
-  pulls: [{ number: 50, author, draft: true, head_sha: 'b'.repeat(40), labels: [] }],
-  closers: [{ number: 50, closes: [...closes.map((number) => ({ number, repo: REPO })), { number: 28, repo: 'contract-hero/other' }] }],
-})
+// An open PR #50 by `author`, that closes `closes` (and an issue of another repo).
+const pr50 = (author: string, ...closes: number[]): Pick<GitHub, 'pulls' | 'closers'> => {
+  const bot = author.endsWith('[bot]')
+  return {
+    pulls: [{ number: 50, author, draft: true, head_sha: 'b'.repeat(40), labels: [] }],
+    closers: [
+      {
+        number: 50,
+        author: bot ? author.slice(0, -'[bot]'.length) : author,
+        bot,
+        closes: [...closes.map((number) => ({ number, repo: REPO })), { number: 28, repo: 'contract-hero/other' }],
+      },
+    ],
+  }
+}
 
 test('reconcile: a ticket that an open PR closes is ignore (has-pr), and takes no lock and no attempt', async (t) => {
   const m = await machine(t, { ...ticket28(), ...pr50(IMPLEMENTER_BOT, 28) })
@@ -179,6 +190,21 @@ test('reconcile: a ticket that an open PR closes is ignore (has-pr), and takes n
 test('reconcile: a spec one of whose sub-issues an open PR closes is ignore (has-pr)', async (t) => {
   const m = await machine(t, spec23(pr50(IMPLEMENTER_BOT, 25)))
   assert.deepEqual((await swept(m.reconcile()))[0], { action: 'ignore', repo: REPO, pr: null, issue: 23, reason: 'has-pr', app: 'implementer' })
+})
+
+test('reconcile: a ticket that an open maintainer PR closes is ignore (has-pr), the login matched in any case', async (t) => {
+  const m = await machine(t, { ...ticket28(), ...pr50('AliLloig', 28) })
+  assert.deepEqual((await swept(m.reconcile()))[0], { action: 'ignore', repo: REPO, pr: null, issue: 28, reason: 'has-pr', app: 'implementer' })
+})
+
+test('reconcile: an open PR by someone else that closes a ticket or a sub-issue does not hide it: route decides', async (t) => {
+  const ticket = await machine(t, { ...ticket28(), ...pr50('octo-stranger', 28) })
+  assert.deepEqual((await swept(ticket.reconcile()))[0], { action: 'build-ticket', repo: REPO, pr: null, issue: 28, reason: null, app: 'implementer' })
+  const spec = await machine(t, spec23(pr50('octo-stranger', 25)))
+  assert.deepEqual((await swept(spec.reconcile()))[0], { action: 'build-spec', repo: REPO, pr: null, issue: 23, reason: null, app: 'implementer' })
+  // A human login that only looks like the bot's is someone else too.
+  const lookalike = await machine(t, { ...ticket28(), closers: [{ number: 50, author: 'contract-implementer', bot: false, closes: [{ number: 28, repo: REPO }] }] })
+  assert.deepEqual((await swept(lookalike.reconcile()))[0], { action: 'build-ticket', repo: REPO, pr: null, issue: 28, reason: null, app: 'implementer' })
 })
 
 test('reconcile: a PR that closes an issue of the same number in another repo is no PR for the ticket', async (t) => {
