@@ -88,15 +88,15 @@ import { loadState, stateRoot, TERMINAL, type Phase } from './run-state.ts'
 const usage = usageFor('route')
 
 // The two Apps' bot logins.
-const IMPLEMENTER_BOT = 'contract-implementer[bot]'
-const REVIEWER_BOT = 'contract-reviewer[bot]'
+export const IMPLEMENTER_BOT = 'contract-implementer[bot]'
+export const REVIEWER_BOT = 'contract-reviewer[bot]'
 
 // The label that asks the Implementer to build, and the one a paused run carries.
-const BUILD_LABEL = 'ready-for-agent'
-const PAUSED_LABEL = 'needs-info'
+export const BUILD_LABEL = 'ready-for-agent'
+export const PAUSED_LABEL = 'needs-info'
 
 // GitHub logins are case-insensitive.
-const sameLogin = (a: string | undefined, b: string) => a !== undefined && a.toLowerCase() === b.toLowerCase()
+export const sameLogin = (a: string | undefined, b: string) => a !== undefined && a.toLowerCase() === b.toLowerCase()
 
 // Whether `action` on a PR by `author` starts a review. An author who is not
 // the bot gets the maintainer's actions here: the author rule then ignores
@@ -106,13 +106,13 @@ function triggers(action: string, author: string | undefined, draft: boolean): b
   return action === 'ready_for_review' || ((action === 'opened' || action === 'reopened') && !draft)
 }
 
-type Action = 'review' | 'recheck' | 'build-ticket' | 'build-spec' | 'adjudicate' | 'resume' | 'ignore'
+export type Action = 'review' | 'recheck' | 'build-ticket' | 'build-spec' | 'adjudicate' | 'resume' | 'ignore'
 
 // `pr` is set when the delivery is about a PR, `issue` when it is about an
 // issue that is not a PR (a label, or a comment on an issue). `lock_token` is
 // the owner token of the lock that work took, for the launched thread to
 // release it at its end; null on an ignore, which takes no lock.
-type Decision = {
+export type Decision = {
   action: Action
   repo: string | null
   pr: number | null
@@ -136,7 +136,7 @@ const why = (reason: string, issue?: number): Outcome => (issue === undefined ? 
 
 // The fields of a webhook payload that route reads. GitHub sends them; route
 // trusts that the payload came from GitHub (the router checks the signature).
-type Payload = {
+export type Payload = {
   action?: unknown
   repository?: { full_name?: unknown; default_branch?: unknown }
   sender?: { login?: unknown }
@@ -197,7 +197,7 @@ async function relations(repo: string, issue: number): Promise<{ parent: boolean
 }
 
 // The sub-issues of `issue`, each with its author, every page.
-function subIssues(repo: string, issue: number): Promise<{ number: number; author: string | null }[]> {
+export function subIssues(repo: string, issue: number): Promise<{ number: number; author: string | null }[]> {
   return listLines(
     ['api', '--paginate', '--jq', '.[] | {number, author: .user.login}', `repos/${repo}/issues/${issue}/sub_issues?per_page=100`],
     `the sub-issues of #${issue}`,
@@ -380,21 +380,25 @@ function releaseFor(lock: Start['lock'], token: string): Promise<boolean> {
   return lock.kind === 'pr' ? releasePrLock(lock.number, token) : releaseIssueLock(lock.number, token)
 }
 
-async function route(argv: string[]): Promise<string> {
-  const { values } = parse(
-    argv,
-    { app: { type: 'string' }, event: { type: 'string' }, delivery: { type: 'string' }, payload: { type: 'string' } },
-    usage,
-  )
-  const app = values.app as AppName
-  if (!APPS.includes(app)) throw usage(`--app must be ${APPS.join(' or ')}`)
-  const name = values.event
-  if (name === undefined || !/^[a-z_]+$/.test(name)) throw usage('--event must be the X-GitHub-Event name, such as pull_request')
-  const delivery = values.delivery
-  if (delivery === undefined || !/^[A-Za-z0-9-]+$/.test(delivery)) throw usage('--delivery must be the X-GitHub-Delivery id')
-  if (values.payload === undefined) throw usage('route needs --payload')
+// What a decision reads besides the delivery: the review config of a repo
+// and the maintainer's login. `route` reads them for each delivery; a sweep
+// gives them once for all its items.
+export type Context = {
+  config: (repo: string, branch: string | undefined) => Promise<ResolvedConfig | null>
+  maintainer: () => Promise<string>
+}
 
-  const payload = await readPayload(values.payload)
+// The context of one delivery: the config on the default branch, and the
+// maintainer, looked up once and only when a rule needs it.
+export function liveContext(): Context {
+  let maintainer: Promise<string> | undefined
+  return { config: remoteConfig, maintainer: () => (maintainer ??= userIdentity().then((u) => u.login)) }
+}
+
+// Decide one delivery for `app`, and for work take its lock, reserve the
+// attempt, record the delivery and count the run, as the rules at the top of
+// this file say.
+export async function decide(app: AppName, name: string, delivery: string, payload: Payload, context: Context): Promise<Decision> {
   const full = payload.repository?.full_name
   const repo = isRepo(full) ? full : null
   // A comment or a label on a PR comes as an issue event with issue.pull_request set.
@@ -402,20 +406,18 @@ async function route(argv: string[]): Promise<string> {
   const onPr = payload.issue !== undefined && payload.issue.pull_request !== undefined && payload.issue.pull_request !== null
   const pr = whole(payload.pull_request?.number) ?? (onPr ? issueNumber : null)
   const issue = onPr || payload.pull_request !== undefined ? null : issueNumber
-  const decide = (action: Action, reason: string | null, token: string | null = null): string =>
-    `${JSON.stringify({ action, repo, pr, issue, reason, lock_token: token } satisfies Decision)}\n`
+  const decided = (action: Action, reason: string | null, token: string | null = null): Decision =>
+    ({ action, repo, pr, issue, reason, lock_token: token })
   // An ignore about another issue than the delivery's names that issue.
-  const decideOn = (other: number, reason: string): string =>
-    `${JSON.stringify({ action: 'ignore', repo, pr: null, issue: other, reason, lock_token: null } satisfies Decision)}\n`
+  const decidedOn = (other: number, reason: string): Decision =>
+    ({ action: 'ignore', repo, pr: null, issue: other, reason, lock_token: null })
 
   const branch = payload.repository?.default_branch
-  const config = repo === null ? null : await remoteConfig(repo, typeof branch === 'string' ? branch : undefined)
+  const config = repo === null ? null : await context.config(repo, typeof branch === 'string' ? branch : undefined)
 
-  if (config?.paused === true) return decide('ignore', 'paused')
-  if (await doneDelivery(app, delivery)) return decide('ignore', 'duplicate')
+  if (config?.paused === true) return decided('ignore', 'paused')
+  if (await doneDelivery(app, delivery)) return decided('ignore', 'duplicate')
 
-  // The maintainer is looked up once, and only when a rule needs it.
-  let maintainer: Promise<string> | undefined
   const event: Event = {
     name,
     action: text(payload.action) ?? '',
@@ -425,15 +427,15 @@ async function route(argv: string[]): Promise<string> {
     pr,
     issue,
     sender: text(payload.sender?.login),
-    maintainer: () => (maintainer ??= userIdentity().then((u) => u.login)),
+    maintainer: context.maintainer,
   }
   const outcome = await (app === 'reviewer' ? reviewerRule(event) : implementerRule(event))
-  if ('ignore' in outcome) return outcome.issue === undefined ? decide('ignore', outcome.ignore) : decideOn(outcome.issue, outcome.ignore)
+  if ('ignore' in outcome) return outcome.issue === undefined ? decided('ignore', outcome.ignore) : decidedOn(outcome.issue, outcome.ignore)
   // Every rule that starts work has checked the config is there.
   if (config === null || repo === null) throw new Failure('no config for a decision that starts work', 1)
 
   const token = await takeFor(outcome.lock, { app, delivery })
-  if (token === null) return decide('ignore', 'locked')
+  if (token === null) return decided('ignore', 'locked')
   // The lock is taken first, so a held lock is reported before the attempts
   // and the cap. The delivery is recorded pending before anything is
   // counted, so a failed record counts nothing, and done after. A build
@@ -446,14 +448,14 @@ async function route(argv: string[]): Promise<string> {
   const limit = app === 'reviewer' ? config.app_daily_runs : config.implementer.daily_runs
   const attempt = outcome.attempt
   let reserved = false
-  const stop = async (reason: string): Promise<string> => {
+  const stop = async (reason: string): Promise<Decision> => {
     if (reserved && attempt !== undefined) {
       reserved = false
       await releaseAttempt(repo, attempt.issue)
     }
     await releaseFor(outcome.lock, token)
     await forgetDelivery(app, delivery)
-    return decide('ignore', reason)
+    return decided('ignore', reason)
   }
   try {
     await recordDelivery(app, delivery, 'pending', outcome.lock, token)
@@ -471,7 +473,25 @@ async function route(argv: string[]): Promise<string> {
     await forgetDelivery(app, delivery).catch(() => {})
     throw error
   }
-  return decide(outcome.action, null, token)
+  return decided(outcome.action, null, token)
+}
+
+async function route(argv: string[]): Promise<string> {
+  const { values } = parse(
+    argv,
+    { app: { type: 'string' }, event: { type: 'string' }, delivery: { type: 'string' }, payload: { type: 'string' } },
+    usage,
+  )
+  const app = values.app as AppName
+  if (!APPS.includes(app)) throw usage(`--app must be ${APPS.join(' or ')}`)
+  const name = values.event
+  if (name === undefined || !/^[a-z_]+$/.test(name)) throw usage('--event must be the X-GitHub-Event name, such as pull_request')
+  const delivery = values.delivery
+  if (delivery === undefined || !/^[A-Za-z0-9-]+$/.test(delivery)) throw usage('--delivery must be the X-GitHub-Delivery id')
+  if (values.payload === undefined) throw usage('route needs --payload')
+
+  const payload = await readPayload(values.payload)
+  return `${JSON.stringify(await decide(app, name, delivery, payload, liveContext()))}\n`
 }
 
 export const main = runMain('route', route)
