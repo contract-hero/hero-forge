@@ -12,10 +12,12 @@
 // Each kind belongs to one App, as route reads it: review-posted and
 // recheck-failed to the reviewer App, adjudicated to the Implementer App.
 // "Already posted" is a record of this run, never a time: each post writes
-// its comment id, kind and round to `<run dir>/handoffs.json`. The run dir
-// belongs to one run (`supersede` moves it aside, and a new run starts with
-// none), so an earlier run's marker is never this run's hand-off, whenever it
-// was posted. A recorded comment that GitHub still shows, by the same App
+// its comment id, kind and round to `<run dir>/handoffs.json`, with the run
+// state's `created_at` as the run's name. Only entries of this run count:
+// `supersede` moves an old run dir aside, and `run-state create` over a
+// terminal run keeps the dir but starts a run with another `created_at`, so
+// an earlier run's marker is never this run's hand-off, whenever it was
+// posted. A recorded comment that GitHub still shows, by the same App
 // with the same marker as its last line, is the hand-off: a re-run posts
 // nothing and prints `already: true`. A recorded comment that is gone posts
 // again.
@@ -60,14 +62,17 @@ const KINDS: Record<HandoffKind, { app: AppName; phase: Phase; text: (round: num
   },
 }
 
-type Posted = { kind: HandoffKind; round: number; id: number }
+// `run` is the run state's `created_at`: it names the run that posted the
+// hand-off. `run-state create` over a terminal run reuses the run dir, so an
+// entry of another run stays in the file but never counts for this one.
+type Posted = { run: string; kind: HandoffKind; round: number; id: number }
 
 function recordFile(pr: number): string {
   return join(runDir(pr), 'handoffs.json')
 }
 
-// This run's posted hand-offs; none when there is no record yet. A record
-// that is there but not a list of hand-offs exits 4.
+// Every recorded hand-off, of any run; none when there is no record yet. A
+// record that is there but not a list of hand-offs exits 4.
 async function readPosted(pr: number): Promise<Posted[]> {
   const file = recordFile(pr)
   let text: string
@@ -85,7 +90,7 @@ async function readPosted(pr: number): Promise<Posted[]> {
   }
   const ok = (v: unknown): v is Posted => {
     const p = v as Partial<Posted> | null
-    return typeof p === 'object' && p !== null && HANDOFF_KINDS.includes(p.kind as HandoffKind) &&
+    return typeof p === 'object' && p !== null && typeof p.run === 'string' && HANDOFF_KINDS.includes(p.kind as HandoffKind) &&
       Number.isInteger(p.round) && Number.isInteger(p.id)
   }
   if (!Array.isArray(value) || !value.every(ok)) throw new Failure(`corrupt hand-off record ${file}: delete it to post the hand-off again`, 4)
@@ -150,7 +155,9 @@ async function handoff(argv: string[]): Promise<string> {
   const mark = handoffMarker({ kind, pr, round })
   const done = (id: number, already: boolean) => `${JSON.stringify({ id, kind, pr, round, as: me.login, already })}\n`
 
-  const posted = await readPosted(pr)
+  // Only this run's entries count, and only they are kept on the next write.
+  const run = state.created_at
+  const posted = (await readPosted(pr)).filter((p) => p.run === run)
   const recorded = posted.find((p) => p.kind === kind && p.round === round)
   if (recorded !== undefined) {
     const comments = await listLines<{ id: number; login: string | null; body: string | null }>(
@@ -167,7 +174,7 @@ async function handoff(argv: string[]): Promise<string> {
   refuse(result.code === 0, `GitHub rejected the hand-off comment on PR #${pr}: ${oneLine(result.stderr || result.stdout)}`)
   const id = json<{ id: number }>(result.stdout, 'post the hand-off comment').id
   try {
-    await writePosted(pr, [...posted.filter((p) => p.kind !== kind || p.round !== round), { kind, round, id }])
+    await writePosted(pr, [...posted.filter((p) => p.kind !== kind || p.round !== round), { run, kind, round, id }])
   } catch (error) {
     throw new Failure(
       `the hand-off comment ${id} is on PR #${pr}, but its record ${recordFile(pr)} could not be written (${(error as Error).message}). A re-run posts a second marker for round ${round}; route starts no second run from it`,

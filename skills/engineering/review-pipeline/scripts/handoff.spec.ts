@@ -116,6 +116,8 @@ for (const [app, kind, state, round, token] of CASES) {
 
 const lines = (...comments: object[]) => comments.map((c) => `${JSON.stringify(c)}\n`).join('')
 const handoffsFile = (s: { root: string }) => join(s.root, 'pr-13', 'handoffs.json')
+// The run a record entry names: the seeded run state's created_at.
+const runOf = async (s: { root: string }) => (JSON.parse(await readFile(join(s.root, 'pr-13', 'state.json'), 'utf8')) as { created_at: string }).created_at
 
 // "Already posted" is this run's own record, <run dir>/handoffs.json, never a
 // time: the run dir is per run (supersede moves it aside), so an earlier
@@ -126,7 +128,7 @@ test('a post records its comment id, kind and round in the run dir, and a re-run
   const first = await s.cli('--app', 'implementer', '--kind', 'adjudicated', '--round', '1')
   assert.equal(first.code, 0, first.stderr)
   assert.equal(JSON.parse(first.stdout).already, false)
-  assert.deepEqual(JSON.parse(await readFile(handoffsFile(s), 'utf8')), [{ kind: 'adjudicated', round: 1, id: 777 }])
+  assert.deepEqual(JSON.parse(await readFile(handoffsFile(s), 'utf8')), [{ run: await runOf(s), kind: 'adjudicated', round: 1, id: 777 }])
 
   await s.gh.respond([
     { match: 'issues/13/comments --input', stdout: JSON.stringify({ id: 778 }) },
@@ -156,18 +158,32 @@ for (const [name, at] of [['the same second as this run started', '2026-10-19T12
 
 test('a recorded hand-off whose comment is gone from the PR posts again and records the new id', async (t) => {
   const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 2 }, comments: lines({ id: 9, login: 'alilloig', body: 'hi' }) })
-  await writeFile(handoffsFile(s), JSON.stringify([{ kind: 'review-posted', round: 1, id: 50 }, { kind: 'recheck-failed', round: 2, id: 60 }]))
+  const run = await runOf(s)
+  await writeFile(handoffsFile(s), JSON.stringify([{ run, kind: 'review-posted', round: 1, id: 50 }, { run, kind: 'recheck-failed', round: 2, id: 60 }]))
   const result = await s.cli('--app', 'reviewer', '--kind', 'recheck-failed', '--round', '2')
   assert.equal(result.code, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).already, false)
   assert.equal(posts(await s.gh.calls()).length, 1)
-  assert.deepEqual(JSON.parse(await readFile(handoffsFile(s), 'utf8')), [{ kind: 'review-posted', round: 1, id: 50 }, { kind: 'recheck-failed', round: 2, id: 777 }])
+  assert.deepEqual(JSON.parse(await readFile(handoffsFile(s), 'utf8')), [{ run, kind: 'review-posted', round: 1, id: 50 }, { run, kind: 'recheck-failed', round: 2, id: 777 }])
+})
+
+// `run-state create` over a terminal run reuses the run dir: the old run's
+// record is still there, but its entries name another run and never count.
+test('a record entry of an earlier run in the same run dir, whose comment is still on the PR, does not stop the post of this run', async (t) => {
+  const mark = handoffMarker({ kind: 'review-posted', pr: 13, round: 1 })
+  const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1 }, comments: lines({ id: 50, login: 'contract-reviewer[bot]', body: `Hand-off.\n\n${mark}` }) })
+  await writeFile(handoffsFile(s), JSON.stringify([{ run: '2026-10-18T09:00:00.000Z', kind: 'review-posted', round: 1, id: 50 }]))
+  const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), { id: 777, kind: 'review-posted', pr: 13, round: 1, as: 'contract-reviewer[bot]', already: false })
+  assert.equal(posts(await s.gh.calls()).length, 1)
+  assert.deepEqual(JSON.parse(await readFile(handoffsFile(s), 'utf8')), [{ run: await runOf(s), kind: 'review-posted', round: 1, id: 777 }])
 })
 
 test('a recorded id that GitHub shows by another login is not this hand-off: it posts', async (t) => {
   const mark = handoffMarker({ kind: 'review-posted', pr: 13, round: 1 })
   const s = await setup(t, { app: 'reviewer', state: { phase: 'review-posted', round: 1 }, comments: lines({ id: 50, login: 'alilloig', body: mark }) })
-  await writeFile(handoffsFile(s), JSON.stringify([{ kind: 'review-posted', round: 1, id: 50 }]))
+  await writeFile(handoffsFile(s), JSON.stringify([{ run: await runOf(s), kind: 'review-posted', round: 1, id: 50 }]))
   const result = await s.cli('--app', 'reviewer', '--kind', 'review-posted', '--round', '1')
   assert.equal(result.code, 0, result.stderr)
   assert.equal(JSON.parse(result.stdout).already, false)
