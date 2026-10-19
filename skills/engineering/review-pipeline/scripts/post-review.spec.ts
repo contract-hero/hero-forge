@@ -419,6 +419,12 @@ const COMMENTS = [
   'repos/contract-hero/hero-forge/pulls/13/comments',
 ]
 const RECHECK_MARKER = '<!-- hero-forge:review-pipeline pr=13 round=1 kind=recheck -->'
+// The gate status post, at `sha`.
+const STATUS = (sha: string) => ['api', '-X', 'POST', `repos/contract-hero/hero-forge/statuses/${sha}`, '--input', '-']
+const isStatus = (c: { argv: string[] }) => c.argv.some((a) => a.includes('/statuses/'))
+// The read of the commit's statuses, at `sha`, and one line of its answer.
+const STATUSES = (sha: string) => ['api', '--paginate', '--jq', '.[] | {state, context, login: .creator.login}', `repos/contract-hero/hero-forge/commits/${sha}/statuses`]
+const gateStatus = (state: string, login: string, context = 'contract-reviewer/gate') => `${JSON.stringify({ state, context, login })}\n`
 
 type Inline = { id: number; body: string; review?: number; reply_to?: number; login?: string }
 
@@ -751,7 +757,7 @@ test('with the App, a passing gate posts the APPROVE verdict as the bot at the f
     posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
   })
   const calls = await s.calls()
-  assert.deepEqual(calls.map((c) => c.argv), [COMMENTS, LIST, POST])
+  assert.deepEqual(calls.map((c) => c.argv), [COMMENTS, LIST, POST, STATUSES(FIXED), STATUS(FIXED)])
   assert.equal(calls[2]!.gh_token, TOKEN)
   assert.deepEqual(JSON.parse(calls[2]!.stdin), {
     ...TABLE,
@@ -792,6 +798,137 @@ test('with the App, an APPROVE on a failing gate is still refused before any tok
   assert.equal(s.api!.requests.length, minted)
 })
 
+// The gate status: with the App, a recorded pass posts `contract-reviewer/gate`
+// = success at the head, as the App, with a token minted for statuses only.
+
+test('with the App, a passing re-check posts the contract-reviewer/gate success status at the head, as the bot', async (t) => {
+  const s = await gateSetup(t, { app: true })
+  const { code, stderr } = await s.gated('recheck')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const calls = await s.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [COMMENTS, LIST, POST, STATUSES(FIXED), STATUS(FIXED)])
+  assert.equal(calls[4]!.gh_token, TOKEN)
+  assert.deepEqual(JSON.parse(calls[4]!.stdin), {
+    state: 'success',
+    context: 'contract-reviewer/gate',
+    description: 'The review gate passed at this commit',
+  })
+  const mints = s.api!.requests.filter((r) => r.path.endsWith('/access_tokens'))
+  assert.deepEqual((mints.at(-1)!.body as { permissions: unknown }).permissions, { statuses: 'write' })
+})
+
+test('with the App, the gate status posts once per head: a re-run and the APPROVE after it post no second one', async (t) => {
+  const s = await gateSetup(t, { app: true })
+  assert.equal((await s.gated('recheck')).code, 0)
+  // GitHub now shows the App's success status at the head.
+  await s.gh.respond([
+    { match: `commits/${FIXED}/statuses`, stdout: gateStatus('success', BOT) },
+    { match: 'pulls/13/comments', stdout: POSTED },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
+  ])
+  const again = await s.gated('recheck')
+  assert.equal(again.code, 0, again.stderr)
+  assert.equal(JSON.parse(again.stdout).duplicate, true)
+  await s.patch({ phase: 'ready' })
+  const approved = await s.gated('verdict')
+  assert.equal(approved.code, 0, approved.stderr)
+  assert.equal(JSON.parse(approved.stdout).event, 'APPROVE')
+  assert.deepEqual((await s.calls()).filter(isStatus).map((c) => c.argv), [STATUS(FIXED)])
+})
+
+// A pass that hero-forge 1.0.6 recorded posted no status: the run state alone
+// cannot tell whether GitHub has one, so post-review reads the head's statuses.
+const PUBLISHED: { name: string; statuses: string; posts: boolean }[] = [
+  { name: 'no status at the head', statuses: '', posts: true },
+  { name: "the App's success status at the head", statuses: gateStatus('success', BOT), posts: false },
+  { name: 'a success status by another login', statuses: gateStatus('success', 'alilloig'), posts: true },
+  { name: "the App's success status under another context", statuses: gateStatus('success', BOT, 'ci/lint'), posts: true },
+  { name: "a newer failure status by the App", statuses: gateStatus('failure', BOT) + gateStatus('success', BOT), posts: true },
+]
+
+for (const p of PUBLISHED) {
+  test(`with the App, a pass already recorded before the upgrade, with ${p.name}: ${p.posts ? 'the success status posts' : 'no second status posts'}`, async (t) => {
+    const s = await gateSetup(t, { app: true })
+    await s.patch({
+      reviews: [...(await s.reviews()), { round: 1, kind: 'recheck', id: 666, commit: FIXED, as: BOT, event: 'COMMENT' }],
+      gates: [{ round: 1, commit: FIXED, result: 'pass' }],
+    })
+    await s.gh.respond([
+      { match: `commits/${FIXED}/statuses`, stdout: p.statuses },
+      { match: 'pulls/13/comments', stdout: POSTED },
+    ])
+    const { code, stdout, stderr } = await s.gated('recheck')
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    assert.equal(JSON.parse(stdout).duplicate, true)
+    const calls = await s.calls()
+    assert.deepEqual(calls.map((c) => c.argv), [COMMENTS, STATUSES(FIXED), ...(p.posts ? [STATUS(FIXED)] : [])])
+    assert.ok(calls.slice(1).every((c) => c.gh_token === TOKEN))
+  })
+}
+
+test('with the App, a missing commit-status permission exits 4 naming it, records no pass, and never posts as the user', async (t) => {
+  const s = await gateSetup(t, { app: true })
+  await s.gh.respond([
+    { match: '/statuses/', exit: 1, stderr: 'gh: Resource not accessible by integration (HTTP 403)\n' },
+    { match: 'pulls/13/comments', stdout: POSTED },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
+  ])
+  const { code, stdout, stderr } = await s.gated('recheck')
+  assert.equal(code, 4)
+  assert.equal(stdout, '')
+  assert.match(stderr, /statuses: write/)
+  assert.match(stderr, /Commit statuses/)
+  const statuses = (await s.calls()).filter(isStatus)
+  assert.deepEqual(statuses.map((c) => c.gh_token), [TOKEN])
+  assert.deepEqual(await s.gates(), [])
+
+  // After the fix, a re-run finds the re-check on GitHub, posts only the
+  // status, and records the pass.
+  await s.gh.respond([
+    { match: 'pulls/13/comments', stdout: POSTED },
+    { match: '--paginate', stdout: listed({ id: 666, body: `## Re-check: round 1\n\n${RECHECK_MARKER}`, commit_id: FIXED, login: BOT }) },
+  ])
+  const again = await s.gated('recheck')
+  assert.equal(again.stderr, '')
+  assert.equal(again.code, 0)
+  assert.deepEqual(JSON.parse(again.stdout), { posted: false, duplicate: true, id: 666, gate: 'pass', problems: [] })
+  const calls = await s.calls()
+  assert.deepEqual(calls.filter(isStatus).map((c) => c.argv), [STATUS(FIXED), STATUS(FIXED)])
+  assert.equal(calls.filter((c) => c.argv.join(' ').includes('pulls/13/reviews --input')).length, 1)
+  assert.deepEqual(await s.gates(), [{ round: 1, commit: FIXED, result: 'pass' }])
+})
+
+test('with the App, a refused read of the head statuses exits 4 naming the permission, and posts no status', async (t) => {
+  const s = await gateSetup(t, { app: true })
+  await s.gh.respond([
+    { match: `commits/${FIXED}/statuses`, exit: 1, stderr: 'gh: Resource not accessible by integration (HTTP 403)\n' },
+    { match: 'pulls/13/comments', stdout: POSTED },
+    { match: 'pulls/13/reviews --input', stdout: JSON.stringify({ id: 666 }) },
+  ])
+  const { code, stderr } = await s.gated('recheck')
+  assert.equal(code, 4)
+  assert.match(stderr, /statuses: write/)
+  assert.deepEqual((await s.calls()).filter(isStatus), [])
+  assert.deepEqual(await s.gates(), [])
+})
+
+test('with the App, a zero-finding review posts the gate success status at the pinned head', async (t) => {
+  const s = await zeroSetup(t, { app: true })
+  const { code, stderr } = await s.post()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  const statuses = (await s.gh.calls()).filter(isStatus)
+  assert.deepEqual(statuses.map((c) => [c.argv, c.gh_token, JSON.parse(c.stdin).state]), [[STATUS(SHA), TOKEN, 'success']])
+})
+
+test('without the App, a passing gate posts no status at all', async (t) => {
+  const s = await gateSetup(t)
+  assert.equal((await s.gated('recheck')).code, 0)
+  assert.deepEqual((await s.gh.calls()).filter(isStatus), [])
+})
+
 // A restack after the parent layer landed moved the head of a layer from OLD
 // to FIXED. GitHub can then show the App's round 1 APPROVE (review 600, first
 // recorded at OLD) on FIXED. The new head always gets a fresh APPROVE.
@@ -829,7 +966,7 @@ for (const [name, commit] of RESTACKED) {
     assert.deepEqual(JSON.parse(stdout), {
       posted: true, id: 666, as: BOT, event: 'APPROVE', round: 1, kind: 'verdict', gate: 'pass', problems: [],
     })
-    assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS, LIST, POST])
+    assert.deepEqual((await s.calls()).map((c) => c.argv), [COMMENTS, LIST, POST, STATUSES(FIXED), STATUS(FIXED)])
     assert.deepEqual(
       (await s.reviews()).slice(1).map((r: { id: number; commit: string }) => [r.id, r.commit]),
       [[600, OLD], [666, FIXED]],

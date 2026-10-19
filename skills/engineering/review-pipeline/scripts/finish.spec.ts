@@ -19,6 +19,8 @@ const PENDING_RUN = { __typename: 'CheckRun', name: 'build', status: 'IN_PROGRES
 const PENDING_STATUS = { __typename: 'StatusContext', context: 'ci/e2e', state: 'PENDING' }
 const RED_RUN = { __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' }
 const RED_STATUS = { __typename: 'StatusContext', context: 'ci/lint', state: 'ERROR' }
+// The reviewer App's own gate status: not CI, so merge-gate leaves it out of `ci`.
+const GATE_STATUS = { __typename: 'StatusContext', context: 'contract-reviewer/gate', state: 'SUCCESS' }
 
 type Pr = {
   state?: string
@@ -127,6 +129,11 @@ const CASES: { name: string; pr: Pr; gate: string; ci: string; problem?: RegExp 
   { name: 'a pending status is wait', pr: { statusCheckRollup: [PENDING_STATUS] }, gate: 'wait', ci: 'pending', problem: /ci\/e2e/ },
   { name: 'a failed check run is stop', pr: { statusCheckRollup: [RED_RUN, PENDING_RUN] }, gate: 'stop', ci: 'red', problem: /CI failed: test/ },
   { name: 'an errored status is stop', pr: { statusCheckRollup: [RED_STATUS] }, gate: 'stop', ci: 'red', problem: /ci\/lint/ },
+  { name: 'only the contract-reviewer/gate status is go, with ci none', pr: { statusCheckRollup: [GATE_STATUS] }, gate: 'go', ci: 'none' },
+  {
+    name: 'the contract-reviewer/gate status and a failed check run is stop, with ci red',
+    pr: { statusCheckRollup: [GATE_STATUS, RED_RUN] }, gate: 'stop', ci: 'red', problem: /CI failed: test$/,
+  },
   { name: 'a merge conflict is stop', pr: { mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }, gate: 'stop', ci: 'green', problem: /conflict/ },
   { name: 'mergeable not yet computed is wait', pr: { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }, gate: 'wait', ci: 'green', problem: /UNKNOWN/ },
   { name: 'branch protection blocking is stop', pr: { mergeStateStatus: 'BLOCKED' }, gate: 'stop', ci: 'green', problem: /BLOCKED/ },

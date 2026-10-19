@@ -10,11 +10,18 @@
 // `supersede` ends a run whose PR head moved after a review was posted: it
 // marks the run `superseded` and moves the whole run dir aside, so a new run
 // at the new head starts with no file of the old one.
+//
+// With the reviewer App, a run that stops (`next-round` out of rounds, or
+// `advance stopped`) posts the `contract-reviewer/gate` failure status at its
+// head (gate-status.ts) before the stop is saved, so a failed post leaves the
+// run where it was and the same step posts it on a re-run.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Failure, parse, positive, refuse, runMain, SETTABLE, usageFor } from './cli.ts'
+import { loadConfig } from './config.ts'
+import { postGateStatus } from './gate-status.ts'
 
 export const PHASES = [
   'created',
@@ -291,7 +298,20 @@ const OPTIONS = {
   mode: { type: 'string' },
   force: { type: 'boolean' },
   'max-rounds': { type: 'string' },
+  config: { type: 'string' },
 } as const
+
+// Post the gate failure status for a run that stops, with the App only: the
+// run must have the App's login and the config must enable it. Without the
+// App nothing posts, never as the user. The pipeline never gets here without
+// a valid config, so any problem with it is broken (4).
+async function announceStop(state: State, config: string | undefined, description: string): Promise<void> {
+  if (!usesApp(state)) return
+  const loaded = await loadConfig(config)
+  if (!loaded.ok) throw new Failure(loaded.message, 4)
+  if (!loaded.config.app) return
+  await postGateStatus(state, 'failure', description)
+}
 
 async function create(pr: number, values: Record<string, string | boolean | undefined>): Promise<string> {
   const need = (name: string): string => {
@@ -419,6 +439,7 @@ async function dispatch(argv: string[]): Promise<string> {
       // A resumed step may repeat its advance: already there is success.
       if (state.phase === phase) return ''
       advance(state, phase)
+      if (phase === 'stopped') await announceStop(state, values.config, 'The review stopped: the re-checker failed twice')
       state.updated_at = new Date().toISOString()
       await saveState(state)
       return ''
@@ -429,18 +450,18 @@ async function dispatch(argv: string[]): Promise<string> {
     case 'next-round': {
       arity(0)
       const max = positive('max-rounds', values['max-rounds'], usage)
-      let result = {}
-      await update(pr, (state) => {
-        refuse(state.phase === 'rechecked', `next-round needs phase rechecked, but PR #${pr} is at ${state.phase}`)
-        if (state.round < max) {
-          state.round += 1
-          state.phase = 'review-posted'
-        } else {
-          state.phase = 'stopped'
-        }
-        result = { round: state.round, phase: state.phase }
-      })
-      return `${JSON.stringify(result)}\n`
+      const state = await loadState(pr)
+      refuse(state.phase === 'rechecked', `next-round needs phase rechecked, but PR #${pr} is at ${state.phase}`)
+      if (state.round < max) {
+        state.round += 1
+        state.phase = 'review-posted'
+      } else {
+        await announceStop(state, values.config, `The review stopped: the gate did not pass in ${state.round} round(s)`)
+        state.phase = 'stopped'
+      }
+      state.updated_at = new Date().toISOString()
+      await saveState(state)
+      return `${JSON.stringify({ round: state.round, phase: state.phase })}\n`
     }
     case 'set': {
       arity(2)

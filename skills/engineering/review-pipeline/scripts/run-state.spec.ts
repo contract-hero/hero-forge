@@ -2,7 +2,18 @@ import assert from 'node:assert/strict'
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { baseEnv, run, runCli, seedState, tempDir } from './test-helpers.ts'
+import {
+  appKey,
+  baseEnv,
+  fakeGh,
+  fakeGitHubApi,
+  run,
+  runCli,
+  seedState,
+  tempDir,
+  type FakeApiRoute,
+  type FakeGhResponse,
+} from './test-helpers.ts'
 
 const SHA = 'a'.repeat(40)
 const SHA2 = 'b'.repeat(40)
@@ -431,3 +442,130 @@ for (const phase of ['created', 'review-posted', 'ready', 'explained']) {
     }
   })
 }
+
+// The gate status: with the reviewer App, a run that stops posts
+// `contract-reviewer/gate` = failure at its head, as the App.
+
+const TOKEN = 'ghs_faketoken0123456789'
+const APP_ROUTES: Record<string, FakeApiRoute> = {
+  'GET /repos/contract-hero/hero-forge/installation': { status: 200, body: { id: 4242 } },
+  'POST /app/installations/4242/access_tokens': { status: 201, body: { token: TOKEN } },
+  'GET /app': { status: 200, body: { slug: 'hero-reviewer' } },
+}
+const STATUS = ['api', '-X', 'POST', `repos/contract-hero/hero-forge/statuses/${SHA}`, '--input', '-']
+
+type AppRun = { app?: boolean; login?: string; routes?: Record<string, FakeApiRoute>; responses?: FakeGhResponse[] }
+
+// A run state at rechecked with reviewer_login `login` (default the bot), a
+// config with or without `app: enabled`, App credentials, a fake GitHub API
+// and a fake gh. `cli` runs run-state with `--config` after the subcommand.
+async function appRun(t: Parameters<typeof tempDir>[0], options: AppRun = {}) {
+  const s = await stateRoot(t)
+  await s.seed({ round: 2, phase: 'rechecked', reviewer_login: options.login ?? BOT })
+  const dir = await tempDir(t)
+  const gh = await fakeGh(dir, options.responses ?? [])
+  const config = join(dir, 'review.md')
+  await writeFile(config, `# Review pipeline\n\n\`\`\`yaml\nruntime: claude\n${options.app === false ? '' : 'app: enabled\n'}\`\`\`\n`)
+  const key = await appKey(dir)
+  const api = await fakeGitHubApi(t, key.publicKey, options.routes ?? APP_ROUTES)
+  const envFile = join(dir, 'reviewer-app.env')
+  await writeFile(envFile, `HERO_FORGE_REVIEWER_APP_ID=123456\nHERO_FORGE_REVIEWER_APP_KEY=${key.pem}\n`)
+  const env = { ...gh.env, HERO_FORGE_STATE_DIR: s.root, HERO_FORGE_REVIEWER_APP_ENV: envFile, HERO_FORGE_GITHUB_API_URL: api.url }
+  const cli = (command: string, ...args: string[]) => runCli(['run-state', command, '--config', config, ...args], { env })
+  const phase = async () => JSON.parse(await readFile(s.file, 'utf8')).phase
+  return { ...s, gh, api, cli, phase }
+}
+
+test('with the App, next-round that stops the run posts the contract-reviewer/gate failure status at the head, as the bot', async (t) => {
+  const s = await appRun(t)
+  const { code, stdout, stderr } = await s.cli('next-round', '--pr', '13', '--max-rounds', '2')
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { round: 2, phase: 'stopped' })
+  const calls = await s.gh.calls()
+  assert.deepEqual(calls.map((c) => c.argv), [STATUS])
+  assert.equal(calls[0]!.gh_token, TOKEN)
+  assert.deepEqual(JSON.parse(calls[0]!.stdin), {
+    state: 'failure',
+    context: 'contract-reviewer/gate',
+    description: 'The review stopped: the gate did not pass in 2 round(s)',
+  })
+  const mint = s.api.requests.find((r) => r.path.endsWith('/access_tokens'))
+  assert.deepEqual((mint!.body as { permissions: unknown }).permissions, { statuses: 'write' })
+})
+
+test('with the App, next-round that starts another round posts no status', async (t) => {
+  const s = await appRun(t)
+  const { code, stdout } = await s.cli('next-round', '--pr', '13', '--max-rounds', '3')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { round: 3, phase: 'review-posted' })
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
+test('with the App, advance stopped (the re-checker failed twice) posts the failure status once', async (t) => {
+  const s = await appRun(t)
+  assert.equal((await s.cli('advance', '--pr', '13', 'stopped')).code, 0)
+  const again = await s.cli('advance', '--pr', '13', 'stopped')
+  assert.equal(again.code, 0, again.stderr)
+  const calls = await s.gh.calls()
+  assert.deepEqual(calls.map((c) => [c.argv, c.gh_token]), [[STATUS, TOKEN]])
+  assert.deepEqual(JSON.parse(calls[0]!.stdin), {
+    state: 'failure',
+    context: 'contract-reviewer/gate',
+    description: 'The review stopped: the re-checker failed twice',
+  })
+  assert.equal(await s.phase(), 'stopped')
+})
+
+test('with the App, advance aborted posts no status', async (t) => {
+  const s = await appRun(t)
+  assert.equal((await s.cli('advance', '--pr', '13', 'aborted')).code, 0)
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
+for (const [name, options] of [
+  ['a run without the App (reviewer_login none)', { login: 'none' }],
+  ['a config without app: enabled', { app: false }],
+] as const) {
+  test(`${name} stops with no status and no token minted`, async (t) => {
+    const s = await appRun(t, options)
+    assert.equal((await s.cli('next-round', '--pr', '13', '--max-rounds', '2')).code, 0)
+    assert.equal(await s.phase(), 'stopped')
+    assert.deepEqual(await s.gh.calls(), [])
+    assert.deepEqual(s.api.requests, [])
+  })
+}
+
+const NO_STATUSES: [string, AppRun][] = [
+  ['GitHub refuses a token with statuses: write (HTTP 422)', {
+    routes: { ...APP_ROUTES, 'POST /app/installations/4242/access_tokens': { status: 422, body: { message: 'The permissions requested are not granted to this installation.' } } },
+  }],
+  ['GitHub refuses the status post (HTTP 403)', {
+    responses: [{ match: '/statuses/', exit: 1, stderr: 'gh: Resource not accessible by integration (HTTP 403)\n' }],
+  }],
+]
+
+for (const [name, options] of NO_STATUSES) {
+  for (const args of [['next-round', '--pr', '13', '--max-rounds', '2'], ['advance', '--pr', '13', 'stopped']]) {
+    test(`with the App, ${args[0]}: when ${name}, it exits 4 naming the permission, and the run is not stopped`, async (t) => {
+      const s = await appRun(t, options)
+      const { code, stdout, stderr } = await s.cli(args[0]!, ...args.slice(1))
+      assert.equal(code, 4)
+      assert.equal(stdout, '')
+      assert.match(stderr, /statuses: write/)
+      assert.match(stderr, /Commit statuses/)
+      assert.doesNotMatch(stderr, new RegExp(TOKEN))
+      assert.ok((await s.gh.calls()).every((c) => c.gh_token === TOKEN))
+      assert.equal(await s.phase(), 'rechecked')
+    })
+  }
+}
+
+test('with the App, a bot login that is not the run state reviewer_login posts no status and does not stop the run', async (t) => {
+  const s = await appRun(t, { login: 'other-reviewer[bot]' })
+  const { code, stderr } = await s.cli('next-round', '--pr', '13', '--max-rounds', '2')
+  assert.equal(code, 1)
+  assert.match(stderr, /the reviewer App posts as hero-reviewer\[bot\], but the run state for PR #13 expects other-reviewer\[bot\]/)
+  assert.deepEqual(await s.gh.calls(), [])
+  assert.equal(await s.phase(), 'rechecked')
+})

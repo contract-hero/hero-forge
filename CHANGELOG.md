@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.7
+
+- `review-pipeline`: with `app: enabled`, the reviewer App posts the `contract-reviewer/gate` commit status at the PR head: `success` when a passing gate is recorded (once per head), and `failure` when the run stops (`max_rounds` reached, or the re-checker failed twice). The App needs the "Commit statuses: Read and write" permission: without it, the step exits 4 and names the permission, and nothing posts as the user.
+
 ## 1.0.6
 
 - `review-pipeline`: `app-token` takes `--app reviewer|implementer` (default `reviewer`). Each App has its own env file under `~/.config/hero-forge/` (`reviewer-app.env`, `implementer-app.env`), its own env-var names and its own test override. Every reviewer path works as before with no new flag, and no subcommand prints a token for either App.

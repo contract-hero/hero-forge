@@ -157,8 +157,13 @@ async function call<T>(step: string, jwt: string, method: string, path: string, 
 
 export type AppIdentity = { token: string; login: string }
 
-// Mint a token for one repo and read the App's bot login. Throws Failure 4.
-export async function mintAppToken(repo: string, app: AppName = 'reviewer'): Promise<AppIdentity> {
+// Mint a token for one repo, scoped to `permissions` (by default what the App
+// does, from APP), and read the App's bot login. Throws Failure 4.
+export async function mintAppToken(
+  repo: string,
+  app: AppName = 'reviewer',
+  permissions: Record<string, string> = APP[app].permissions,
+): Promise<AppIdentity> {
   const [owner, name] = repo.split('/')
   const { id, key } = await loadCredentials(app)
   const jwt = appJwt(id, key)
@@ -176,7 +181,7 @@ export async function mintAppToken(repo: string, app: AppName = 'reviewer'): Pro
 
   const access = await call<{ token?: unknown }>('mint the installation token', jwt, 'POST', `/app/installations/${installation.id}/access_tokens`, {
     repositories: [name],
-    permissions: APP[app].permissions,
+    permissions,
   })
   if (typeof access.token !== 'string' || access.token === '') throw broken('mint the installation token: GitHub sent no token')
 

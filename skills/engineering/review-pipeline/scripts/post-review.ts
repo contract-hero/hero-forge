@@ -35,6 +35,7 @@ import {
   userIdentity,
   type Identity,
 } from './github.ts'
+import { postGateStatus } from './gate-status.ts'
 import { gateProblems, loadLedger, loadRecheck } from './ledger.ts'
 import { hasOwnMarker, marker, refuseMarkerIn, withMarker } from './marker.ts'
 import {
@@ -107,9 +108,22 @@ function checkPayload(value: unknown): Payload {
 // Record the review (once per round, kind and commit, the key of the
 // duplicate check) and the gate result (once per round, commit and result) in
 // the PR's run state, when there is one.
-async function record(state: State | undefined, entry: ReviewRecord | undefined, gate: GateRecord | undefined): Promise<void> {
+//
+// With the App, a pass also posts the gate status at the commit (once per
+// head: gate-status.ts reads GitHub first), before the pass is recorded: a
+// status post that fails records nothing, so a re-run (which finds the review
+// on GitHub) posts the status again.
+async function record(
+  state: State | undefined,
+  entry: ReviewRecord | undefined,
+  gate: GateRecord | undefined,
+  app: boolean,
+): Promise<void> {
   if (state === undefined) return
   const fresh = await loadState(state.pr)
+  if (app && gate?.result === 'pass') {
+    await postGateStatus(fresh, 'success', 'The review gate passed at this commit')
+  }
   let changed = false
   const same = (r: ReviewRecord) => entry !== undefined && r.round === entry.round && r.kind === entry.kind && r.commit === entry.commit
   if (entry !== undefined && !fresh.reviews.some(same)) {
@@ -348,7 +362,7 @@ async function post(argv: string[]): Promise<string> {
   }
   const gateRecord: GateRecord | undefined = gate === undefined ? undefined : { round, commit, result: gate.gate }
   const save = async (entry: ReviewRecord | undefined) => {
-    await record(state, entry, gateRecord)
+    await record(state, entry, gateRecord, app)
     if (zero) await writeEmptyRecheck(join(runDir(pr), `recheck-r${round}.json`))
   }
 
