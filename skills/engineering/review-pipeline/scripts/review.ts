@@ -11,6 +11,7 @@ import { main as config } from './config.ts'
 import { explainerMain as explainer, mergeGateMain as mergeGate, mergeMain as merge } from './finish.ts'
 import { main as postReview } from './post-review.ts'
 import { main as reply } from './reply.ts'
+import { main as route } from './route.ts'
 import { main as runState } from './run-state.ts'
 import { main as stack } from './stack.ts'
 
@@ -27,6 +28,7 @@ const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
   merge,
   explainer,
   stack,
+  route,
 }
 
 const [name, ...rest] = process.argv.slice(2)

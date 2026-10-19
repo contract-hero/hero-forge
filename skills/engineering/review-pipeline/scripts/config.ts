@@ -2,7 +2,7 @@
 // its one YAML block, apply defaults, print the resolved config as JSON.
 //
 // The block is a small YAML subset, parsed by hand. This is the whole grammar:
-//   top     KEY: SCALAR        column 0; runtime | pairs | max_rounds | app
+//   top     KEY: SCALAR        column 0; runtime | pairs | max_rounds | app | paused | app_daily_runs
 //   open    KEY:               column 0; orchestrator | reviewer; opens a map
 //   nested    KEY: SCALAR      exactly 2 spaces; model | effort; inside a map
 //   SCALAR  [A-Za-z0-9._-]+ | "..." | '...'
@@ -32,7 +32,7 @@ const AGENT_MODELS = ['opus', 'sonnet', 'haiku', 'fable']
 
 type RoleName = 'orchestrator' | 'reviewer'
 const ROLES: RoleName[] = ['orchestrator', 'reviewer']
-const TOP_KEYS = ['runtime', 'pairs', 'max_rounds', 'app']
+const TOP_KEYS = ['runtime', 'pairs', 'max_rounds', 'app', 'paused', 'app_daily_runs']
 const ROLE_KEYS = ['model', 'effort']
 
 // A value from the block, with its 1-based line in the file.
@@ -117,9 +117,11 @@ function parse(text: string): Parsed {
   return parsed
 }
 
-// `pairs` and `max_rounds` when the block leaves them out.
+// `pairs`, `max_rounds` and `app_daily_runs` (the reviewer App's runs in a
+// rolling 24 hours) when the block leaves them out.
 const DEFAULT_PAIRS = 2
 const DEFAULT_MAX_ROUNDS = 2
+const DEFAULT_APP_DAILY_RUNS = 20
 
 function count(name: string, value: Value | undefined, fallback: number): number {
   if (value === undefined) return fallback
@@ -129,6 +131,15 @@ function count(name: string, value: Value | undefined, fallback: number): number
   const n = Number(value.text)
   if (n < 1) throw new Invalid(`${name} must be 1 or more, got ${n}`, value.line)
   return n
+}
+
+// A bare true or false; left out is false.
+function flag(name: string, value: Value | undefined): boolean {
+  if (value === undefined) return false
+  if (value.quoted || (value.text !== 'true' && value.text !== 'false')) {
+    throw new Invalid(`${name} must be true or false, got "${value.text}"`, value.line)
+  }
+  return value.text === 'true'
 }
 
 function isClaudeModel(model: string): boolean {
@@ -151,6 +162,8 @@ function resolveConfig(path: string, parsed: Parsed) {
   const runtime: Runtime = runtimeValue.text
   const pairs = count('pairs', parsed.top.get('pairs'), DEFAULT_PAIRS)
   const maxRounds = count('max_rounds', parsed.top.get('max_rounds'), DEFAULT_MAX_ROUNDS)
+  const paused = flag('paused', parsed.top.get('paused'))
+  const appDailyRuns = count('app_daily_runs', parsed.top.get('app_daily_runs'), DEFAULT_APP_DAILY_RUNS)
   const appValue = parsed.top.get('app')
   if (appValue !== undefined && appValue.text !== 'enabled') {
     throw new Invalid(`app must be "enabled" or left out, got "${appValue.text}"`, appValue.line)
@@ -187,6 +200,8 @@ function resolveConfig(path: string, parsed: Parsed) {
     reviewer: resolveRole('reviewer'),
     max_rounds: maxRounds,
     app: appValue !== undefined,
+    paused,
+    app_daily_runs: appDailyRuns,
   }
 }
 
@@ -198,12 +213,24 @@ function defaultPath(): string {
 
 export type ResolvedConfig = ReturnType<typeof resolveConfig>
 
+export type Loaded = { ok: true; config: ResolvedConfig } | { ok: false; code: number; message: string }
+
+// Check and resolve the text of a review config. `where` names the file in
+// the config_path and in an error. An invalid text fails with code 4.
+export function resolveConfigText(text: string, where: string): Loaded {
+  try {
+    return { ok: true, config: resolveConfig(where, parse(text)) }
+  } catch (error) {
+    if (!(error instanceof Invalid)) throw error
+    const at = error.line === undefined ? where : `${where}:${error.line}`
+    return { ok: false, code: 4, message: `${at}: ${error.message}. Edit the file or re-run /setup-forge.` }
+  }
+}
+
 // Read, check and resolve a review config. `path` undefined means the default
 // location. A failure carries the message and exit code `config` itself uses
 // (1 unreadable, 3 missing, 4 invalid).
-export async function loadConfig(
-  path: string | undefined,
-): Promise<{ ok: true; config: ResolvedConfig } | { ok: false; code: number; message: string }> {
+export async function loadConfig(path: string | undefined): Promise<Loaded> {
   const file = path === undefined ? defaultPath() : resolve(path)
   let text: string
   try {
@@ -214,13 +241,7 @@ export async function loadConfig(
     }
     return { ok: false, code: 1, message: `cannot read ${file}: ${(error as Error).message}` }
   }
-  try {
-    return { ok: true, config: resolveConfig(file, parse(text)) }
-  } catch (error) {
-    if (!(error instanceof Invalid)) throw error
-    const where = error.line === undefined ? file : `${file}:${error.line}`
-    return { ok: false, code: 4, message: `${where}: ${error.message}. Edit the file or re-run /setup-forge.` }
-  }
+  return resolveConfigText(text, file)
 }
 
 async function config(argv: string[]): Promise<string> {

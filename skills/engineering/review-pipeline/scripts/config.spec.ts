@@ -39,6 +39,8 @@ test('a minimal codex file resolves to the codex defaults', async (t) => {
     reviewer: { model: 'gpt-6.1-sol', effort: 'high', agent_model: null },
     max_rounds: 2,
     app: false,
+    paused: false,
+    app_daily_runs: 20,
   })
 })
 
@@ -54,6 +56,8 @@ test('a minimal claude file resolves to the claude defaults with sub-agent model
     reviewer: { model: 'claude-sonnet-5-5', effort: 'high', agent_model: 'sonnet' },
     max_rounds: 2,
     app: false,
+    paused: false,
+    app_daily_runs: 20,
   })
 })
 
@@ -82,6 +86,8 @@ test('the canonical block setup writes resolves field for field', async (t) => {
       '  effort: low',
       'max_rounds: 4',
       'app: enabled',
+      'paused: true',
+      'app_daily_runs: 5',
     ),
   )
   assert.equal(stderr, '')
@@ -92,6 +98,14 @@ test('the canonical block setup writes resolves field for field', async (t) => {
   assert.deepEqual(resolved.reviewer, { model: 'haiku', effort: 'low', agent_model: 'haiku' })
   assert.equal(resolved.max_rounds, 4)
   assert.equal(resolved.app, true)
+  assert.equal(resolved.paused, true)
+  assert.equal(resolved.app_daily_runs, 5)
+})
+
+test('paused: false is accepted and stays false', async (t) => {
+  const { code, stdout } = await config(t, doc('runtime: codex', 'paused: false'))
+  assert.equal(code, 0)
+  assert.equal(JSON.parse(stdout).paused, false)
 })
 
 test('comments, blank lines, quotes and trailing comments are accepted', async (t) => {
@@ -187,6 +201,11 @@ const invalid: [string, string, number | null, string][] = [
   ['a non-integer pairs', doc('runtime: codex', 'pairs: 1.5'), 7, 'pairs must be a whole number, got "1.5"'],
   ['a quoted max_rounds', doc('runtime: codex', 'max_rounds: "2"'), 7, 'max_rounds must be a whole number, got "2"'],
   ['a negative max_rounds', doc('runtime: codex', 'max_rounds: -1'), 7, 'max_rounds must be a whole number, got "-1"'],
+  ['a paused value other than true or false', doc('runtime: codex', 'paused: yes'), 7, 'paused must be true or false, got "yes"'],
+  ['a quoted paused', doc('runtime: codex', 'paused: "true"'), 7, 'paused must be true or false, got "true"'],
+  ['app_daily_runs 0', doc('runtime: codex', 'app_daily_runs: 0'), 7, 'app_daily_runs must be 1 or more, got 0'],
+  ['a non-integer app_daily_runs', doc('runtime: codex', 'app_daily_runs: ten'), 7, 'app_daily_runs must be a whole number, got "ten"'],
+  ['a duplicate paused', doc('runtime: codex', 'paused: true', 'paused: false'), 8, 'duplicate key paused'],
   ['an app value other than enabled', doc('runtime: codex', 'app: true'), 7, 'app must be "enabled" or left out, got "true"'],
 ]
 

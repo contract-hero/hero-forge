@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.8
+
+- `review-pipeline`: a new `review.ts route --app reviewer --event <name> --delivery <id> --payload <file>` turns one GitHub webhook delivery into one decision, `review` or `ignore` with a reason, for the T3 router. A PR by `contract-implementer[bot]` gets `review` on `opened` or `reopened`; a PR by the maintainer (the local `gh` login) on `ready_for_review`, or on a non-draft `opened`/`reopened`. A push never starts anything, and other authors are ignored. It takes a per-PR lock (3-hour TTL), dedupes delivery ids, and counts runs against a rolling 24-hour cap per App. `review.ts config` gains `paused` (default `false`) and `app_daily_runs` (default `20`).
+
 ## 1.0.7
 
 - `review-pipeline`: with `app: enabled`, the reviewer App posts the `contract-reviewer/gate` commit status at the PR head: `success` when a passing gate is recorded (once per head), and `failure` when the run stops (`max_rounds` reached, or the re-checker failed twice). The App needs the "Commit statuses: Read and write" permission: without it, the step exits 4 and names the permission, and nothing posts as the user.
