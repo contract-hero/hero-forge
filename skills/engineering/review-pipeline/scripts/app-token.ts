@@ -151,9 +151,30 @@ async function call<T>(step: string, jwt: string, method: string, path: string, 
   }
   if (!response.ok) {
     const said = (parsed as { message?: unknown } | null)?.message
-    throw broken(`${step} failed: HTTP ${response.status}${typeof said === 'string' ? ` (${said})` : ''}`)
+    throw new ApiFailure(`${step} failed: HTTP ${response.status}${typeof said === 'string' ? ` (${said})` : ''}. ${FIX}.`, response.status)
   }
   return (parsed ?? {}) as T
+}
+
+// An HTTP error answer from GitHub (exit 4), with its status, so a caller can
+// tell a 404 from a broken App.
+export class ApiFailure extends Failure {
+  status: number
+  constructor(message: string, status: number) {
+    super(message, 4)
+    this.status = status
+  }
+}
+
+// GitHub API calls as the App itself, signed with its JWT (not an
+// installation token): what `delivery` and `app-check` read. The JWT stays in
+// this process. Throws Failure 4 when the credentials are broken.
+export type AppApi = <T>(step: string, method: string, path: string) => Promise<T>
+
+export async function appApi(app: AppName): Promise<AppApi> {
+  const { id, key } = await loadCredentials(app)
+  const jwt = appJwt(id, key)
+  return (step, method, path) => call(step, jwt, method, path)
 }
 
 export type AppIdentity = { token: string; login: string }

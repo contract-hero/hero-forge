@@ -15,7 +15,7 @@ claude plugin install hero-forge@contract-hero
 
 Updates itself when the marketplace has auto-update on. If `mattpocock-skills` is also installed, uninstall it (`claude plugin uninstall mattpocock-skills`): both plugins ship skills with the same names.
 
-Then run `/setup-forge` once per repo. It asks which issue tracker you use, which labels you apply when you triage, where docs go, and how pull requests get reviewed (`/review-pipeline`): the runtime, the number of reviewer pairs, the models, the round limit, and whether a reviewer GitHub App posts the reviews.
+Then run `/setup-forge` once per repo. It asks which issue tracker you use, which labels you apply when you triage, where docs go, and how pull requests get reviewed (`/review-pipeline`): the runtime, the number of reviewer pairs, the models, the round limit, whether a reviewer GitHub App posts the reviews, and whether AFK mode is on (GitHub events start the runs through two GitHub Apps and T3 Code).
 
 ## Skills
 

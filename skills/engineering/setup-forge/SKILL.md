@@ -1,6 +1,6 @@
 ---
 name: setup-forge
-description: "Configure this repo for the engineering skills in one run: its issue tracker, triage label vocabulary, domain doc layout, and how it reviews pull requests (runtime, reviewer pairs, model and effort per role, round limit, reviewer App). Re-runs one part alone when asked. Run once before first use of the other engineering skills. Use when the user wants a repo set up for the engineering skills, or asks to change its issue tracker, triage labels, domain doc layout, or how it reviews pull requests. Do not start it only because a config file is missing."
+description: "Configure this repo for the engineering skills in one run: its issue tracker, triage label vocabulary, domain doc layout, and how it reviews pull requests (runtime, reviewer pairs, model and effort per role, round limit, reviewer App, and AFK mode: GitHub Apps and T3 Code tasks that start the runs from GitHub events). Re-runs one part alone when asked. Run once before first use of the other engineering skills. Use when the user wants a repo set up for the engineering skills, or asks to change its issue tracker, triage labels, domain doc layout, or how it reviews pull requests. Do not start it only because a config file is missing."
 ---
 
 # Setup Forge
@@ -10,7 +10,7 @@ Scaffold the per-repo configuration that the engineering skills assume, in four 
 - **Issue tracker**: where issues live (GitHub by default; local markdown is also supported out of the box)
 - **Triage labels**: the strings used for the five canonical triage roles
 - **Domain docs**: where `GLOSSARY.md` and ADRs live, and the consumer rules for reading them
-- **Review pipeline**: the config that `review-pipeline` reads, `docs/agents/review.md` (prose plus one YAML block): the runtime, the number of reviewer pairs, the model and effort of each role, the round limit, and whether a reviewer GitHub App posts the reviews
+- **Review pipeline**: the config that `review-pipeline` reads, `docs/agents/review.md` (prose plus one YAML block): the runtime, the number of reviewer pairs, the model and effort of each role, the round limit, whether a reviewer GitHub App posts the reviews, and whether AFK mode is on. With AFK mode on, GitHub events start the runs: the part also checks both Apps' settings, creates the T3 Code tasks that route the events, and sets the default-branch ruleset (step 6)
 
 Each part writes its file under `docs/agents/` and one entry in the `## Agent skills` block of `CLAUDE.md` or `AGENTS.md`.
 
@@ -50,6 +50,8 @@ For the review pipeline:
 - `gh repo view --json nameWithOwner`: the repo as `O/R`, for the App check. If it fails (no GitHub remote: a local-only or GitLab repo), tell the user that `review-pipeline` reviews GitHub pull requests only, and skip the review pipeline part: write none of it, and add no `### Review` entry. The other parts still run.
 - Reviewer App credentials. Check only that these files exist (`test -f <path>`). Never print, `cat` or read them: they hold the App ID and the path to a private key.
   - `~/.config/hero-forge/reviewer-app.env`: this plugin's credentials.
+  - `~/.config/hero-forge/implementer-app.env`: the Implementer App's credentials, for AFK mode.
+- AFK mode now: in the JSON of `review.ts config`, `implementer.app` is `true` when AFK mode is on.
 
 ### 2. Present findings and ask
 
@@ -119,13 +121,43 @@ For credentials by hand, tell the user to create `~/.config/hero-forge/` (mode 7
 
 Never ask the user to paste the App ID or the key into the conversation.
 
+*AFK mode.* Do GitHub events start the runs, with no slash command? With AFK mode on, the user adds `ready-for-agent` to a ticket or a spec, and the rest runs unattended: the Implementer App builds it and answers the reviews, and the reviewer App reviews, approves and merges. It needs:
+
+- the reviewer App (the answer above);
+- an Implementer GitHub App that already exists, installed on the repo, with its credentials in `~/.config/hero-forge/implementer-app.env`. This skill never creates an App;
+- T3 Code on this machine, with T3 Connect (step 6 checks it).
+
+Offer the answers that fit what step 1 found, the recommended one first:
+
+| Found | Answers |
+| --- | --- |
+| the current config has `implementer.app: true` | AFK mode on (recommended); off |
+| anything else | AFK mode off (recommended); on |
+
+With AFK mode off, everything below works as written and the config gets none of the AFK lines.
+
+AFK mode on with no reviewer App above: AFK mode needs both Apps. Ask whether to use the reviewer App after all, or to leave AFK mode off.
+
+AFK mode on with no `implementer-app.env`: tell the user to add the credentials as for the reviewer App, in the same `~/.config/hero-forge/` folder: `implementer-app.pem`, and `implementer-app.env` with `HERO_FORGE_IMPLEMENTER_APP_ID=<App ID or Client ID>` and `HERO_FORGE_IMPLEMENTER_APP_KEY=<absolute path of implementer-app.pem>`. Wait until they say the files are there.
+
+With AFK mode on, the YAML block gets these lines after the other fields: `paused` is the switch that stops both Apps, `app_daily_runs` caps the reviewer App's runs in a rolling 24 hours, and the `implementer:` block turns the Implementer App on, caps the builds of one ticket (`attempts`) and its runs in 24 hours (`daily_runs`).
+
+```yaml
+paused: false
+app_daily_runs: 20
+implementer:
+  app: enabled
+  attempts: 3
+  daily_runs: 20
+```
+
 ### 3. Confirm and edit
 
 Show the user a draft of:
 
 - The `## Agent skills` block to add to whichever of `CLAUDE.md` / `AGENTS.md` is being edited (see step 4 for selection rules). When one part runs alone, show only that part's entry.
 - The contents of `docs/agents/issue-tracker.md`, `docs/agents/domain.md`, and `docs/agents/triage-labels.md` (the last only when `triage` is installed)
-- The whole new `docs/agents/review.md`, from the seed template [review.md](./review.md) with every placeholder filled. The YAML block states every field, even the ones left at their defaults. With the App, the block has the line `app: enabled`. Without it, the block has no `app` line.
+- The whole new `docs/agents/review.md`, from the seed template [review.md](./review.md) with every placeholder filled. The YAML block states every field, even the ones left at their defaults. With the App, the block has the line `app: enabled`. Without it, the block has no `app` line. With AFK mode on, the block also has the AFK lines of Section D, and the prose has the AFK mode line of the template.
 
 Let them edit before writing.
 
@@ -160,7 +192,7 @@ The block:
 
 ### Review
 
-<N> reviewer pairs on <Codex | Claude sub-agents>, max <max_rounds> rounds, <reviews and approval by the reviewer App | COMMENT reviews as you>. See `docs/agents/review.md`.
+<N> reviewer pairs on <Codex | Claude sub-agents>, max <max_rounds> rounds, <reviews and approval by the reviewer App | COMMENT reviews as you><, AFK mode on: GitHub events start the runs, only with AFK mode>. See `docs/agents/review.md`.
 ```
 
 Include the `### Triage labels` sub-block, and write `docs/agents/triage-labels.md`, only when `triage` is installed and Section B ran. When it isn't, both are omitted.
@@ -193,12 +225,92 @@ Check the App before the config says `app: enabled`. Save the draft config to a 
 - Exit 0: the App can post on this repo. Write the config with `app: enabled`.
 - Exit 4: show the message (for example, the App is not installed on `O/R`, or GitHub refused the key). Ask the user to fix it and check again, or to write the config without the App. Never write `app: enabled` for an App that fails this check.
 
+With AFK mode on, check the Implementer App the same way, with the AFK lines in the draft: `review.ts app-token --repo O/R --app implementer --check --config <temp file>`. Exit 4: show the message, and ask the user to fix it and check again, or to leave AFK mode off. Never write `implementer:` with `app: enabled` for an App that fails this check.
+
 **`docs/agents/review.md`**: write the whole file, replacing any previous version. Create `docs/agents/` if it is missing.
 
 ### 5. Check
 
-When the review pipeline part ran: from the repo root, run `review.ts config`. It must exit 0. Show the user the JSON it prints: that is what `review-pipeline` will use. A non-zero exit means the file you wrote is wrong: fix it and run the check again. With the App, `app` is `true`; also run `review.ts app-token --repo O/R --login` and show the login it prints, `<slug>[bot]`: the reviews will show that name.
+When the review pipeline part ran: from the repo root, run `review.ts config`. It must exit 0. Show the user the JSON it prints: that is what `review-pipeline` will use. A non-zero exit means the file you wrote is wrong: fix it and run the check again. With the App, `app` is `true`; also run `review.ts app-token --repo O/R --login` and show the login it prints, `<slug>[bot]`: the reviews will show that name. With AFK mode on, `implementer.app` is `true`, and `review.ts app-token --repo O/R --app implementer --login` prints the name the builds will show.
 
-### 6. Done
+### 6. AFK mode
+
+Only with AFK mode on, after step 5 passes. Take the sub-steps in order: each App's webhook settings need the URL of its T3 task. Never create or change an App, and never click an App setting: each change is the user's. Name the exact page, wait for the user, then check again.
+
+`route` reads the config from the default branch, so AFK mode starts once the `docs/agents/review.md` written above is on the default branch. Tell the user to land it through a pull request.
+
+The T3 tasks copy the provider, the model and the runtime mode of the thread that creates them, and each run thread copies them from the task. Tell the user, so they run this part from a thread with the model and runtime mode the runs should use.
+
+**6.1 T3 Connect.** Read the environment with `t3_environment_read`. AFK mode needs T3 Connect linked (remote access on), and its "Hold webhook requests while this environment is offline" preference on (`holdWebhooksWhileOffline`). Without the hold, a delivery that arrives while this machine is offline fails, and GitHub does not retry it (the hourly reconcile finds the missed work later). When the result does not show both as on, tell the user how to turn them on: in T3 Code, open the T3 Connect settings, sign in, turn on remote access, and turn on "Hold webhook requests while this environment is offline". Wait, then read it again. When the result has no field for them, ask the user to confirm both in the T3 Code settings. Step 6.2 shows whether Connect is linked: only then does a task get a `webhookUrl`.
+
+**6.2 The router tasks.** One webhook task per App, because each App has one webhook URL for every repo it is installed on. Run `list_scheduled_tasks` first: a task titled `hero-forge router: <app>` already exists (set up from another repo): keep it, and use its `webhookUrl`. Else, for each App (`reviewer`, then `implementer`):
+
+1. Tell the user to make a webhook secret in their own terminal (for example `openssl rand -hex 32`) and to keep it for the App's settings. Never ask for it in the conversation.
+2. Call `request_secret` with the label `<App slug> webhook secret` and the reason "T3 checks the signature of each GitHub delivery with it. Put the same value in the App's Webhook secret." A `secretRef` works once: one request per App.
+3. Call `schedule_task` with:
+   - `title`: `hero-forge router: <app>`;
+   - `prompt`: the text of [router-prompt.md](./router-prompt.md), with each `<<app>>` replaced by `reviewer` or `implementer`, and each `<<clone_root>>` by the absolute path of the folder that holds this repo's checkout (the router clones a repo it does not know there). Leave each `{{...}}` as it is: T3 fills it from the delivery;
+   - `schedule`: `{type: 'webhook', signature: {header: 'x-hub-signature-256', encoding: 'hex', prefix: 'sha256=', secretRef: <the secretRef>}}`;
+   - `bindToCurrentThread`: `false`, so each delivery gets a fresh thread.
+4. Report the task's `webhookUrl`: the user pastes it in the App's Webhook URL. No `webhookUrl` means this environment has no T3 Connect managed tunnel: tell the user to turn on T3 Connect remote access (6.1), then read the task again with `list_scheduled_tasks`.
+
+The prompts find the helper CLI through the installed plugin, so a plugin update needs no new task.
+
+**6.3 The App settings.** One App at a time. Run `review.ts app-check --app <app> --repo O/R --webhook-url <that App's webhookUrl>`. It reads the App's settings as the App and prints a report: `pages` (the App's settings page, its permissions page, and the installation page) and `items`, each `ok` or `wrong` with what to change (`fix`).
+
+- Exit 0: every setting is right. Go on to the next App.
+- Exit 1: show the user each wrong item's `fix`, which names the page. Wait until they say they changed it, then run `app-check` again.
+- Exit 4: the App's credentials are broken. Show the message and stop, as in step 4.
+
+What `app-check` expects:
+
+| Setting | `reviewer` | `implementer` |
+| --- | --- | --- |
+| Repository permissions | Contents: Read-only; Pull requests: Read and write; Commit statuses: Read and write; Metadata: Read-only | Contents: Read and write; Pull requests: Read and write; Issues: Read and write; Metadata: Read-only; Workflows: No access |
+| Subscribe to events (no others: each delivery costs one agent turn) | Pull request; Issue comment | Issues; Issue comment |
+| Webhook | Active; URL: the reviewer task's `webhookUrl`; secret: the reviewer's; content type json | Active; URL: the implementer task's `webhookUrl`; secret: the implementer's; content type json |
+| Installation | on O/R, with every requested permission accepted | on O/R, with every requested permission accepted |
+
+The pages, for an App an organization owns: `https://github.com/organizations/<org>/settings/apps/<slug>` (the webhook), `.../apps/<slug>/permissions` (permissions and events), and `https://github.com/organizations/<org>/settings/installations/<id>` (the installation, where the user accepts new permissions). For an App a user owns: the same paths under `https://github.com/settings/`. A missing installation: `https://github.com/apps/<slug>/installations/new`.
+
+**6.4 The reconcile task.** Once both Apps pass. `list_scheduled_tasks`: a task titled `hero-forge reconcile: O/R` already exists: keep it. Else call `schedule_task` with the `title` `hero-forge reconcile: O/R`, the text of [reconcile-prompt.md](./reconcile-prompt.md) as the `prompt` with each `<<repo>>` replaced by `O/R`, `schedule` `{type: 'interval', everyMs: 3600000}`, and `bindToCurrentThread` `false`. Report its `nextRunAt`. Each hour it starts the work that a missed delivery should have started.
+
+**6.5 The ruleset.** A ruleset changes how every change reaches the default branch, so ask before you create it: create it now (recommended), or not now. Say what it does: nobody pushes to the default branch directly any more, and each pull request merges only with the `contract-reviewer/gate` status, which only the reviewer App posts. Without it, AFK mode still runs, but nothing on GitHub stops a merge that skipped the gate.
+
+On yes, write this JSON to a file outside the repo, with `<app_id>` the `app_id` that `app-check --app reviewer` printed:
+
+```json
+{
+  "name": "hero-forge gate",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [{ "context": "contract-reviewer/gate", "integration_id": <app_id> }]
+      }
+    }
+  ]
+}
+```
+
+`integration_id` pins the check to the reviewer App, so a status from anyone else does not count. Then `gh api repos/O/R/rulesets --jq '.[] | {id, name}'`: a ruleset named `hero-forge gate` exists: replace it, `gh api -X PUT repos/O/R/rulesets/<id> --input <file>`. Else create it: `gh api -X POST repos/O/R/rulesets --input <file>`. Show the user its page, `https://github.com/O/R/rules/<id>`.
+
+### 7. Done
 
 Tell the user the setup is complete and which engineering skills will now read from these files. Mention they can edit `docs/agents/*.md` directly later (`review-pipeline` reads `docs/agents/review.md` on every run, so its YAML block can be edited by hand); re-running this skill is only necessary if they want to switch issue trackers, change how the repo reviews pull requests, or restart from scratch. A re-run can take one part alone and leaves the other parts as they are.
+
+With AFK mode on, also tell the user: adding `ready-for-agent` to a ticket or a spec starts a build, `paused: true` in the YAML block (on the default branch) stops both Apps, and each router thread ends with one line that says what it started or why it ignored the delivery.

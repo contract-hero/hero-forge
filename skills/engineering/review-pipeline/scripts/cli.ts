@@ -131,6 +131,18 @@ export const COMMANDS = {
   maintainer or contract-implementer[bot] closes (itself, or one of its sub-issues) is ignore, has-pr. An item
   that fails prints its error on stderr, the other lines still stand, and the exit code is the first failure's.`,
   },
+  delivery: {
+    summary: "Fetch one webhook delivery's payload from the App's own deliveries on GitHub, for route.",
+    usage: `usage: review.ts delivery --app reviewer|implementer --delivery <X-GitHub-Delivery> --out <file>
+  Finds the delivery in the App's webhook deliveries (with a short retry while GitHub lists it),
+  writes its payload to <file>, and prints {event, action, repo}. Exit 3: GitHub does not list it.`,
+  },
+  'app-check': {
+    summary: "Check a GitHub App's settings for AFK mode: permissions, events, webhook and installation.",
+    usage: `usage: review.ts app-check --app reviewer|implementer --repo O/R [--webhook-url <url>]
+  Prints {app, app_id, slug, repo, ok, pages, items}: each item ok or wrong, with what to change.
+  Exit 0 every item ok, 1 an item is wrong, 4 the App's credentials are broken.`,
+  },
 } as const satisfies Record<string, { summary: string; usage: string }>
 
 export type CommandName = keyof typeof COMMANDS
