@@ -19,6 +19,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['merge', 'usage: review.ts merge --repo O/R --pr N [--config <path>]'],
   ['explainer', 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>'],
   ['stack', '  review.ts stack order       --repo O/R --spec N'],
+  ['route', 'usage: review.ts route --app reviewer --event <X-GitHub-Event> --delivery <X-GitHub-Delivery> --payload <file>'],
 ]
 
 const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'] }

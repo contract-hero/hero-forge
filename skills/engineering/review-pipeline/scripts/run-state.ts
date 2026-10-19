@@ -40,7 +40,7 @@ export const PHASES = [
   'superseded',
 ] as const
 export type Phase = (typeof PHASES)[number]
-const TERMINAL: readonly Phase[] = ['complete', 'aborted', 'stopped', 'superseded']
+export const TERMINAL: readonly Phase[] = ['complete', 'aborted', 'stopped', 'superseded']
 export const MODES = ['single', 'layer', 'stack-final'] as const
 export type Mode = (typeof MODES)[number]
 export const RUNTIMES = ['codex', 'claude'] as const

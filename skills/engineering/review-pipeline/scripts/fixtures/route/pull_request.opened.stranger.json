@@ -1,0 +1,106 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "url": "https://api.github.com/repos/contract-hero/hero-forge/pulls/42",
+    "id": 2987654321,
+    "node_id": "PR_kwDOPjQ1U86yAbCd",
+    "html_url": "https://github.com/contract-hero/hero-forge/pull/42",
+    "number": 42,
+    "state": "open",
+    "locked": false,
+    "title": "route decides reviewer events",
+    "user": {
+      "login": "octo-stranger",
+      "id": 98765432,
+      "node_id": "U_kgDOAbCdEf",
+      "type": "User",
+      "site_admin": false
+    },
+    "body": "Closes #25",
+    "draft": false,
+    "merged": false,
+    "head": {
+      "label": "contract-hero:ticket/25-route-decides-reviewer-events",
+      "ref": "ticket/25-route-decides-reviewer-events",
+      "sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090",
+      "user": {
+        "login": "contract-hero",
+        "id": 187654321,
+        "node_id": "U_kgDOAbCdEf",
+        "type": "Organization",
+        "site_admin": false
+      },
+      "repo": {
+        "id": 1043552211,
+        "node_id": "R_kgDOPjQ1Uw",
+        "name": "hero-forge",
+        "full_name": "contract-hero/hero-forge",
+        "private": false,
+        "owner": {
+          "login": "contract-hero",
+          "id": 187654321,
+          "type": "Organization"
+        },
+        "html_url": "https://github.com/contract-hero/hero-forge",
+        "default_branch": "main"
+      }
+    },
+    "base": {
+      "label": "contract-hero:main",
+      "ref": "main",
+      "sha": "a7318390c4d2e1f0b9a8c7d6e5f4a3b2c1d0e9f8",
+      "user": {
+        "login": "contract-hero",
+        "id": 187654321,
+        "node_id": "U_kgDOAbCdEf",
+        "type": "Organization",
+        "site_admin": false
+      },
+      "repo": {
+        "id": 1043552211,
+        "node_id": "R_kgDOPjQ1Uw",
+        "name": "hero-forge",
+        "full_name": "contract-hero/hero-forge",
+        "private": false,
+        "owner": {
+          "login": "contract-hero",
+          "id": 187654321,
+          "type": "Organization"
+        },
+        "html_url": "https://github.com/contract-hero/hero-forge",
+        "default_branch": "main"
+      }
+    },
+    "author_association": "MEMBER"
+  },
+  "repository": {
+    "id": 1043552211,
+    "node_id": "R_kgDOPjQ1Uw",
+    "name": "hero-forge",
+    "full_name": "contract-hero/hero-forge",
+    "private": false,
+    "owner": {
+      "login": "contract-hero",
+      "id": 187654321,
+      "type": "Organization"
+    },
+    "html_url": "https://github.com/contract-hero/hero-forge",
+    "default_branch": "main"
+  },
+  "organization": {
+    "login": "contract-hero",
+    "id": 187654321
+  },
+  "sender": {
+    "login": "octo-stranger",
+    "id": 98765432,
+    "node_id": "U_kgDOAbCdEf",
+    "type": "User",
+    "site_admin": false
+  },
+  "installation": {
+    "id": 71234567,
+    "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNzEyMzQ1Njc="
+  }
+}

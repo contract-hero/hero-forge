@@ -28,7 +28,7 @@ If the Orchestrator cannot do its job and none of its reviewers can still run (i
 
 The helper CLI is in the `scripts/` folder beside this SKILL.md. Below, `review.ts` means `node "<the folder this SKILL.md is in>/scripts/review.ts"`, run from the repo root. It needs Node 22.18 or newer.
 
-Run `review.ts help` to list every subcommand with its one-line summary, and `review.ts <subcommand> --help` to see what one subcommand takes. Both print to stdout and exit 0. Both read the one usage table in the CLI, so trust them over a usage line you remember. The run state lives in `<git common dir>/hero-forge/pr-<N>/`. The `stack` subcommand serves `implement-spec-stack`, and its SKILL.md says how to use it.
+Run `review.ts help` to list every subcommand with its one-line summary, and `review.ts <subcommand> --help` to see what one subcommand takes. Both print to stdout and exit 0. Both read the one usage table in the CLI, so trust them over a usage line you remember. The run state lives in `<git common dir>/hero-forge/pr-<N>/`. The `stack` subcommand serves `implement-spec-stack`, and its SKILL.md says how to use it. The `route` subcommand serves the T3 router task that the reviewer App's webhook starts: it decides whether one GitHub delivery starts a review, and a run in this skill never calls it.
 
 `run-state advance` moves the run one step at a time, in the order of **Resume**'s table and **Finish**'s modes. It refuses a skipped step, and a step whose record is missing: `review-posted` needs the round's review, `rechecked` the round's gate at `head_sha` (from the re-check, or from the review of a zero-finding round), `body-rewritten` a passing gate there, `verdict-posted` the App's APPROVE there. Advancing to the phase the run is already at does nothing, so a resumed step can repeat it. `run-state set` changes only `round`, `head_sha` and `explainer`: `reviewer_login` is fixed at `create`.
 
@@ -48,7 +48,7 @@ Every subcommand uses the same exit codes:
 
 Run `review.ts config`. Exit 3 (no `docs/agents/review.md`) or exit 4 (invalid file): tell the user to run `/setup-forge`, show the message, and stop. Do not guess a config.
 
-Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with `model`, `effort`, and `agent_model`, the sub-agent model family), `max_rounds`, `app`.
+Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with `model`, `effort`, and `agent_model`, the sub-agent model family), `max_rounds`, `app`, `paused` and `app_daily_runs` (the last two are for `route`).
 
 - `runtime: codex`: run `codex --version` now. If it fails, stop before **Resume** as **Codex runtime** says for a missing or broken Codex. Then see **Codex runtime**.
 - `app: true`: run the check in **App identity** now, before **Resume**.
