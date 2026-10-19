@@ -22,7 +22,7 @@ Run `review.ts config` before anything else.
 With `--afk`, also check the Implementer App before you build: `review.ts app-token --repo <owner/repo> --app implementer --check`, with `<owner/repo>` from `gh repo view --json nameWithOwner --jq .nameWithOwner`.
 
 - Exit 0: continue.
-- Exit 3 (the config has no `app: enabled`) or exit 4 (the App's credentials are broken, or the App is not installed on the repo): show the message and stop. Build nothing, and never fall back to the user.
+- Exit 3 (the config has no `implementer.app: enabled`, the Implementer App's own switch in the `implementer:` block) or exit 4 (the App's credentials are broken, or the App is not installed on the repo): show the message and stop. Build nothing, and never fall back to the user.
 
 ## 2. Fetch the ticket
 

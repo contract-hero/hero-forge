@@ -25,7 +25,9 @@
 // that stalled that long may finish its check and write after another
 // caller broke its guard and took a new one.
 //
-// The per-PR lock that `route` takes is `<state root>/locks/pr-<N>.lock`. It
+// The locks that `route` take are `<state root>/locks/pr-<N>.lock` (a review,
+// a re-check, an Adjudication, a resume on a PR) and
+// `<state root>/locks/issue-<N>.lock` (a build, a resume on an issue). Each
 // holds for LOCK_TTL_HOURS unless the run releases it with its token.
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -196,4 +198,18 @@ export function takePrLock(pr: number, holder: Record<string, unknown>): Promise
 
 export function releasePrLock(pr: number, token: string): Promise<boolean> {
   return releaseLock(prLockFile(pr), token)
+}
+
+export function issueLockFile(issue: number): string {
+  return join(stateRoot(), 'locks', `issue-${issue}.lock`)
+}
+
+// Take the per-issue lock for one build or resume of an issue that is not a
+// PR. Returns its token, or null when a run younger than the TTL holds it.
+export function takeIssueLock(issue: number, holder: Record<string, unknown>): Promise<string | null> {
+  return takeLock(issueLockFile(issue), LOCK_TTL_HOURS * HOUR, { issue, ...holder })
+}
+
+export function releaseIssueLock(issue: number, token: string): Promise<boolean> {
+  return releaseLock(issueLockFile(issue), token)
 }

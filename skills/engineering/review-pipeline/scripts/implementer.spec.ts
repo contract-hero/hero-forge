@@ -7,8 +7,10 @@ import { test } from 'node:test'
 import { fakeGh, fakeGit, IMPLEMENTER_TOKEN, implementerApp, run, runCli, tempDir, type FakeApiRequest, type FakeGhResponse, type FakeGitSpec } from './test-helpers.ts'
 
 const REPO = 'contract-hero/hero-forge'
-const WITH_APP = '```yaml\nruntime: claude\napp: enabled\n```\n'
+// The Implementer App's switch is implementer.app; app: enabled is the reviewer App's.
+const WITH_APP = '```yaml\nruntime: claude\nimplementer:\n  app: enabled\n```\n'
 const NO_APP = '```yaml\nruntime: claude\n```\n'
+const REVIEWER_ONLY = '```yaml\nruntime: claude\napp: enabled\nimplementer:\n  app: disabled\n```\n'
 
 type Setup = { config?: string; missing?: boolean; responses?: FakeGhResponse[]; onRequest?: (request: FakeApiRequest) => Promise<void> }
 
@@ -56,16 +58,21 @@ const POSTS: [string, (body: string) => string[]][] = [
 ]
 
 for (const [verb, args] of POSTS) {
-  test(`${verb} without "app: enabled" exits 3, mints nothing and posts nothing`, async (t) => {
-    const s = await setup(t, { config: NO_APP })
-    const body = await s.file('body.md', 'hello')
-    const result = await s.cli(...args(body))
-    assert.equal(result.code, 3)
-    assert.equal(result.stdout, '')
-    assert.match(result.stderr, /^review\.ts implementer: no implementer App configured for this repo \(no "app: enabled" in the config\): push and post as the user\n$/)
-    assert.deepEqual(await s.gh.calls(), [])
-    assert.deepEqual(s.api.requests, [])
-  })
+  for (const [name, config] of [['no App in the config', NO_APP], ['only the reviewer App enabled', REVIEWER_ONLY]] as const) {
+    test(`${verb} with ${name} exits 3, mints nothing and posts nothing`, async (t) => {
+      const s = await setup(t, { config })
+      const body = await s.file('body.md', 'hello')
+      const result = await s.cli(...args(body))
+      assert.equal(result.code, 3)
+      assert.equal(result.stdout, '')
+      assert.equal(
+        result.stderr,
+        'review.ts implementer: no implementer App configured for this repo (no "implementer.app: enabled" in the config): push and post as the user\n',
+      )
+      assert.deepEqual(await s.gh.calls(), [])
+      assert.deepEqual(s.api.requests, [])
+    })
+  }
 
   test(`${verb} with a broken Implementer App exits 4 and posts nothing, as the App or as the user`, async (t) => {
     const s = await setup(t, { missing: true })
@@ -257,7 +264,8 @@ test('config written to the repo between the mint and the push has no effect: th
 })
 
 for (const [name, options, code, message] of [
-  ['without "app: enabled" it exits 3', { config: NO_APP }, 3, /no implementer App configured for this repo/],
+  ['without "implementer.app: enabled" it exits 3', { config: NO_APP }, 3, /no "implementer\.app: enabled" in the config/],
+  ['with only the reviewer App enabled it exits 3', { config: REVIEWER_ONLY }, 3, /no "implementer\.app: enabled" in the config/],
   ['with a broken Implementer App it exits 4', { missing: true }, 4, /the implementer App is enabled but its env file .* does not exist/],
 ] as const) {
   test(`push ${name} and pushes nothing, as the App or as the user`, async (t) => {

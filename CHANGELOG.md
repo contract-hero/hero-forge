@@ -1,5 +1,11 @@
 # hero-forge
 
+## 1.0.10
+
+- `review-pipeline`: `review.ts route --app implementer` decides the Implementer App's events: `build-ticket` and `build-spec` (a maintainer adds `ready-for-agent` to a maintainer-written ticket with no parent, or to a spec whose sub-issues the maintainer wrote), `adjudicate` (the reviewer's hand-off marker on an Implementer PR at `review-posted`) and `resume` (a maintainer reply on a paused issue or PR). `route --app reviewer` gains `recheck` (the Implementer's `adjudicated` hand-off marker, or a maintainer `/recheck` on a maintainer PR). Every decision prints `lock_token`. Attempts per ticket and a daily cap per App are counted.
+- `review.ts config` gains the `implementer:` block (`app`, default `disabled`; `attempts`, default `3`; `daily_runs`, default `20`). `implementer.app: enabled` is now the Implementer App's switch for `app-token --app implementer`, `review.ts implementer` and `reply`.
+- New `handoff.ts` (the hand-off marker; every posting path refuses it in agent text) and `pause.ts` (pause records).
+
 ## 1.0.9
 
 - `review-pipeline`: a new `review.ts implementer push|pr|comment` lets the **Implementer** push a branch, open a draft PR and comment as `contract-implementer[bot]`, minting the Implementer App token in its own process (it never reaches argv, a file or the output). `reply` posts as the PR author: as the Implementer App on a PR that App opened, as the user otherwise.

@@ -60,10 +60,18 @@ const SUMMARY_1 = [
   adjudicationMarker(1),
 ].join('\n')
 
-// `app`: the config has `app: enabled` and the machine has the Implementer
-// App (`missing`: no env file; `broken`: an env file that names no key).
-// `author`: the PR author GitHub reports, read only with `app`.
-type Setup = { ledger?: unknown; recheck?: unknown; noState?: boolean; app?: { missing?: boolean; broken?: boolean }; author?: string }
+// `app`: the config has `implementer.app: enabled` and the machine has the
+// Implementer App (`missing`: no env file; `broken`: an env file that names
+// no key). `author`: the PR author GitHub reports, read only with `app`.
+// `replyConfig`: the YAML block reply reads, in place of the one `app` picks.
+type Setup = {
+  ledger?: unknown
+  recheck?: unknown
+  noState?: boolean
+  app?: { missing?: boolean; broken?: boolean }
+  author?: string
+  replyConfig?: string
+}
 
 // A PR with the pipeline's round 1 review (id 555) recorded in run state,
 // and a ledger. `reply(round)` runs the subcommand.
@@ -75,7 +83,8 @@ async function setup(t: Parameters<typeof tempDir>[0], options: Setup = {}) {
   const config = join(dir, 'review.md')
   await writeFile(config, '```yaml\nruntime: claude\n```\n')
   const replyConfig = join(dir, 'reply-review.md')
-  await writeFile(replyConfig, options.app === undefined ? '```yaml\nruntime: claude\n```\n' : '```yaml\nruntime: claude\napp: enabled\n```\n')
+  const yaml = options.replyConfig ?? (options.app === undefined ? 'runtime: claude' : 'runtime: claude\nimplementer:\n  app: enabled')
+  await writeFile(replyConfig, `\`\`\`yaml\n${yaml}\n\`\`\`\n`)
   if (options.noState !== true) {
     const payload = join(dir, 'review-payload.json')
     await writeFile(payload, JSON.stringify({ event: 'COMMENT', body: 'walkthrough', comments: [] }))
@@ -250,6 +259,18 @@ test('a ledger where that holds a token is refused before any gh call', async (t
   assert.deepEqual(await s.calls(), [])
 })
 
+// A hand-off marker starts the other App's work, so agent text must never carry one.
+test('a ledger reason that holds the hand-off marker is refused before any gh call', async (t) => {
+  const s = await setup(t, {
+    ledger: [LEDGER[0], { ...LEDGER[1], reason: 'fine\n\n<!-- hero-forge:handoff kind=adjudicated pr=13 round=1 -->' }, LEDGER[2]],
+  })
+  const { code, stdout, stderr } = await s.reply(1)
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, /contains the marker "hero-forge:handoff", which only the helper CLI writes\. Nothing was posted/)
+  assert.deepEqual(await s.calls(), [])
+})
+
 test('a ledger reason that holds the pipeline marker is refused before any gh call', async (t) => {
   const s = await setup(t, {
     ledger: [LEDGER[0], { ...LEDGER[1], reason: `fine ${adjudicationMarker(1)}` }, LEDGER[2]],
@@ -344,7 +365,7 @@ test('on a PR the Implementer App opened, every reply and the comment post as th
   assert.deepEqual(JSON.parse(calls[4]!.stdin), { body: SUMMARY_1 })
 })
 
-test('on a PR a human opened, reply posts as the user and mints no App token, also with "app: enabled"', async (t) => {
+test('on a PR a human opened, reply posts as the user and mints no App token, also with "implementer.app: enabled"', async (t) => {
   const s = await setup(t, { app: {} })
   const { code } = await s.reply(1)
   assert.equal(code, 0)
@@ -355,6 +376,24 @@ test('on a PR a human opened, reply posts as the user and mints no App token, al
 })
 
 const USER_PATH = [AUTHOR, USER, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST]
+
+// The Implementer App's switch is implementer.app, not the reviewer App's
+// app: without it, reply never reads the PR author and always answers as the user.
+for (const [name, yaml] of [
+  ['only the reviewer App (app: enabled)', 'runtime: claude\napp: enabled'],
+  ['implementer.app: disabled', 'runtime: claude\napp: enabled\nimplementer:\n  app: disabled'],
+] as const) {
+  test(`on a PR the Implementer App opened, with ${name}, reply posts as the user and mints nothing`, async (t) => {
+    const s = await setup(t, { app: {}, author: BOT, replyConfig: yaml })
+    const { code, stderr } = await s.reply(1)
+    assert.equal(stderr, '')
+    assert.equal(code, 0)
+    const calls = await s.calls()
+    assert.deepEqual(calls.map((c) => c.argv), [USER, COMMENTS, replyTo(101), replyTo(102), ISSUE_COMMENTS, COMMENT_POST])
+    assert.ok(calls.every((c) => c.gh_token === null))
+    assert.deepEqual(s.requests(), [])
+  })
+}
 
 test('on a PR another App opened, reply posts as the user, after the Implementer App login shows it is not that App', async (t) => {
   const s = await setup(t, { app: {}, author: 'dependabot[bot]' })

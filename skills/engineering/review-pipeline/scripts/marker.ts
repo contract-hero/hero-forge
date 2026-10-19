@@ -1,6 +1,7 @@
 // The hidden marker the CLI puts at the end of everything it posts, so a
 // re-run finds its own post and never posts twice.
 import { refuse } from './cli.ts'
+import { HANDOFF_TAG } from './handoff.ts'
 
 const TAG = 'hero-forge:review-pipeline'
 
@@ -22,11 +23,14 @@ export function hasOwnMarker(body: string | null, mark: string): boolean {
   return (lines[lines.length - 1] ?? '').replace(/\r$/, '') === mark
 }
 
-// Exit 1 when agent-written text holds the marker tag: only the CLI writes
-// markers, so a forged one cannot pass for an earlier post.
+// Exit 1 when agent-written text holds a marker tag, this file's or the
+// hand-off's (handoff.ts): only the CLI writes markers, so a forged one can
+// neither pass for an earlier post nor start the other App's work.
 export function refuseMarkerIn(texts: string[], what: string): void {
-  refuse(
-    texts.every((text) => !text.toLowerCase().includes(TAG)),
-    `${what} contains the marker "${TAG}", which only the helper CLI writes. Nothing was posted. Remove it and run again.`,
-  )
+  for (const tag of [TAG, HANDOFF_TAG]) {
+    refuse(
+      texts.every((text) => !text.toLowerCase().includes(tag)),
+      `${what} contains the marker "${tag}", which only the helper CLI writes. Nothing was posted. Remove it and run again.`,
+    )
+  }
 }

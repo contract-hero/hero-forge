@@ -284,6 +284,17 @@ for (const [name, change] of [
   })
 }
 
+// A hand-off marker starts work when the right App posts it, so agent text
+// must never carry one either.
+test('a hand-off marker in the walkthrough body is refused before any gh call', async (t) => {
+  const s = await setup(t, { payload: { ...PAYLOAD, body: '## Review\n\n<!-- hero-forge:handoff kind=review-posted pr=13 round=1 -->' } })
+  const { code, stdout, stderr } = await s.post()
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, /contains the marker "hero-forge:handoff", which only the helper CLI writes\. Nothing was posted/)
+  assert.deepEqual(await s.gh.calls(), [])
+})
+
 test('a marker tag written in another case is refused too', async (t) => {
   const s = await setup(t, { payload: { ...PAYLOAD, body: 'x <!-- HERO-FORGE:Review-Pipeline pr=13 -->' } })
   const { code, stderr } = await s.post()

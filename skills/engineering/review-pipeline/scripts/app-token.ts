@@ -8,9 +8,10 @@
 // approve its own PR. post-review mints its own token in-process
 // (mintAppToken) for each post.
 //
-// Exit 3: the config has no `app: enabled`, so the caller posts as the user.
-// Both Apps answer to that key for now, with the same exit and message; the
-// implementer gets its own switch with the `implementer:` config block.
+// Exit 3: the App is not switched on in the config, so the caller posts as
+// the user. Each App has its own switch: `app: enabled` for the reviewer,
+// `implementer.app: enabled` (in the `implementer:` block) for the
+// implementer.
 // Exit 4: the App is enabled but something is wrong (credentials, key, an
 // HTTP error, the App not installed on the repo), so the caller stops. A
 // broken App never falls back to the user: that would quietly turn the
@@ -214,8 +215,10 @@ async function appToken(argv: string[]): Promise<string> {
   // The pipeline never gets here without a valid config, so any problem is broken (4).
   const loaded = await loadConfig(values.config)
   if (!loaded.ok) throw new Failure(loaded.message, 4)
-  if (!loaded.config.app) {
-    throw new Failure(`no ${app} App configured for this repo (no "app: enabled" in the config): post as the user`, 3)
+  const on = app === 'implementer' ? loaded.config.implementer.app : loaded.config.app
+  if (!on) {
+    const key = app === 'implementer' ? 'implementer.app: enabled' : 'app: enabled'
+    throw new Failure(`no ${app} App configured for this repo (no "${key}" in the config): post as the user`, 3)
   }
 
   const minted = await mintAppToken(repo, app)
