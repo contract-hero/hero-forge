@@ -50,7 +50,7 @@ function responses(github: GitHub): FakeGhResponse[] {
     Object.entries(of ?? {}).map(([n, items]) => ({ match: `repos/${REPO}/issues/${n}/${path}`, stdout: lines(items) }))
   const relations = Object.entries(github.subs ?? {}).map(([n, subs]) => ({
     match: `repos/${REPO}/issues/${n} `,
-    stdout: `${JSON.stringify({ parent_issue_url: null, sub_issues_summary: { total: subs.length, completed: 0, percent_completed: 0 } })}\n`,
+    stdout: `${JSON.stringify({ parent_issue_url: null, sub_issues_summary: { total: subs.length, completed: 0, percent_completed: 0 }, labels: ['ready-for-agent'] })}\n`,
   }))
   return [
     review === null
@@ -66,8 +66,8 @@ function responses(github: GitHub): FakeGhResponse[] {
     ...perIssue('sub_issues', github.subs),
     { match: '/sub_issues', stdout: '' },
     ...relations,
-    // An issue with no sub-issues and no parent: a ticket.
-    { match: `repos/${REPO}/issues/`, stdout: `${JSON.stringify({ parent_issue_url: null, sub_issues_summary: { total: 0, completed: 0, percent_completed: 0 } })}\n` },
+    // An issue with no sub-issues and no parent, labelled ready-for-agent: a ticket.
+    { match: `repos/${REPO}/issues/`, stdout: `${JSON.stringify({ parent_issue_url: null, sub_issues_summary: { total: 0, completed: 0, percent_completed: 0 }, labels: ['ready-for-agent'] })}\n` },
   ]
 }
 

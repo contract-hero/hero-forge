@@ -39,18 +39,40 @@
 // --app reviewer, any other event                   ignore, event:<name>
 //
 // --app implementer, an issues event:
-//   3. not labeled                                  ignore, action:<name>
+//   3. not labeled or unlabeled                     ignore, action:<name>
 //   4. no docs/agents/review.md                     ignore, no-config
 //   5. no implementer.app: enabled                  ignore, disabled
-//   6. a label other than ready-for-agent           ignore, label:<name>
+//   6. labeled: a label other than ready-for-agent, or unlabeled: a label
+//      other than needs-triage                      ignore, label:<name>
+//      (the triage hand-off moves needs-triage to ready-for-agent, and GitHub
+//      sends its two deliveries in the same second; either one alone starts
+//      the build, so a router that fails on one loses nothing. Removing
+//      another label, such as needs-info, from a ready ticket starts nothing)
 //   7. the issue is a PR                            ignore, pull-request
 //   8. the sender is not the maintainer             ignore, sender
-//   9. the issue has a parent issue                 ignore, has-parent
-//  10. the issue's author, or (for a spec) the author of any of its
+//   9. a pause record of this repo for the issue (only resume goes on)
+//                                                   ignore, paused-run
+//  10. ready-for-agent is not on the issue now, as GitHub says (not as the
+//      payload said)                                ignore, not-ready
+//  11. the issue has a parent issue                 ignore, has-parent
+//  12. the issue's author, or (for a spec) the author of any of its
 //      sub-issues, is not the maintainer: the build agent reads that text
 //                                                   ignore, author (issue: the one at fault)
-//  11. build-spec when it has sub-issues, else build-ticket, once the issue
-//      lock is held and one of implementer.attempts is reserved (below)
+//  13. an open PR by the maintainer or contract-implementer[bot] closes the
+//      ticket, or (for a spec) one of its sub-issues ignore, has-pr
+//  14. a build already started from the event that last added
+//      ready-for-agent to the issue                 ignore, duplicate
+//      (both deliveries of a hand-off, and a redelivery of either, come from
+//      that one event, so the second one starts nothing, also after a build
+//      that ended with no PR and no pause. A retry adds the label again,
+//      which is a new event. A reconcile sweep keys a missed label by its
+//      own delivery id, so it can still start one more build)
+//  15. build-spec when it has sub-issues, else build-ticket, once the issue
+//      lock is held and one of implementer.attempts is reserved (below).
+//      The second delivery of a hand-off then finds the build's record (14)
+//      or the lock held. A build releases the issue lock when it opens its
+//      PR or pauses, so a later second delivery also finds the PR (13) or
+//      the pause record (9).
 // --app implementer, an issue_comment event:
 //   3. not created                                  ignore, action:<name>
 //   4, 5 as above
@@ -95,9 +117,11 @@ const usage = usageFor('route')
 export const IMPLEMENTER_BOT = 'contract-implementer[bot]'
 export const REVIEWER_BOT = 'contract-reviewer[bot]'
 
-// The label that asks the Implementer to build, and the one a paused run carries.
+// The label that asks the Implementer to build, the one a paused run carries,
+// and the one the triage hand-off to ready-for-agent removes.
 export const BUILD_LABEL = 'ready-for-agent'
 export const PAUSED_LABEL = 'needs-info'
+export const TRIAGE_LABEL = 'needs-triage'
 
 // GitHub logins are case-insensitive.
 export const sameLogin = (a: string | undefined, b: string) => a !== undefined && a.toLowerCase() === b.toLowerCase()
@@ -127,11 +151,13 @@ export type Decision = {
 
 // What a rule found: an ignore with its reason, or work to start. Work names
 // the lock it takes and, for a build, the ticket whose attempt it reserves
-// under the cap `limit`.
+// under the cap `limit`. `key` names the record that makes a repeat a
+// duplicate, in place of the delivery id.
 type Start = {
   action: Exclude<Action, 'ignore'>
   lock: { kind: 'pr' | 'issue'; number: number }
   attempt?: { issue: number; limit: number }
+  key?: string
 }
 // An ignore may name another issue than the delivery's: the one at fault.
 type Outcome = { ignore: string; issue?: number } | Start
@@ -187,17 +213,21 @@ async function remoteConfig(repo: string, branch: string | undefined): Promise<R
   return loaded.config
 }
 
-// Whether issue `issue` has a parent issue, and how many sub-issues it has,
-// as GitHub says now (not as the payload said when the label landed).
-async function relations(repo: string, issue: number): Promise<{ parent: boolean; subIssues: number }> {
-  const got = await gh(['api', `repos/${repo}/issues/${issue}`, '--jq', '{parent_issue_url, sub_issues_summary}'])
+// Whether issue `issue` has a parent issue, how many sub-issues it has, and
+// its labels, as GitHub says now (not as the payload said when the label
+// landed or left).
+async function relations(repo: string, issue: number): Promise<{ parent: boolean; subIssues: number; labels: string[] }> {
+  const got = await gh(['api', `repos/${repo}/issues/${issue}`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'])
   if (got.code !== 0) throw new Failure(`cannot read issue #${issue} of ${repo}: ${oneLine(got.stderr)}`, 1)
-  const found = json<{ parent_issue_url?: unknown; sub_issues_summary?: { total?: unknown } | null }>(got.stdout, `issue #${issue}`)
+  const found = json<{ parent_issue_url?: unknown; sub_issues_summary?: { total?: unknown } | null; labels?: unknown }>(got.stdout, `issue #${issue}`)
   const total = found.sub_issues_summary?.total
   if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) {
     throw new Failure(`GitHub sent no sub-issue count for issue #${issue} of ${repo}`, 1)
   }
-  return { parent: typeof found.parent_issue_url === 'string', subIssues: total }
+  if (!Array.isArray(found.labels) || !found.labels.every((l) => typeof l === 'string')) {
+    throw new Failure(`GitHub sent no labels for issue #${issue} of ${repo}`, 1)
+  }
+  return { parent: typeof found.parent_issue_url === 'string', subIssues: total, labels: found.labels }
 }
 
 // The sub-issues of `issue`, each with its author, every page.
@@ -206,6 +236,73 @@ export function subIssues(repo: string, issue: number): Promise<{ number: number
     ['api', '--paginate', '--jq', '.[] | {number, author: .user.login}', `repos/${repo}/issues/${issue}/sub_issues?per_page=100`],
     `the sub-issues of #${issue}`,
   )
+}
+
+// The issues of `repo` that an open PR by the maintainer or by
+// contract-implementer[bot] closes (GitHub's closing references: "Closes #N"
+// in the body, or a link made by hand), every page. Anyone can open a PR that
+// says "Closes #N", so a PR by anyone else hides no ticket: the same trust
+// set as route's author rule. GraphQL gives a bot's login without [bot].
+export async function closedByOpenPrs(repo: string, maintainer: string): Promise<Set<number>> {
+  const [owner = '', name = ''] = repo.split('/')
+  const query = `query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 100, after: $endCursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        author { __typename login }
+        closingIssuesReferences(first: 100) { nodes { number repository { nameWithOwner } } }
+      }
+    }
+  }
+}`
+  const closers = await listLines<{ number: number; author: string | null; bot: boolean; closes: { number: number; repo: string }[] }>(
+    [
+      'api',
+      'graphql',
+      '--paginate',
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `name=${name}`,
+      '--jq',
+      '.data.repository.pullRequests.nodes[] | {number, author: .author.login, bot: (.author.__typename == "Bot"), closes: [.closingIssuesReferences.nodes[] | {number, repo: .repository.nameWithOwner}]}',
+    ],
+    'the issues that open PRs close',
+  )
+  const trusted = (pr: { author: string | null; bot: boolean }) => {
+    const login = pr.author === null ? undefined : pr.bot ? `${pr.author}[bot]` : pr.author
+    return sameLogin(login, maintainer) || sameLogin(login, IMPLEMENTER_BOT)
+  }
+  const same = (other: string) => other.toLowerCase() === repo.toLowerCase()
+  return new Set(closers.filter(trusted).flatMap((pr) => pr.closes.filter((c) => same(c.repo)).map((c) => c.number)))
+}
+
+// The latest event that added ready-for-agent to `issue`, with its actor, or
+// null when GitHub lists none, every page.
+export async function buildLabelEvent(repo: string, issue: number): Promise<{ id: number; actor: string | null } | null> {
+  const events = await listLines<{ id: number; label: string | null; actor: string | null }>(
+    [
+      'api',
+      '--paginate',
+      '--jq',
+      '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}',
+      `repos/${repo}/issues/${issue}/events?per_page=100`,
+    ],
+    `the events of #${issue}`,
+  )
+  const labeled = events.filter((e) => e.label === BUILD_LABEL).at(-1)
+  return labeled === undefined ? null : { id: labeled.id, actor: labeled.actor }
+}
+
+// Whether an open PR closes ticket `issue`, or one of its sub-issues.
+export async function hasPr(repo: string, issue: number, closed: Set<number>): Promise<boolean> {
+  if (closed.has(issue)) return true
+  if (closed.size === 0) return false
+  return (await subIssues(repo, issue)).some((sub) => closed.has(sub.number))
 }
 
 // The deliveries that started work, per App: one record each, under
@@ -306,6 +403,8 @@ type Event = {
   issue: number | null
   sender: string | undefined
   maintainer: () => Promise<string>
+  closed: (repo: string) => Promise<Set<number>>
+  labelEvent?: (repo: string, issue: number) => Promise<number | null>
 }
 
 function reviewerRule(e: Event): Promise<Outcome> | Outcome {
@@ -355,7 +454,8 @@ const ADJUDICATE_ON: HandoffKind[] = ['review-posted', 'recheck-failed']
 
 async function implementerRule(e: Event): Promise<Outcome> {
   if (e.name !== 'issues' && e.name !== 'issue_comment') return why(`event:${e.name}`)
-  if (e.action !== (e.name === 'issues' ? 'labeled' : 'created')) return why(`action:${e.action}`)
+  const actions = e.name === 'issues' ? ['labeled', 'unlabeled'] : ['created']
+  if (!actions.includes(e.action)) return why(`action:${e.action}`)
   if (e.config === null) return why('no-config')
   if (!e.config.implementer.app) return why('disabled')
   return e.name === 'issues' ? buildRule(e, e.config) : commentRule(e)
@@ -363,12 +463,15 @@ async function implementerRule(e: Event): Promise<Outcome> {
 
 async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
   const label = text(e.payload.label?.name) ?? ''
-  if (label !== BUILD_LABEL) return why(`label:${label}`)
+  if (label !== (e.action === 'labeled' ? BUILD_LABEL : TRIAGE_LABEL)) return why(`label:${label}`)
   if (e.pr !== null) return why('pull-request')
   if (e.repo === null || e.issue === null) throw new Failure('the issues payload has no repository.full_name or issue.number', 1)
   if (!sameLogin(e.sender, await e.maintainer())) return why('sender')
   const maintainer = await e.maintainer()
-  const { parent, subIssues: count } = await relations(e.repo, e.issue)
+  // A build that paused goes on only through its answer (resume).
+  if ((await readPause({ kind: 'issue', number: e.issue }))?.repo === e.repo) return why('paused-run')
+  const { parent, subIssues: count, labels } = await relations(e.repo, e.issue)
+  if (!labels.includes(BUILD_LABEL)) return why('not-ready')
   if (parent) return why('has-parent')
   // The author of an issue never changes, so the payload's is GitHub's.
   if (!sameLogin(text(e.payload.issue?.user?.login), maintainer)) return why('author')
@@ -376,9 +479,16 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
     const stranger = (await subIssues(e.repo, e.issue)).find((sub) => !sameLogin(sub.author ?? undefined, maintainer))
     if (stranger !== undefined) return why('author', stranger.number)
   }
+  // A build that opened its PR has released the issue lock, so the lock does
+  // not stop a later delivery of the same hand-off: the open PR does.
+  if (await hasPr(e.repo, e.issue, await e.closed(e.repo))) return why('has-pr')
+  // The two deliveries of a hand-off come from one ready-for-agent event: the
+  // build is recorded under it, so the later one is a duplicate (rule 14).
+  const event = e.labelEvent === undefined ? null : await e.labelEvent(e.repo, e.issue)
   return {
     action: count > 0 ? 'build-spec' : 'build-ticket',
     lock: { kind: 'issue', number: e.issue },
+    ...(event === null ? {} : { key: `label-${e.issue}-${event}` }),
     attempt: { issue: e.issue, limit: config.implementer.attempts },
   }
 }
@@ -425,19 +535,36 @@ function releaseFor(lock: Start['lock'], token: string): Promise<boolean> {
   return lock.kind === 'pr' ? releasePrLock(lock.number, token) : releaseIssueLock(lock.number, token)
 }
 
-// What a decision reads besides the delivery: the review config of a repo
-// and the maintainer's login. `route` reads them for each delivery; a sweep
-// gives them once for all its items.
+// What a decision reads besides the delivery: the review config of a repo,
+// the maintainer's login, the issues of a repo that a trusted open PR
+// closes (closedByOpenPrs), and the id of the event that last added
+// ready-for-agent to an issue (buildLabelEvent). `route` reads them for each
+// delivery; a sweep gives them once for all its items, and gives no
+// labelEvent: it keys a missed label by its own delivery id.
 export type Context = {
   config: (repo: string, branch: string | undefined) => Promise<ResolvedConfig | null>
   maintainer: () => Promise<string>
+  closed: (repo: string) => Promise<Set<number>>
+  labelEvent?: (repo: string, issue: number) => Promise<number | null>
 }
 
-// The context of one delivery: the config on the default branch, and the
-// maintainer, looked up once and only when a rule needs it.
+// The context of one delivery: the config on the default branch, the
+// maintainer, the closed issues and the label event, each looked up once and
+// only when a rule needs it.
 export function liveContext(): Context {
   let maintainer: Promise<string> | undefined
-  return { config: remoteConfig, maintainer: () => (maintainer ??= userIdentity().then((u) => u.login)) }
+  const closed = new Map<string, Promise<Set<number>>>()
+  const login = () => (maintainer ??= userIdentity().then((u) => u.login))
+  return {
+    config: remoteConfig,
+    maintainer: login,
+    closed: (repo) => {
+      let found = closed.get(repo)
+      if (found === undefined) closed.set(repo, (found = login().then((m) => closedByOpenPrs(repo, m))))
+      return found
+    },
+    labelEvent: async (repo, issue) => (await buildLabelEvent(repo, issue))?.id ?? null,
+  }
 }
 
 // Decide one delivery for `app`, and for work take its lock, reserve the
@@ -525,11 +652,15 @@ async function decideBy(
     issue,
     sender: text(payload.sender?.login),
     maintainer: context.maintainer,
+    closed: context.closed,
+    labelEvent: context.labelEvent,
   }
   const outcome = await rule(event)
   if ('ignore' in outcome) return outcome.issue === undefined ? decided('ignore', outcome.ignore) : decidedOn(outcome.issue, outcome.ignore)
   // Every rule that starts work has checked the config is there.
   if (config === null || repo === null) throw new Failure('no config for a decision that starts work', 1)
+  const key = outcome.key ?? delivery
+  if (key !== delivery && (await doneDelivery(app, key))) return decided('ignore', 'duplicate')
 
   const token = await takeFor(outcome.lock, { app, delivery })
   if (token === null) return decided('ignore', 'locked')
@@ -551,18 +682,18 @@ async function decideBy(
       await releaseAttempt(repo, attempt.issue)
     }
     await releaseFor(outcome.lock, token)
-    await forgetDelivery(app, delivery)
+    await forgetDelivery(app, key)
     return decided('ignore', reason)
   }
   try {
-    await recordDelivery(app, delivery, 'pending', outcome.lock, token)
+    await recordDelivery(app, key, 'pending', outcome.lock, token)
     if (attempt !== undefined) {
       if (!(await reserveAttempt(repo, attempt.issue, attempt.limit))) return await stop('attempts')
       reserved = true
     }
     const counted = await countRun(app, limit)
     if (counted === null) return await stop('cap')
-    await recordDelivery(app, delivery, 'done', outcome.lock, token, {
+    await recordDelivery(app, key, 'done', outcome.lock, token, {
       repo,
       attempt: attempt === undefined ? null : attempt.issue,
       counted_at: counted,
@@ -572,7 +703,7 @@ async function decideBy(
     await releaseFor(outcome.lock, token)
     // The error that stopped the call is the one to report: when the record
     // itself failed, there may be nothing to forget, or no way to reach it.
-    await forgetDelivery(app, delivery).catch(() => {})
+    await forgetDelivery(app, key).catch(() => {})
     throw error
   }
   return decided(outcome.action, null, token)

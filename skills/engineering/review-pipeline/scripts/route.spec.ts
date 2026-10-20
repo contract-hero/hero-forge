@@ -20,16 +20,20 @@ const implementerMd = (...yaml: string[]) => reviewMd('implementer:', '  app: en
 
 // The repo's default branch: its review.md (null: the file is not there), and
 // what GitHub says of the labelled issue: whether it has a parent, how many
-// sub-issues it has, and who wrote each sub-issue (by default the maintainer,
-// numbered from 24).
+// sub-issues it has, who wrote each sub-issue (by default the maintainer,
+// numbered from 24), and its labels now (by default ready-for-agent); and the
+// id of the event that last added ready-for-agent (by default none, so each
+// label delivery on one fake is a hand-off of its own).
 type Sub = { number: number; author: string }
-type Remote = { review: string | null; issue?: { parent: boolean; subIssues: number; subs?: Sub[] } }
+type Remote = { review: string | null; issue?: { parent: boolean; subIssues: number; subs?: Sub[]; labels?: string[] }; labelEvent?: number }
 
 const TICKET = { parent: false, subIssues: 0 }
 const SPEC = { parent: false, subIssues: 9 }
 const CHILD = { parent: true, subIssues: 0 }
+// A ticket whose ready-for-agent label is gone again.
+const UNREADY = { parent: false, subIssues: 0, labels: ['enhancement'] }
 
-function responses({ review, issue = TICKET }: Remote): FakeGhResponse[] {
+function responses({ review, issue = TICKET, labelEvent }: Remote): FakeGhResponse[] {
   return [
     review === null
       ? { match: 'contents/docs/agents/review.md', stdout: '{"message":"Not Found","status":"404"}', stderr: 'gh: Not Found (HTTP 404)\n', exit: 1 }
@@ -41,11 +45,17 @@ function responses({ review, issue = TICKET }: Remote): FakeGhResponse[] {
         .map((sub) => `${JSON.stringify(sub)}\n`)
         .join(''),
     },
+    // Before the issue itself, which its match would also take.
+    {
+      match: '/events',
+      stdout: labelEvent === undefined ? '' : `${JSON.stringify({ id: labelEvent, label: 'ready-for-agent', actor: MAINTAINER })}\n`,
+    },
     {
       match: `repos/${REPO}/issues/`,
       stdout: `${JSON.stringify({
         parent_issue_url: issue.parent ? `https://api.github.com/repos/${REPO}/issues/23` : null,
         sub_issues_summary: { total: issue.subIssues, completed: 0, percent_completed: 0 },
+        labels: issue.labels ?? ['enhancement', 'ready-for-agent'],
       })}\n`,
     },
   ]
@@ -483,6 +493,13 @@ const flows: [string, App, string, Remote, ((r: Router) => Promise<void>) | null
   ['the maintainer labels a ticket that has a parent', 'implementer', 'issues.labeled.json', { review: implementerMd(), issue: CHILD }, null, onIssue('ignore', 'has-parent')],
   ['someone else adds ready-for-agent', 'implementer', 'issues.labeled.stranger.json', { review: implementerMd() }, null, onIssue('ignore', 'sender')],
   ['the maintainer adds another label', 'implementer', 'issues.labeled.other-label.json', { review: implementerMd() }, null, onIssue('ignore', 'label:needs-triage')],
+  ['ready-for-agent is gone when the label delivery comes', 'implementer', 'issues.labeled.json', { review: implementerMd(), issue: UNREADY }, null, onIssue('ignore', 'not-ready')],
+  // The triage hand-off moves needs-triage to ready-for-agent: two deliveries
+  // in one second, and either one alone starts the build.
+  ['the maintainer removes needs-triage from a ready ticket', 'implementer', 'issues.unlabeled.json', { review: implementerMd() }, null, onIssue('build-ticket')],
+  ['the maintainer removes needs-triage from a ready spec', 'implementer', 'issues.unlabeled.json', { review: implementerMd(), issue: SPEC }, null, onIssue('build-spec')],
+  ['the maintainer removes needs-triage from a ticket that is not ready', 'implementer', 'issues.unlabeled.json', { review: implementerMd(), issue: UNREADY }, null, onIssue('ignore', 'not-ready')],
+  ['the maintainer removes another label from a ready ticket', 'implementer', 'issues.unlabeled.other-label.json', { review: implementerMd() }, null, onIssue('ignore', 'label:needs-info')],
   ['ready-for-agent on a pull request', 'implementer', 'issues.labeled.pull-request.json', { review: implementerMd() }, null, onPr('ignore', 'pull-request')],
   ['an issue opened', 'implementer', 'issues.opened.json', { review: implementerMd() }, null, onIssue('ignore', 'action:opened')],
   ['a label in a repo with no docs/agents/review.md', 'implementer', 'issues.labeled.json', { review: null }, null, onIssue('ignore', 'no-config')],
@@ -767,6 +784,68 @@ test('route --app implementer: a second label while a build holds the ticket loc
   assert.equal(lock.delivery, D1)
 })
 
+test('route --app implementer: the two deliveries of a triage hand-off start one build, in either order', async (t) => {
+  for (const [first, second] of [
+    ['issues.unlabeled.json', 'issues.labeled.json'],
+    ['issues.labeled.json', 'issues.unlabeled.json'],
+  ] as const) {
+    const r = await router(t, { review: implementerMd(), labelEvent: 9101 })
+    assert.deepEqual(await decision(r.route(first, D1, 'implementer')), onIssue('build-ticket'))
+    assert.deepEqual(await decision(r.route(second, D2, 'implementer')), onIssue('ignore', 'duplicate'))
+  }
+})
+
+// An open PR #50 by contract-implementer[bot] that closes #28, as the GraphQL list of open PRs gives it.
+const IMPLEMENTER_PR: FakeGhResponse = {
+  match: 'graphql',
+  stdout: `${JSON.stringify({ number: 50, author: 'contract-implementer', bot: true, closes: [{ number: 28, repo: REPO }] })}\n`,
+}
+
+test('route --app implementer: a hand-off delivery after its build released the lock is ignore (has-pr, paused-run), in either order', async (t) => {
+  for (const [first, second] of [
+    ['issues.unlabeled.json', 'issues.labeled.json'],
+    ['issues.labeled.json', 'issues.unlabeled.json'],
+  ] as const) {
+    // The build opened its draft PR and released the issue lock.
+    const r = await router(t, { review: implementerMd() })
+    assert.deepEqual(await decision(r.route(first, D1, 'implementer')), onIssue('build-ticket'))
+    await endRun(r, 'issue-28.lock')
+    await r.gh.respond([IMPLEMENTER_PR, ...responses({ review: implementerMd() })])
+    assert.deepEqual(await decision(r.route(second, D2, 'implementer')), onIssue('ignore', 'has-pr'))
+    // The build paused at a one-way door and released the issue lock.
+    const p = await router(t, { review: implementerMd() })
+    assert.deepEqual(await decision(p.route(first, D1, 'implementer')), onIssue('build-ticket'))
+    await endRun(p, 'issue-28.lock')
+    await seedPause(p, 'issue', 28)
+    assert.deepEqual(await decision(p.route(second, D2, 'implementer')), onIssue('ignore', 'paused-run'))
+    assert.deepEqual(JSON.parse(await readFile(join(p.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 1 })
+  }
+})
+
+test('route --app implementer: after a build that ended with no PR and no pause, a late hand-off delivery starts nothing and a new label starts one more', async (t) => {
+  for (const [first, second] of [
+    ['issues.unlabeled.json', 'issues.labeled.json'],
+    ['issues.labeled.json', 'issues.unlabeled.json'],
+  ] as const) {
+    const r = await router(t, { review: implementerMd(), labelEvent: 9101 })
+    assert.deepEqual(await decision(r.route(first, D1, 'implementer')), onIssue('build-ticket'))
+    await endRun(r, 'issue-28.lock')
+    // The other delivery of the same hand-off, late, and a redelivery of the first.
+    assert.deepEqual(await decision(r.route(second, D2, 'implementer')), onIssue('ignore', 'duplicate'))
+    assert.deepEqual(await decision(r.route(first, D1, 'implementer')), onIssue('ignore', 'duplicate'))
+    // The maintainer adds ready-for-agent again: a new event, a retry.
+    await r.gh.respond(responses({ review: implementerMd(), labelEvent: 9102 }))
+    assert.deepEqual(await decision(r.route('issues.labeled.json', D3, 'implementer')), onIssue('build-ticket'))
+    assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 2 })
+  }
+})
+
+test('route --app implementer: an open PR by someone else that closes the ticket does not stop the build', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await r.gh.respond([{ ...IMPLEMENTER_PR, stdout: IMPLEMENTER_PR.stdout?.replace('"contract-implementer","bot":true', '"stranger","bot":false') }, ...responses({ review: implementerMd() })])
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+})
+
 test('route --app implementer: two labels at once on one ticket give one build and one attempt', async (t) => {
   const r = await router(t, { review: implementerMd() })
   const both = await Promise.all([r.route('issues.labeled.json', D1, 'implementer'), r.route('issues.labeled.json', D2, 'implementer')].map(decision))
@@ -814,12 +893,15 @@ test('route --app implementer: a stranger label costs no lookup, and the issue i
   await decision(r.route('issues.labeled.stranger.json', D2, 'implementer'))
   assert.deepEqual((await r.gh.calls()).slice(1).map((c) => c.argv[1]), ['-H', 'user'])
   await decision(r.route('issues.labeled.json', D3, 'implementer'))
+  // A build reads the open PRs, for has-pr, and then the label events.
   assert.deepEqual(
-    (await r.gh.calls()).slice(3).map((c) => c.argv),
+    (await r.gh.calls()).slice(3).map((c) => (c.argv[1] === 'graphql' ? c.argv.slice(0, 2) : c.argv)),
     [
       ['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${REPO}/contents/docs/agents/review.md?ref=main`],
       ['api', 'user', '--jq', '.login'],
-      ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary}'],
+      ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'],
+      ['api', 'graphql'],
+      ['api', '--paginate', '--jq', '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}', `repos/${REPO}/issues/28/events?per_page=100`],
     ],
   )
 })
@@ -1093,6 +1175,14 @@ test('route undo: after a failed launch the same delivery is decided again, and 
   // attempts: 1 and daily_runs: 1, and the same delivery id: a build again, not duplicate, attempts or cap.
   assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
   assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 1 })
+})
+
+test('route undo: a hand-off build is decided again after its undo, from either delivery', async (t) => {
+  const r = await router(t, { review: implementerMd(), labelEvent: 9101 })
+  const first = await r.route('issues.labeled.json', D1, 'implementer')
+  assert.deepEqual(decided(first.stdout), onIssue('build-ticket'))
+  assert.equal(JSON.parse((await undo(r, 'implementer', tokenOf(first.stdout))).stdout).undone, true)
+  assert.deepEqual(await decision(r.route('issues.unlabeled.json', D2, 'implementer')), onIssue('build-ticket'))
 })
 
 test('route undo: a review is decided again after its undo, and a second undo changes nothing', async (t) => {

@@ -1,0 +1,104 @@
+{
+  "action": "unlabeled",
+  "issue": {
+    "url": "https://api.github.com/repos/contract-hero/hero-forge/issues/28",
+    "repository_url": "https://api.github.com/repos/contract-hero/hero-forge",
+    "labels_url": "https://api.github.com/repos/contract-hero/hero-forge/issues/28/labels{/name}",
+    "comments_url": "https://api.github.com/repos/contract-hero/hero-forge/issues/28/comments",
+    "events_url": "https://api.github.com/repos/contract-hero/hero-forge/issues/28/events",
+    "html_url": "https://github.com/contract-hero/hero-forge/issues/28",
+    "id": 3400000028,
+    "node_id": "I_kwDOPjQ1U870028",
+    "number": 28,
+    "title": "route decides Implementer events",
+    "user": {
+      "login": "alilloig",
+      "id": 12345678,
+      "node_id": "U_kgDOAbCdEf",
+      "type": "User",
+      "site_admin": false
+    },
+    "labels": [
+      {
+        "id": 9100000004,
+        "node_id": "LA_kwDOPjQ1U88AAAACHw4",
+        "url": "https://api.github.com/repos/contract-hero/hero-forge/labels/enhancement",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "assignees": [],
+    "milestone": null,
+    "comments": 1,
+    "created_at": "2026-10-19T08:00:00Z",
+    "updated_at": "2026-10-19T09:30:00Z",
+    "closed_at": null,
+    "author_association": "MEMBER",
+    "active_lock_reason": null,
+    "body": "## Parent\n\n#23\n\n## What to build\n\n`review.ts route --app implementer` decides the Implementer App's events.",
+    "sub_issues_summary": {
+      "total": 0,
+      "completed": 0,
+      "percent_completed": 0
+    },
+    "parent_issue_url": "https://api.github.com/repos/contract-hero/hero-forge/issues/23",
+    "reactions": {
+      "url": "https://api.github.com/repos/contract-hero/hero-forge/issues/28/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "timeline_url": "https://api.github.com/repos/contract-hero/hero-forge/issues/28/timeline",
+    "performed_via_github_app": null,
+    "state_reason": null
+  },
+  "label": {
+    "id": 9100000002,
+    "node_id": "LA_kwDOPjQ1U88AAAACHw2",
+    "url": "https://api.github.com/repos/contract-hero/hero-forge/labels/needs-triage",
+    "name": "needs-triage",
+    "color": "fbca04",
+    "default": false,
+    "description": "Maintainer needs to evaluate this issue"
+  },
+  "repository": {
+    "id": 1043552211,
+    "node_id": "R_kgDOPjQ1Uw",
+    "name": "hero-forge",
+    "full_name": "contract-hero/hero-forge",
+    "private": false,
+    "owner": {
+      "login": "contract-hero",
+      "id": 187654321,
+      "type": "Organization"
+    },
+    "html_url": "https://github.com/contract-hero/hero-forge",
+    "default_branch": "main"
+  },
+  "organization": {
+    "login": "contract-hero",
+    "id": 187654321
+  },
+  "sender": {
+    "login": "alilloig",
+    "id": 12345678,
+    "node_id": "U_kgDOAbCdEf",
+    "type": "User",
+    "site_admin": false
+  },
+  "installation": {
+    "id": 71234567,
+    "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNzEyMzQ1Njc="
+  }
+}

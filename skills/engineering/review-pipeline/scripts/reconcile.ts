@@ -4,8 +4,9 @@
 // for each item the event and payload that `route` would have received, and
 // decides it with route's own `decide`, so caps, paused, locks, sender and
 // author rules give the same answers. It holds two rules of its own: a ticket
-// or spec that a trusted open PR closes is ignore, has-pr; and a hand-off
-// that no event can carry, because it was never posted (the last kind). The
+// or spec that a trusted open PR closes is ignore, has-pr, before route's App
+// rules (route's build rule asks the same last); and a hand-off that no event
+// can carry, because it was never posted (the last kind). The
 // lists pick which comment stands for an item; route still judges it.
 //
 // The items, each with its App and its delivery id. A delivery id is the
@@ -70,6 +71,7 @@ import { readPosted } from './handoff-post.ts'
 import { readPause } from './pause.ts'
 import {
   BUILD_LABEL,
+  buildLabelEvent,
   decide,
   IMPLEMENTER_BOT,
   liveContext,
@@ -78,7 +80,7 @@ import {
   relaunch,
   REVIEWER_BOT,
   sameLogin,
-  subIssues,
+  hasPr,
   type Context,
   type Decision,
   type Payload,
@@ -109,73 +111,13 @@ async function listLabelled(repo: string, label: string): Promise<Listed[]> {
   return listed.sort((a, b) => a.number - b.number)
 }
 
-// The issues of `repo` that an open PR by the maintainer or by
-// contract-implementer[bot] closes (GitHub's closing references: "Closes #N"
-// in the body, or a link made by hand), every page. Anyone can open a PR that
-// says "Closes #N", so a PR by anyone else hides no ticket: the same trust
-// set as route's author rule. GraphQL gives a bot's login without [bot].
-async function closedByOpenPrs(repo: string, maintainer: string): Promise<Set<number>> {
-  const [owner = '', name = ''] = repo.split('/')
-  const query = `query($owner: String!, $name: String!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequests(states: OPEN, first: 100, after: $endCursor) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        number
-        author { __typename login }
-        closingIssuesReferences(first: 100) { nodes { number repository { nameWithOwner } } }
-      }
-    }
-  }
-}`
-  const closers = await listLines<{ number: number; author: string | null; bot: boolean; closes: { number: number; repo: string }[] }>(
-    [
-      'api',
-      'graphql',
-      '--paginate',
-      '-f',
-      `query=${query}`,
-      '-f',
-      `owner=${owner}`,
-      '-f',
-      `name=${name}`,
-      '--jq',
-      '.data.repository.pullRequests.nodes[] | {number, author: .author.login, bot: (.author.__typename == "Bot"), closes: [.closingIssuesReferences.nodes[] | {number, repo: .repository.nameWithOwner}]}',
-    ],
-    'the issues that open PRs close',
-  )
-  const trusted = (pr: { author: string | null; bot: boolean }) => {
-    const login = pr.author === null ? undefined : pr.bot ? `${pr.author}[bot]` : pr.author
-    return sameLogin(login, maintainer) || sameLogin(login, IMPLEMENTER_BOT)
-  }
-  const same = (other: string) => other.toLowerCase() === repo.toLowerCase()
-  return new Set(closers.filter(trusted).flatMap((pr) => pr.closes.filter((c) => same(c.repo)).map((c) => c.number)))
-}
-
-// Whether an open PR closes ticket `issue`, or one of its sub-issues.
-async function hasPr(repo: string, issue: number, closed: Set<number>): Promise<boolean> {
-  if (closed.has(issue)) return true
-  if (closed.size === 0) return false
-  return (await subIssues(repo, issue)).some((sub) => closed.has(sub.number))
-}
-
 const labelsOf = (names: string[]) => names.map((name) => ({ name }))
 
 // A missed label: the labeled event of its latest adder.
 async function labelItem(repo: string, issue: Listed, closed: Set<number>, context: Context): Promise<Line | null> {
   // A build that paused goes on only through its answer (resumeItem).
   if ((await readPause({ kind: issue.pull_request ? 'pr' : 'issue', number: issue.number }))?.repo === repo) return null
-  const events = await listLines<{ id: number; label: string | null; actor: string | null }>(
-    [
-      'api',
-      '--paginate',
-      '--jq',
-      '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}',
-      `repos/${repo}/issues/${issue.number}/events?per_page=100`,
-    ],
-    `the events of #${issue.number}`,
-  )
-  const labeled = events.filter((e) => e.label === BUILD_LABEL).at(-1)
+  const labeled = await buildLabelEvent(repo, issue.number)
   const payload: Payload = {
     action: 'labeled',
     repository: { full_name: repo },
@@ -365,14 +307,16 @@ async function reconcile(argv: string[]): Promise<number> {
   // config exits 4 before anything is decided.
   const live = liveContext()
   const config = await live.config(repo, undefined)
-  const context: Context = { config: async () => config, maintainer: live.maintainer }
+  // No labelEvent: a missed label keys its build by this sweep's own delivery
+  // id (labelItem), so a build that ended with no PR and no pause can get one more.
+  const context: Context = { config: async () => config, maintainer: live.maintainer, closed: live.closed }
 
   const labelled = await listLabelled(repo, BUILD_LABEL)
   const pulls = await listPulls(repo)
   const paused = await listLabelled(repo, PAUSED_LABEL)
   const comments = commentReader(repo)
   // Only a ticket or a spec can have a PR that closes it.
-  const closed = labelled.some((issue) => !issue.pull_request) ? await closedByOpenPrs(repo, await context.maintainer()) : new Set<number>()
+  const closed = labelled.some((issue) => !issue.pull_request) ? await context.closed(repo) : new Set<number>()
 
   const items: (() => Promise<Line | null>)[] = [
     ...labelled.map((issue) => () => labelItem(repo, issue, closed, context)),
