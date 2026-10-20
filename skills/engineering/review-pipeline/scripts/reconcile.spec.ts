@@ -2,7 +2,7 @@
 // item out. Each kind of missed work must get the decision that `route`
 // gives the recorded event of that kind.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -759,6 +759,39 @@ test('reconcile: a relaunch whose part gave up its lock with the hand-off still 
   const lock = join(m.state, 'locks', 'pr-42.lock')
   await utimes(lock, new Date(0), new Date(0))
   assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+})
+
+test('reconcile: a sweep forgets a stale relaunch record only under the PR lock guard, so it keeps the record of an overlapping relaunch', async (t) => {
+  const m = await machine(t, landed())
+  await seedRun(m.state, { phase: 'review-posted' }, [])
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+  const lock = join(m.state, 'locks', 'pr-42.lock')
+  const stale = (JSON.parse(await readFile(lock, 'utf8')) as { token: string }).token
+  const dir = join(m.state, 'deliveries', 'reviewer')
+  const recordOf = async (token: string) => {
+    for (const name of await readdir(dir)) {
+      const file = join(dir, name)
+      if ((JSON.parse(await readFile(file, 'utf8')) as { token?: unknown }).token === token) return file
+    }
+    return null
+  }
+  const file = await recordOf(stale)
+  assert.notEqual(file, null)
+  // The part released its lock with the hand-off still lost. An overlapping
+  // relaunch holds the guard while it takes the lock: this sweep waits.
+  await rm(lock)
+  await writeFile(`${lock}.guard`, `${JSON.stringify({ token: 'overlapping', pid: process.pid })}\n`)
+  const sweep = swept(m.reconcile())
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  assert.equal(await recordOf(stale), file)
+  // The overlapping relaunch takes the lock and writes its record, then frees the guard.
+  const fresh = 'a'.repeat(32)
+  await writeFile(lock, `${JSON.stringify({ pr: 42, token: fresh, taken_at: new Date().toISOString() })}\n`)
+  await writeFile(file as string, `${JSON.stringify({ state: 'done', pr: 42, token: fresh })}\n`)
+  await rm(`${lock}.guard`)
+  assert.deepEqual(await sweep, [line('ignore', 'reviewer', { pr: 42 }, 'duplicate')])
+  // The record of the relaunch stays, so `route undo` can find its token.
+  assert.equal(await recordOf(fresh), file)
 })
 
 test('reconcile: a hand-off marker of an earlier run does not hand off the run at the head', async (t) => {

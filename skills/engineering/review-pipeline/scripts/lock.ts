@@ -200,13 +200,20 @@ export function releasePrLock(pr: number, token: string): Promise<boolean> {
   return releaseLock(prLockFile(pr), token)
 }
 
-// Whether `token` still holds the per-PR lock: it owns the lock file, and
-// the lock is not older than the TTL (an older one is free to take).
-export async function holdsPrLock(pr: number, token: string): Promise<boolean> {
+// Run `fn` under the guard of the per-PR lock. Inside `fn`, `holds(token)`
+// says whether `token` still holds that lock: it owns the lock file, and the
+// lock is not older than the TTL (an older one is free to take). Every take
+// and release of the lock needs the guard, so none comes between that check
+// and the rest of `fn`.
+export function underPrLockGuard<T>(pr: number, fn: (holds: (token: string) => Promise<boolean>) => Promise<T>): Promise<T> {
   const file = prLockFile(pr)
-  if ((await tokenOf(file)) !== token) return false
-  const held = await age(file)
-  return held !== null && held < LOCK_TTL_HOURS * HOUR
+  return underGuard(file, () =>
+    fn(async (token) => {
+      if ((await tokenOf(file)) !== token) return false
+      const held = await age(file)
+      return held !== null && held < LOCK_TTL_HOURS * HOUR
+    }),
+  )
 }
 
 export function issueLockFile(issue: number): string {

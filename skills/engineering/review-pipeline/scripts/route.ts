@@ -85,7 +85,7 @@ import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
 import { resolveConfigText, type ResolvedConfig } from './config.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
 import { parseHandoff, type HandoffKind } from './handoff.ts'
-import { holdsPrLock, issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, whileHolding } from './lock.ts'
+import { issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, underPrLockGuard, whileHolding } from './lock.ts'
 import { readPause } from './pause.ts'
 import { loadState, stateRoot, TERMINAL, type Phase } from './run-state.ts'
 
@@ -466,12 +466,17 @@ export type RelaunchAction = 'review' | 'adjudicate' | 'recheck'
 // rules for both Apps come first, and the lock and the cap after, as decide.
 // A relaunch is a duplicate only while the part it started holds its lock:
 // a part that released the lock (or let it expire) with the hand-off still
-// lost is started again, so its done record is forgotten first.
+// lost is started again, so its done record is forgotten first. The record
+// is read and forgotten under the PR lock's guard: a relaunch writes its new
+// record only after it takes the lock, so an overlapping sweep sees either
+// no record or one whose token holds the lock, and never forgets it.
 export async function relaunch(app: AppName, action: RelaunchAction, delivery: string, repo: string, pr: number, context: Context): Promise<Decision> {
-  const started = await deliveryRecord(app, delivery)
-  if (started?.state === 'done' && !(typeof started.token === 'string' && (await holdsPrLock(pr, started.token)))) {
-    await forgetDelivery(app, delivery)
-  }
+  await underPrLockGuard(pr, async (holds) => {
+    const started = await deliveryRecord(app, delivery)
+    if (started?.state === 'done' && !(typeof started.token === 'string' && (await holds(started.token)))) {
+      await forgetDelivery(app, delivery)
+    }
+  })
   const payload: Payload = { repository: { full_name: repo }, pull_request: { number: pr } }
   return decideBy(app, 'relaunch', delivery, payload, context, undefined, (e) => {
     if (e.config === null) return why('no-config')
