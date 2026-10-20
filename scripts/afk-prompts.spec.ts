@@ -41,7 +41,7 @@ test('the router prompt ends by settling its thread on ignore or started, and ma
   assert.doesNotMatch(last, /action `archive`/)
   assert.match(last, /action `mark_unread` for a `stop: \.\.\.` exit/)
   assert.match(last, /A session with no `t3_thread_organize` tool skips this step/)
-  assert.match(ROUTER, /Each exit is one line, as each step says, and the last step comes before it/)
+  assert.match(ROUTER, /Each exit is one line, as each step says, and the last two steps come before it/)
 })
 
 test('the reconcile prompt ends by settling its thread on a clean sweep, and marking it unread on a stop or a failed launch', () => {
@@ -51,6 +51,39 @@ test('the reconcile prompt ends by settling its thread on a clean sweep, and mar
   assert.doesNotMatch(last, /action `archive`/)
   assert.match(last, /action `mark_unread` for a `stop: \.\.\.` exit, and for a `reconcile:` line with a failed launch or a message of step 3/)
   assert.match(last, /A session with no `t3_thread_organize` tool skips this step/)
+})
+
+// T3 starts each run of an unbound task in a new worktree, and the MCP task
+// API cannot set its workspace. The run edits nothing in it, so it removes it.
+const REMOVE = 'remove this thread\'s own worktree: call `t3_worktree_status`. When `attached` is true and its `worktreePath` is not its `projectWorkspaceRoot`, run `git -C <projectWorkspaceRoot> worktree remove --force <worktreePath> && git -C <projectWorkspaceRoot> branch -D <branch>`'
+
+// The numbered step just before the last one.
+function stepBeforeLast(text: string): string {
+  const steps = [...text.matchAll(/^\d+\. /gm)]
+  const [before, last] = steps.slice(-2)
+  assert.ok(before?.index !== undefined && last?.index !== undefined, 'fewer than two numbered steps')
+  return text.slice(before.index, last.index)
+}
+
+test('the router and reconcile prompts remove their own worktree on every exit, just before the thread step', () => {
+  for (const [name, text] of [['router', ROUTER], ['reconcile', RECONCILE]] as const) {
+    const step = stepBeforeLast(text)
+    assert.match(step, /^\d+\. Every exit above: /, name)
+    assert.ok(step.includes(REMOVE), `${name}: no removal of its own worktree`)
+    assert.match(step, /This is the last shell command of the run/, name)
+    assert.match(step, /A failure changes nothing: the exit line stays as it is/, name)
+    assert.match(lastStep(text), /^\d+\. Every exit above: as the last action/, name)
+  }
+  assert.match(RECONCILE, /End with one line, as step \d+ says, and the last two steps come before it/)
+})
+
+test('setup-forge step 6 says each router and reconcile run removes its own worktree, and how to remove the ones earlier runs left', () => {
+  assert.match(SKILL, /\*\*Each run's worktree\.\*\* T3 starts each run of a router or reconcile task in a new worktree of the project/)
+  assert.match(SKILL, /`schedule_task` and `update_scheduled_task` cannot set a task's workspace, and `list_scheduled_tasks` does not show it/)
+  assert.match(SKILL, /so each run removes its own worktree as its last shell command/)
+  assert.match(SKILL, /\*\*Worktrees earlier runs left\.\*\*/)
+  assert.match(SKILL, /only while no AFK run is in flight/)
+  assert.match(SKILL, /never the worktree this thread runs in/)
 })
 
 test('setup-forge 6.2 and 6.4 update an existing task\'s prompt in place, and nothing else of it', () => {

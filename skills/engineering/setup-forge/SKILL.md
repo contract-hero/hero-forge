@@ -247,6 +247,25 @@ The T3 tasks copy the provider, the model and the runtime mode of the thread tha
 
 Find both once, before 6.2, and fill the same values in both templates.
 
+**Each run's worktree.** T3 starts each run of a router or reconcile task in a new worktree of the project. `schedule_task` and `update_scheduled_task` cannot set a task's workspace, and `list_scheduled_tasks` does not show it, so each run removes its own worktree as its last shell command: the step of the template before the thread step. A run edits nothing in its worktree, and runs its commands in the project's `workspaceRoot`. The worker threads it launches keep their worktrees. The live tasks get this step when 6.2 and 6.4 update their prompts.
+
+**Worktrees earlier runs left.** A router or reconcile task made before this step left one worktree per run under T3's worktree folder of the project, and one branch each. When `git -C <workspaceRoot> worktree list` shows such worktrees, ask whether to remove them now (recommended) or not now. A leftover worktree and the worktree of a worker that has not committed yet look the same, so run this only while no AFK run is in flight. It removes a worktree only when it has no change and no commit that the default branch lacks, and never the worktree this thread runs in:
+
+```sh
+root=<workspaceRoot>; base=origin/<default branch>; self=$(git rev-parse --show-toplevel)
+git -C "$root" fetch -q origin
+git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p' | while read -r wt; do
+  [ "$wt" = "$root" ] || [ "$wt" = "$self" ] && continue
+  [ -z "$(git -C "$wt" status --porcelain)" ] || continue
+  git -C "$wt" merge-base --is-ancestor HEAD "$base" || continue
+  branch=$(git -C "$wt" branch --show-current)
+  git -C "$root" worktree remove "$wt" && { [ -z "$branch" ] || git -C "$root" branch -D "$branch"; }
+done
+git -C "$root" worktree prune
+```
+
+Show the user the `git worktree list` from before and after.
+
 **6.1 T3 Connect.** Read the environment with `t3_environment_read`. AFK mode needs T3 Connect linked (remote access on), and its "Hold webhook requests while this environment is offline" preference on (`holdWebhooksWhileOffline`). Without the hold, a delivery that arrives while this machine is offline fails, and GitHub does not retry it (the hourly reconcile finds the missed work later). When the result does not show both as on, tell the user how to turn them on: in T3 Code, open the T3 Connect settings, sign in, turn on remote access, and turn on "Hold webhook requests while this environment is offline". Wait, then read it again. When the result has no field for them, ask the user to confirm both in the T3 Code settings. Step 6.2 shows whether Connect is linked: only then does a task get a `webhookUrl`.
 
 **6.2 The router tasks.** One webhook task per App, because each App has one webhook URL for every repo it is installed on. Run `list_scheduled_tasks` first. Then, for each App (`reviewer`, then `implementer`), one of three cases applies. A task titled `hero-forge router: <app>` already exists (set up from another repo): keep it, and use its `webhookUrl`. Fill the template as step 3 says, with one change: in place of `<<clone_root>>`, use the path the task's prompt already holds. When its `prompt` is the same as the filled template, change nothing. When its `prompt` differs from the filled template, call `update_scheduled_task` with its `scheduledTaskId` and the new `prompt` only: its URL, its secret and its trigger stay. Only when no such task exists, create it:
@@ -321,4 +340,4 @@ On yes, write this JSON to a file outside the repo, with `<app_id>` the `app_id`
 
 Tell the user the setup is complete and which engineering skills will now read from these files. Mention they can edit `docs/agents/*.md` directly later (`review-pipeline` reads `docs/agents/review.md` on every run, so its YAML block can be edited by hand); re-running this skill is only necessary if they want to switch issue trackers, change how the repo reviews pull requests, or restart from scratch. A re-run can take one part alone and leaves the other parts as they are.
 
-With AFK mode on, also tell the user: adding `ready-for-agent` to a ticket or a spec starts a build, `paused: true` in the YAML block (on the default branch) stops both Apps, and each router thread ends with one line that says what it started or why it ignored the delivery.
+With AFK mode on, also tell the user: adding `ready-for-agent` to a ticket or a spec starts a build, `paused: true` in the YAML block (on the default branch) stops both Apps, and each router thread ends with one line that says what it started or why it ignored the delivery. Each router and reconcile run removes its own worktree.
