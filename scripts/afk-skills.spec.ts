@@ -14,6 +14,7 @@ const read = (skill: string) => readFileSync(join(SKILLS, skill, 'SKILL.md'), 'u
 const IMPLEMENT_PR = read('implement-pr')
 const PIPELINE = read('review-pipeline')
 const STACK = read('implement-spec-stack')
+const THREAD_STEP = readFileSync(join(SKILLS, 'review-pipeline', 'afk-thread-step.md'), 'utf8')
 
 // The text of the `## <heading>` section, up to the next `## ` heading.
 function section(text: string, heading: string): string {
@@ -118,18 +119,30 @@ test('implement-spec-stack holds its own pause and resume protocol, and resumes 
 // the run leaves nothing for the maintainer, marked unread when it needs them.
 const THREAD = /t3_thread_organize|`settle`|`mark_unread`|settle the thread|mark the thread unread/
 
-// Each needle names the thread rule: the tool, both actions, the skip.
-function threadRule(text: string): void {
-  inOrder(text, ['`t3_thread_organize` with no `threadId`', 'action `settle`', 'action `mark_unread`', 'A session with no `t3_thread_organize` tool skips this step'])
-  assert.match(text, /A run without `--afk` never settles, archives or marks its thread/)
+// The thread rule lives once, in review-pipeline/afk-thread-step.md: the
+// tool, both actions, the late notification turn (a queued notification keeps
+// a settled thread active), the skip, and the by-hand path.
+test('the shared thread step holds the tool, both actions, the late notification turn and the skip', () => {
+  inOrder(THREAD_STEP, ['`t3_thread_organize` with no `threadId`', 'action `settle`', 'action `mark_unread`', 'Settling takes effect when the turn ends', 'A turn that starts only because a background job or a subagent reported', 'does the thread step again, with the same action, and ends', 'A session with no `t3_thread_organize` tool skips this step'])
+  assert.match(THREAD_STEP, /A run without `--afk` never settles, archives or marks its thread/)
+})
+
+// Each skill points to the shared thread step, names its own outcomes for both
+// actions, and holds no copy of the shared rule.
+function threadRule(text: string, pointer: string): void {
+  inOrder(text, [pointer, 'action `settle`', 'action `mark_unread`'])
+  for (const shared of ['Settling takes effect when the turn ends', 'A turn that starts only because a background job or a subagent reported', 'A session with no `t3_thread_organize` tool skips this step', 'A run without `--afk` never settles']) {
+    assert.ok(!text.includes(shared), `"${shared}" is copied out of afk-thread-step.md`)
+  }
 }
+const SIBLING_THREAD_STEP = '`<the folder this SKILL.md is in>/../review-pipeline/afk-thread-step.md`'
 
 // `text` with every paragraph that starts `With \`--afk\`` taken out.
 const withoutAfkParagraphs = (text: string) => text.split('\n\n').filter((p) => !p.startsWith('With `--afk`')).join('\n\n')
 
 test('implement-pr --afk settles its thread after the PR, and marks it unread on a pause or a stop', () => {
   const top = IMPLEMENT_PR.slice(IMPLEMENT_PR.indexOf('**AFK run.**'), IMPLEMENT_PR.indexOf('\n## 1.'))
-  threadRule(top)
+  threadRule(top, SIBLING_THREAD_STEP)
   inOrder(top, ['releases the lock', 'mark the thread unread', 'and ends'])
   inOrder(section(IMPLEMENT_PR, '6. Hand off to the review pipeline'), ['review.ts lock release --issue <ticket> --token <token>', 'settle the thread', 'and end'])
   inOrder(section(IMPLEMENT_PR, 'Decisions in an AFK run'), ['review.ts lock release --issue <ticket> --token <token>', 'mark the thread unread', 'Open no PR'])
@@ -139,7 +152,7 @@ test('implement-pr --afk settles its thread after the PR, and marks it unread on
 
 test('review-pipeline --afk settles its thread after the hand-off or the merge, and marks it unread on a pause or a stop', () => {
   const afk = section(PIPELINE, 'AFK run')
-  threadRule(afk)
+  threadRule(afk, '[afk-thread-step.md](./afk-thread-step.md)')
   inOrder(afk, ['then the hand-off as the last post: nothing posts after it', 'settle the thread'])
   inOrder(afk, ['prints `stopped`', 'push notification', 'mark the thread unread', 'no hand-off'])
   inOrder(afk, ['A re-checker that failed twice', 'mark the thread unread'])
@@ -149,7 +162,7 @@ test('review-pipeline --afk settles its thread after the hand-off or the merge, 
 
 test('implement-spec-stack --afk settles its thread after step 9, and marks it unread on a pause or a stop', () => {
   const afk = STACK.slice(STACK.indexOf('**AFK run.**'), STACK.indexOf('Without `--afk`, every step works as written.'))
-  threadRule(afk)
+  threadRule(afk, SIBLING_THREAD_STEP)
   assert.match(afk, /send a push notification with the message .*, run `review\.ts lock release --issue <spec> --token <token>`, mark the thread unread, and end/)
   assert.match(afk, /The run ends after step 9 with `review\.ts lock release --issue <spec> --token <token>`, then settle the thread/)
   inOrder(afk, ['**Pause**', 'review.ts lock release --issue <spec> --token <token>`, mark the thread unread, and end'])
