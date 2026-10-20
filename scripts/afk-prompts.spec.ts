@@ -70,3 +70,30 @@ test('setup-forge 6.2 and 6.4 create a task only when none exists, and leave a m
     assert.doesNotMatch(text, /\bElse\b/, label)
   }
 })
+
+// The worker runs Claude Code plugin commands, so its thread must not take the
+// model of the router or reconcile thread, which can run on a small model.
+const WORKER_MODEL = '`modelSelection` `{instanceId: "claudeAgent", model: "<<worker_model>>"}`'
+
+test('the router and reconcile prompts launch the worker on the Claude worker model', () => {
+  for (const [name, text] of [['router', ROUTER], ['reconcile', RECONCILE]] as const) {
+    const launch = text.split('\n').find((line) => line.includes('with `t3_thread_launch`'))
+    assert.ok(launch, `${name}: no launch step`)
+    assert.ok(launch.includes(WORKER_MODEL), `${name}: the launch passes no worker model`)
+    assert.match(launch, /the worker runs Claude Code plugin commands/, name)
+  }
+})
+
+test('setup-forge says how it fills <<worker_model>>, and fills it in both templates', () => {
+  assert.match(SKILL, /`<<worker_model>>`: the model of this thread when `orchestrator_capabilities` gives `inheritedProviderInstanceId` `claudeAgent` \(its `inheritedModel`\), else the newest Claude Opus model of the `claudeAgent` provider in its catalog/)
+  assert.match(part('6.2 The router tasks.'), /each `<<worker_model>>` by the worker model/)
+  assert.match(part('6.4 The reconcile task.'), /each `<<worker_model>>` by the worker model/)
+})
+
+test('setup-forge step 6 says the tasks can run on a small model and the workers stay on Claude', () => {
+  assert.doesNotMatch(SKILL, /Tell the user, so they run this part from a thread with the model and runtime mode the runs should use/)
+  assert.match(SKILL, /The T3 tasks copy the provider, the model and the runtime mode of the thread that creates them/)
+  assert.match(SKILL, /each worker thread runs on `<<worker_model>>`/)
+  assert.match(SKILL, /a small model is enough for the tasks/)
+  assert.match(SKILL, /`update_scheduled_task` has no model field/)
+})
