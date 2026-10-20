@@ -39,18 +39,27 @@
 // --app reviewer, any other event                   ignore, event:<name>
 //
 // --app implementer, an issues event:
-//   3. not labeled                                  ignore, action:<name>
+//   3. not labeled or unlabeled                     ignore, action:<name>
 //   4. no docs/agents/review.md                     ignore, no-config
 //   5. no implementer.app: enabled                  ignore, disabled
-//   6. a label other than ready-for-agent           ignore, label:<name>
+//   6. labeled: a label other than ready-for-agent, or unlabeled: a label
+//      other than needs-triage                      ignore, label:<name>
+//      (the triage hand-off moves needs-triage to ready-for-agent, and GitHub
+//      sends its two deliveries in the same second; either one alone starts
+//      the build, so a router that fails on one loses nothing. Removing
+//      another label, such as needs-info, from a ready ticket starts nothing)
 //   7. the issue is a PR                            ignore, pull-request
 //   8. the sender is not the maintainer             ignore, sender
-//   9. the issue has a parent issue                 ignore, has-parent
-//  10. the issue's author, or (for a spec) the author of any of its
+//   9. ready-for-agent is not on the issue now, as GitHub says (not as the
+//      payload said)                                ignore, not-ready
+//  10. the issue has a parent issue                 ignore, has-parent
+//  11. the issue's author, or (for a spec) the author of any of its
 //      sub-issues, is not the maintainer: the build agent reads that text
 //                                                   ignore, author (issue: the one at fault)
-//  11. build-spec when it has sub-issues, else build-ticket, once the issue
-//      lock is held and one of implementer.attempts is reserved (below)
+//  12. build-spec when it has sub-issues, else build-ticket, once the issue
+//      lock is held and one of implementer.attempts is reserved (below).
+//      The second delivery of a hand-off then finds the lock held, or the
+//      attempt spent, or the delivery a duplicate.
 // --app implementer, an issue_comment event:
 //   3. not created                                  ignore, action:<name>
 //   4, 5 as above
@@ -95,9 +104,11 @@ const usage = usageFor('route')
 export const IMPLEMENTER_BOT = 'contract-implementer[bot]'
 export const REVIEWER_BOT = 'contract-reviewer[bot]'
 
-// The label that asks the Implementer to build, and the one a paused run carries.
+// The label that asks the Implementer to build, the one a paused run carries,
+// and the one the triage hand-off to ready-for-agent removes.
 export const BUILD_LABEL = 'ready-for-agent'
 export const PAUSED_LABEL = 'needs-info'
+export const TRIAGE_LABEL = 'needs-triage'
 
 // GitHub logins are case-insensitive.
 export const sameLogin = (a: string | undefined, b: string) => a !== undefined && a.toLowerCase() === b.toLowerCase()
@@ -187,17 +198,21 @@ async function remoteConfig(repo: string, branch: string | undefined): Promise<R
   return loaded.config
 }
 
-// Whether issue `issue` has a parent issue, and how many sub-issues it has,
-// as GitHub says now (not as the payload said when the label landed).
-async function relations(repo: string, issue: number): Promise<{ parent: boolean; subIssues: number }> {
-  const got = await gh(['api', `repos/${repo}/issues/${issue}`, '--jq', '{parent_issue_url, sub_issues_summary}'])
+// Whether issue `issue` has a parent issue, how many sub-issues it has, and
+// its labels, as GitHub says now (not as the payload said when the label
+// landed or left).
+async function relations(repo: string, issue: number): Promise<{ parent: boolean; subIssues: number; labels: string[] }> {
+  const got = await gh(['api', `repos/${repo}/issues/${issue}`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'])
   if (got.code !== 0) throw new Failure(`cannot read issue #${issue} of ${repo}: ${oneLine(got.stderr)}`, 1)
-  const found = json<{ parent_issue_url?: unknown; sub_issues_summary?: { total?: unknown } | null }>(got.stdout, `issue #${issue}`)
+  const found = json<{ parent_issue_url?: unknown; sub_issues_summary?: { total?: unknown } | null; labels?: unknown }>(got.stdout, `issue #${issue}`)
   const total = found.sub_issues_summary?.total
   if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) {
     throw new Failure(`GitHub sent no sub-issue count for issue #${issue} of ${repo}`, 1)
   }
-  return { parent: typeof found.parent_issue_url === 'string', subIssues: total }
+  if (!Array.isArray(found.labels) || !found.labels.every((l) => typeof l === 'string')) {
+    throw new Failure(`GitHub sent no labels for issue #${issue} of ${repo}`, 1)
+  }
+  return { parent: typeof found.parent_issue_url === 'string', subIssues: total, labels: found.labels }
 }
 
 // The sub-issues of `issue`, each with its author, every page.
@@ -355,7 +370,8 @@ const ADJUDICATE_ON: HandoffKind[] = ['review-posted', 'recheck-failed']
 
 async function implementerRule(e: Event): Promise<Outcome> {
   if (e.name !== 'issues' && e.name !== 'issue_comment') return why(`event:${e.name}`)
-  if (e.action !== (e.name === 'issues' ? 'labeled' : 'created')) return why(`action:${e.action}`)
+  const actions = e.name === 'issues' ? ['labeled', 'unlabeled'] : ['created']
+  if (!actions.includes(e.action)) return why(`action:${e.action}`)
   if (e.config === null) return why('no-config')
   if (!e.config.implementer.app) return why('disabled')
   return e.name === 'issues' ? buildRule(e, e.config) : commentRule(e)
@@ -363,12 +379,13 @@ async function implementerRule(e: Event): Promise<Outcome> {
 
 async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
   const label = text(e.payload.label?.name) ?? ''
-  if (label !== BUILD_LABEL) return why(`label:${label}`)
+  if (label !== (e.action === 'labeled' ? BUILD_LABEL : TRIAGE_LABEL)) return why(`label:${label}`)
   if (e.pr !== null) return why('pull-request')
   if (e.repo === null || e.issue === null) throw new Failure('the issues payload has no repository.full_name or issue.number', 1)
   if (!sameLogin(e.sender, await e.maintainer())) return why('sender')
   const maintainer = await e.maintainer()
-  const { parent, subIssues: count } = await relations(e.repo, e.issue)
+  const { parent, subIssues: count, labels } = await relations(e.repo, e.issue)
+  if (!labels.includes(BUILD_LABEL)) return why('not-ready')
   if (parent) return why('has-parent')
   // The author of an issue never changes, so the payload's is GitHub's.
   if (!sameLogin(text(e.payload.issue?.user?.login), maintainer)) return why('author')

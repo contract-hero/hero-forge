@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.24
+
+- `review-pipeline`: a triage hand-off no longer loses its build when one of its two router threads fails. The move from `needs-triage` to `ready-for-agent` sends two `issues` deliveries in the same second (`unlabeled` and `labeled`). T3 starts one router thread for each, and one can fail at worktree setup. When the `labeled` router failed, the build waited up to one hour for reconcile. `review.ts route --app implementer` now also takes an `unlabeled` event that removes `needs-triage`, so either delivery alone starts the build, and the second one finds the issue lock held. A label event starts a build only when `ready-for-agent` is on the issue now, as GitHub gives it (new reason `not-ready`). The removal of any other label, such as `needs-info` from a ready ticket, is `ignore, label:<name>`.
+
 ## 1.0.23
 
 - `implement-pr`, `implement-spec-stack`, `review-pipeline`: an AFK thread leaves the active T3 list also when a background notification starts one more turn after the thread step. A queued message keeps a thread active, so the settle of the earlier turn was lost, and the late turn ended with no action. The thread step now says that a turn that starts only because a background job or a subagent reported, after the run (or part) already did its thread step, does nothing else: it does the thread step again, with the same action, and ends. The common rule of the thread step now lives once, in `review-pipeline/afk-thread-step.md`, which each of the three skills reads when an AFK run starts; each `SKILL.md` keeps only which of its outcomes settle the thread and which mark it unread.

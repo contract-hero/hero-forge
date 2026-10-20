@@ -20,14 +20,16 @@ const implementerMd = (...yaml: string[]) => reviewMd('implementer:', '  app: en
 
 // The repo's default branch: its review.md (null: the file is not there), and
 // what GitHub says of the labelled issue: whether it has a parent, how many
-// sub-issues it has, and who wrote each sub-issue (by default the maintainer,
-// numbered from 24).
+// sub-issues it has, who wrote each sub-issue (by default the maintainer,
+// numbered from 24), and its labels now (by default ready-for-agent).
 type Sub = { number: number; author: string }
-type Remote = { review: string | null; issue?: { parent: boolean; subIssues: number; subs?: Sub[] } }
+type Remote = { review: string | null; issue?: { parent: boolean; subIssues: number; subs?: Sub[]; labels?: string[] } }
 
 const TICKET = { parent: false, subIssues: 0 }
 const SPEC = { parent: false, subIssues: 9 }
 const CHILD = { parent: true, subIssues: 0 }
+// A ticket whose ready-for-agent label is gone again.
+const UNREADY = { parent: false, subIssues: 0, labels: ['enhancement'] }
 
 function responses({ review, issue = TICKET }: Remote): FakeGhResponse[] {
   return [
@@ -46,6 +48,7 @@ function responses({ review, issue = TICKET }: Remote): FakeGhResponse[] {
       stdout: `${JSON.stringify({
         parent_issue_url: issue.parent ? `https://api.github.com/repos/${REPO}/issues/23` : null,
         sub_issues_summary: { total: issue.subIssues, completed: 0, percent_completed: 0 },
+        labels: issue.labels ?? ['enhancement', 'ready-for-agent'],
       })}\n`,
     },
   ]
@@ -483,6 +486,13 @@ const flows: [string, App, string, Remote, ((r: Router) => Promise<void>) | null
   ['the maintainer labels a ticket that has a parent', 'implementer', 'issues.labeled.json', { review: implementerMd(), issue: CHILD }, null, onIssue('ignore', 'has-parent')],
   ['someone else adds ready-for-agent', 'implementer', 'issues.labeled.stranger.json', { review: implementerMd() }, null, onIssue('ignore', 'sender')],
   ['the maintainer adds another label', 'implementer', 'issues.labeled.other-label.json', { review: implementerMd() }, null, onIssue('ignore', 'label:needs-triage')],
+  ['ready-for-agent is gone when the label delivery comes', 'implementer', 'issues.labeled.json', { review: implementerMd(), issue: UNREADY }, null, onIssue('ignore', 'not-ready')],
+  // The triage hand-off moves needs-triage to ready-for-agent: two deliveries
+  // in one second, and either one alone starts the build.
+  ['the maintainer removes needs-triage from a ready ticket', 'implementer', 'issues.unlabeled.json', { review: implementerMd() }, null, onIssue('build-ticket')],
+  ['the maintainer removes needs-triage from a ready spec', 'implementer', 'issues.unlabeled.json', { review: implementerMd(), issue: SPEC }, null, onIssue('build-spec')],
+  ['the maintainer removes needs-triage from a ticket that is not ready', 'implementer', 'issues.unlabeled.json', { review: implementerMd(), issue: UNREADY }, null, onIssue('ignore', 'not-ready')],
+  ['the maintainer removes another label from a ready ticket', 'implementer', 'issues.unlabeled.other-label.json', { review: implementerMd() }, null, onIssue('ignore', 'label:needs-info')],
   ['ready-for-agent on a pull request', 'implementer', 'issues.labeled.pull-request.json', { review: implementerMd() }, null, onPr('ignore', 'pull-request')],
   ['an issue opened', 'implementer', 'issues.opened.json', { review: implementerMd() }, null, onIssue('ignore', 'action:opened')],
   ['a label in a repo with no docs/agents/review.md', 'implementer', 'issues.labeled.json', { review: null }, null, onIssue('ignore', 'no-config')],
@@ -767,6 +777,17 @@ test('route --app implementer: a second label while a build holds the ticket loc
   assert.equal(lock.delivery, D1)
 })
 
+test('route --app implementer: the two deliveries of a triage hand-off start one build, in either order', async (t) => {
+  for (const [first, second] of [
+    ['issues.unlabeled.json', 'issues.labeled.json'],
+    ['issues.labeled.json', 'issues.unlabeled.json'],
+  ] as const) {
+    const r = await router(t, { review: implementerMd() })
+    assert.deepEqual(await decision(r.route(first, D1, 'implementer')), onIssue('build-ticket'))
+    assert.deepEqual(await decision(r.route(second, D2, 'implementer')), onIssue('ignore', 'locked'))
+  }
+})
+
 test('route --app implementer: two labels at once on one ticket give one build and one attempt', async (t) => {
   const r = await router(t, { review: implementerMd() })
   const both = await Promise.all([r.route('issues.labeled.json', D1, 'implementer'), r.route('issues.labeled.json', D2, 'implementer')].map(decision))
@@ -819,7 +840,7 @@ test('route --app implementer: a stranger label costs no lookup, and the issue i
     [
       ['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${REPO}/contents/docs/agents/review.md?ref=main`],
       ['api', 'user', '--jq', '.login'],
-      ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary}'],
+      ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'],
     ],
   )
 })
