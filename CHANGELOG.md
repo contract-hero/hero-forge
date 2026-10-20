@@ -2,7 +2,7 @@
 
 ## 1.0.23
 
-- `implement-pr`, `implement-spec-stack`, `review-pipeline`: an AFK thread leaves the active T3 list also when a background notification starts one more turn after the thread step. A queued message keeps a thread active, so the settle of the earlier turn was lost, and the late turn ended with no action. The thread step now says that a turn that starts only because a background job or a subagent reported, after the run (or part) already did its thread step, does nothing else: it does the thread step again, with the same action, and ends.
+- `implement-pr`, `implement-spec-stack`, `review-pipeline`: an AFK thread leaves the active T3 list also when a background notification starts one more turn after the thread step. A queued message keeps a thread active, so the settle of the earlier turn was lost, and the late turn ended with no action. The thread step now says that a turn that starts only because a background job or a subagent reported, after the run (or part) already did its thread step, does nothing else: it does the thread step again, with the same action, and ends. The common rule of the thread step now lives once, in `review-pipeline/afk-thread-step.md`, which each of the three skills reads when an AFK run starts; each `SKILL.md` keeps only which of its outcomes settle the thread and which mark it unread.
 
 ## 1.0.22
 
