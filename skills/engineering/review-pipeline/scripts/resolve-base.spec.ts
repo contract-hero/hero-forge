@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { resolveVersionFile } from './resolve-base.ts'
 import { baseEnv, fakeGh, REVIEWER_TOKEN, reviewerApp, run, runCli, seedState, tempDir } from './test-helpers.ts'
 
 const REPO = 'contract-hero/hero-forge'
@@ -158,6 +159,33 @@ test('prepare refuses a manifest conflict on more than the version line', async 
   assert.equal(await s.git('rev-parse', 'HEAD'), s.head)
 })
 
+// A merged manifest with one conflict hunk: the PR's lines, then main's.
+const conflicted = (ours: string, theirs: string, after = '  "license": "MIT"\n') =>
+  `{\n  "name": "x",\n<<<<<<< HEAD\n${ours}=======\n${theirs}>>>>>>> main\n${after}}\n`
+
+test('resolveVersionFile resolves a hunk that holds only the version line', () => {
+  const text = resolveVersionFile(conflicted('  "version": "1.0.20",\n', '  "version": "1.0.21",\n'), '1.0.22', 'plugin.json')
+  assert.equal(text, '{\n  "name": "x",\n  "version": "1.0.22",\n  "license": "MIT"\n}\n')
+})
+
+test('resolveVersionFile refuses a version line that also holds another property', () => {
+  assert.throws(
+    () =>
+      resolveVersionFile(
+        conflicted('  "version": "1.0.20", "description": "the PR",\n', '  "version": "1.0.21", "description": "main",\n'),
+        '1.0.22',
+        'plugin.json',
+      ),
+    /plugin\.json conflicts with the base branch on more than its version line/,
+  )
+})
+
+test('resolveVersionFile refuses a conflict on a nested version', () => {
+  const merged =
+    '{\n  "name": "x",\n  "version": "1.0.21",\n  "engine": {\n<<<<<<< HEAD\n    "version": "2"\n=======\n    "version": "3"\n>>>>>>> main\n  }\n}\n'
+  assert.throws(() => resolveVersionFile(merged, '1.0.22', 'plugin.json'), /conflicts with the base branch on more than its top-level version/)
+})
+
 test('prepare refuses a PR that edits an older CHANGELOG entry', async (t) => {
   const s = await repo(t, { ...PR, entries: [['1.0.20', 'the PR change.'], ['1.0.19', 'old, reworded.']] }, MAIN)
   const { code, stderr } = await s.prepare()
@@ -232,4 +260,66 @@ test('record with the reviewer App posts the gate success status at the new head
   assert.equal(posts[0]?.gh_token, REVIEWER_TOKEN)
   assert.equal(JSON.parse(posts[0]?.stdin ?? '{}').state, 'success')
   assert.equal((await s.state()).phase, 'ready')
+})
+
+// A commit with `parents`, the PR head's tree, and no push: record reads it
+// from the local repo and GitHub's head from the fake.
+async function rogue(s: Awaited<ReturnType<typeof repo>>, ...parents: string[]) {
+  return s.git('commit-tree', `${s.head}^{tree}`, ...parents.flatMap((p) => ['-p', p]), '-m', 'rogue')
+}
+
+async function refusedAndUntouched(s: Awaited<ReturnType<typeof repo>>, sha: string, problem: RegExp) {
+  await s.atGitHub(sha)
+  const { code, stderr } = await s.record(sha)
+  assert.equal(code, 1)
+  assert.match(stderr, problem)
+  const state = await s.state()
+  assert.equal(state.head_sha, s.head)
+  assert.equal(state.phase, 'explained')
+  assert.equal(state.gates.length, 1)
+  const statuses = (await s.gh.calls()).filter((c) => c.argv.includes('POST') && c.argv.some((a) => a.includes('/statuses/')))
+  assert.equal(statuses.length, 0)
+}
+
+test('record refuses a commit with one parent', async (t) => {
+  const s = await repo(t, PR, MAIN, 'explained', true)
+  await refusedAndUntouched(s, await rogue(s, s.head), /is not a merge commit on the run's head/)
+})
+
+test('record refuses a merge whose first parent is not the run head', async (t) => {
+  const s = await repo(t, PR, MAIN, 'explained', true)
+  const main = await s.git('rev-parse', 'origin/main')
+  await refusedAndUntouched(s, await rogue(s, main, s.head), /is not a merge commit on the run's head/)
+})
+
+test('record refuses a merge whose second parent is not on the base branch', async (t) => {
+  const s = await repo(t, PR, MAIN, 'explained', true)
+  const side = await s.git('commit-tree', 'origin/main^{tree}', '-p', 'origin/main', '-m', 'not on main')
+  await refusedAndUntouched(s, await rogue(s, s.head, side), /the merged parent .* is not on main/)
+})
+
+test('record keeps the run where it was when the gate status post fails, and a retry records the pass', async (t) => {
+  const s = await repo(t, PR, MAIN, 'explained', true)
+  const sha = JSON.parse((await s.prepare()).stdout).commit as string
+  await s.git('push', '-q', 'origin', 'feature/x')
+  await s.gh.respond([
+    { match: 'pr view 13', stdout: JSON.stringify({ headRefOid: sha }) },
+    { match: `-X POST repos/${REPO}/statuses/`, stderr: 'HTTP 502: Bad Gateway', exit: 1 },
+  ])
+  const failed = await s.record(sha)
+  assert.equal(failed.code, 1)
+  assert.match(failed.stderr, /GitHub rejected the contract-reviewer\/gate status/)
+  const before = await s.state()
+  assert.equal(before.head_sha, s.head)
+  assert.equal(before.phase, 'explained')
+  assert.equal(before.gates.length, 1)
+
+  await s.atGitHub(sha)
+  const retried = await s.record(sha)
+  assert.equal(retried.stderr, '')
+  assert.equal(retried.code, 0)
+  const after = await s.state()
+  assert.equal(after.head_sha, sha)
+  assert.equal(after.phase, 'ready')
+  assert.deepEqual(after.gates.at(-1), { round: 1, commit: sha, result: 'pass' })
 })

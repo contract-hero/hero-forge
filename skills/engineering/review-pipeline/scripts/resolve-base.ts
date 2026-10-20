@@ -24,6 +24,7 @@ import { rmSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { appLogin, configApp } from './finish.ts'
 import { postGateStatus } from './gate-status.ts'
@@ -65,16 +66,27 @@ function show(rev: string, path: string): string | undefined {
   return r.ok ? r.out : undefined
 }
 
-function topVersion(text: string | undefined): string | undefined {
+function topObject(text: string | undefined): Record<string, unknown> | undefined {
   if (text === undefined) return undefined
   try {
     const value = JSON.parse(text) as unknown
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-    const version = (value as Record<string, unknown>).version
-    return typeof version === 'string' ? version : undefined
+    return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
   } catch {
     return undefined
   }
+}
+
+function topVersion(text: string | undefined): string | undefined {
+  const version = topObject(text)?.version
+  return typeof version === 'string' ? version : undefined
+}
+
+// The file's JSON with its top-level version left out, to compare the rest.
+function withoutVersion(text: string): Record<string, unknown> | undefined {
+  const value = topObject(text)
+  if (value === undefined) return undefined
+  const { version: _version, ...rest } = value
+  return rest
 }
 
 export function nextPatch(version: string): string {
@@ -84,15 +96,20 @@ export function nextPatch(version: string): string {
   return `${major}.${minor}.${Number(patch) + 1}`
 }
 
-const VERSION_LINE = /^(\s*"version"\s*:\s*")([^"]*)(".*)$/
+// A line that holds the `"version"` property and nothing else.
+const VERSION_LINE = /^(\s*"version"\s*:\s*")([^"]*)("\s*,?\s*)$/
 const lines = (text: string) => text.split(/(?<=\n)/)
 
 // The merged version file with each conflict hunk resolved. Every hunk must
-// hold only the `"version"` line on both sides: any other conflicting line in
+// hold only a `"version"` line on both sides: any other conflicting line in
 // the file is the PR's own change, and a human decides it. Then the version
-// is set to `version`.
+// is set to `version`. The file read with every hunk on the PR's side, and
+// read with every hunk on the base's side, must equal the result in all but
+// the top-level version: so no other property, top-level or nested, is lost.
 export function resolveVersionFile(merged: string, version: string, path: string): string {
   const out: string[] = []
+  const ownSide: string[] = []
+  const baseSide: string[] = []
   let side: 'none' | 'ours' | 'base' | 'theirs' = 'none'
   let ours: string[] = []
   let theirs: string[] = []
@@ -102,7 +119,11 @@ export function resolveVersionFile(merged: string, version: string, path: string
         side = 'ours'
         ours = []
         theirs = []
-      } else out.push(line)
+      } else {
+        out.push(line)
+        ownSide.push(line)
+        baseSide.push(line)
+      }
     } else if (/^\|{7}(?: |\n|$)/.test(line) && side === 'ours') side = 'base'
     else if (/^={7}\n?$/.test(line) && side !== 'theirs') side = 'theirs'
     else if (/^>{7}(?: |\n|$)/.test(line) && side === 'theirs') {
@@ -112,6 +133,8 @@ export function resolveVersionFile(merged: string, version: string, path: string
         `${path} conflicts with the base branch on more than its version line: resolve the conflict by hand`,
       )
       out.push(theirs[0] as string)
+      ownSide.push(...ours)
+      baseSide.push(...theirs)
       side = 'none'
     } else if (side === 'ours') ours.push(line)
     else if (side === 'theirs') theirs.push(line)
@@ -125,6 +148,11 @@ export function resolveVersionFile(merged: string, version: string, path: string
   out[index] = `${match[1]}${version}${match[3]}${(out[index] as string).endsWith('\n') ? '\n' : ''}`
   const text = out.join('')
   refuse(topVersion(text) === version, `${path} does not read version ${version} after the resolution: resolve the conflict by hand`)
+  const rest = withoutVersion(text)
+  refuse(
+    isDeepStrictEqual(withoutVersion(ownSide.join('')), rest) && isDeepStrictEqual(withoutVersion(baseSide.join('')), rest),
+    `${path} conflicts with the base branch on more than its top-level version: resolve the conflict by hand`,
+  )
   return text
 }
 
