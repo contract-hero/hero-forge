@@ -50,16 +50,24 @@
 //      another label, such as needs-info, from a ready ticket starts nothing)
 //   7. the issue is a PR                            ignore, pull-request
 //   8. the sender is not the maintainer             ignore, sender
-//   9. ready-for-agent is not on the issue now, as GitHub says (not as the
+//   9. a pause record of this repo for the issue (only resume goes on)
+//                                                   ignore, paused-run
+//  10. ready-for-agent is not on the issue now, as GitHub says (not as the
 //      payload said)                                ignore, not-ready
-//  10. the issue has a parent issue                 ignore, has-parent
-//  11. the issue's author, or (for a spec) the author of any of its
+//  11. the issue has a parent issue                 ignore, has-parent
+//  12. the issue's author, or (for a spec) the author of any of its
 //      sub-issues, is not the maintainer: the build agent reads that text
 //                                                   ignore, author (issue: the one at fault)
-//  12. build-spec when it has sub-issues, else build-ticket, once the issue
+//  13. an open PR by the maintainer or contract-implementer[bot] closes the
+//      ticket, or (for a spec) one of its sub-issues ignore, has-pr
+//  14. build-spec when it has sub-issues, else build-ticket, once the issue
 //      lock is held and one of implementer.attempts is reserved (below).
 //      The second delivery of a hand-off then finds the lock held, or the
-//      attempt spent, or the delivery a duplicate.
+//      attempt spent, or the delivery a duplicate. A build releases the
+//      issue lock when it opens its PR or pauses, so a later second delivery
+//      finds the PR (13) or the pause record (9). A build that ended with
+//      neither leaves the ticket free for one more attempt, as reconcile
+//      also does.
 // --app implementer, an issue_comment event:
 //   3. not created                                  ignore, action:<name>
 //   4, 5 as above
@@ -223,6 +231,56 @@ export function subIssues(repo: string, issue: number): Promise<{ number: number
   )
 }
 
+// The issues of `repo` that an open PR by the maintainer or by
+// contract-implementer[bot] closes (GitHub's closing references: "Closes #N"
+// in the body, or a link made by hand), every page. Anyone can open a PR that
+// says "Closes #N", so a PR by anyone else hides no ticket: the same trust
+// set as route's author rule. GraphQL gives a bot's login without [bot].
+export async function closedByOpenPrs(repo: string, maintainer: string): Promise<Set<number>> {
+  const [owner = '', name = ''] = repo.split('/')
+  const query = `query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 100, after: $endCursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        author { __typename login }
+        closingIssuesReferences(first: 100) { nodes { number repository { nameWithOwner } } }
+      }
+    }
+  }
+}`
+  const closers = await listLines<{ number: number; author: string | null; bot: boolean; closes: { number: number; repo: string }[] }>(
+    [
+      'api',
+      'graphql',
+      '--paginate',
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `name=${name}`,
+      '--jq',
+      '.data.repository.pullRequests.nodes[] | {number, author: .author.login, bot: (.author.__typename == "Bot"), closes: [.closingIssuesReferences.nodes[] | {number, repo: .repository.nameWithOwner}]}',
+    ],
+    'the issues that open PRs close',
+  )
+  const trusted = (pr: { author: string | null; bot: boolean }) => {
+    const login = pr.author === null ? undefined : pr.bot ? `${pr.author}[bot]` : pr.author
+    return sameLogin(login, maintainer) || sameLogin(login, IMPLEMENTER_BOT)
+  }
+  const same = (other: string) => other.toLowerCase() === repo.toLowerCase()
+  return new Set(closers.filter(trusted).flatMap((pr) => pr.closes.filter((c) => same(c.repo)).map((c) => c.number)))
+}
+
+// Whether an open PR closes ticket `issue`, or one of its sub-issues.
+export async function hasPr(repo: string, issue: number, closed: Set<number>): Promise<boolean> {
+  if (closed.has(issue)) return true
+  if (closed.size === 0) return false
+  return (await subIssues(repo, issue)).some((sub) => closed.has(sub.number))
+}
+
 // The deliveries that started work, per App: one record each, under
 // `<state root>/deliveries/<app>/<id>`, `{state, pr, token}` (or `issue` in
 // place of `pr`, for an issue lock). A call writes it `pending`, with its
@@ -321,6 +379,7 @@ type Event = {
   issue: number | null
   sender: string | undefined
   maintainer: () => Promise<string>
+  closed: (repo: string) => Promise<Set<number>>
 }
 
 function reviewerRule(e: Event): Promise<Outcome> | Outcome {
@@ -384,6 +443,8 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
   if (e.repo === null || e.issue === null) throw new Failure('the issues payload has no repository.full_name or issue.number', 1)
   if (!sameLogin(e.sender, await e.maintainer())) return why('sender')
   const maintainer = await e.maintainer()
+  // A build that paused goes on only through its answer (resume).
+  if ((await readPause({ kind: 'issue', number: e.issue }))?.repo === e.repo) return why('paused-run')
   const { parent, subIssues: count, labels } = await relations(e.repo, e.issue)
   if (!labels.includes(BUILD_LABEL)) return why('not-ready')
   if (parent) return why('has-parent')
@@ -393,6 +454,9 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
     const stranger = (await subIssues(e.repo, e.issue)).find((sub) => !sameLogin(sub.author ?? undefined, maintainer))
     if (stranger !== undefined) return why('author', stranger.number)
   }
+  // A build that opened its PR has released the issue lock, so the lock does
+  // not stop a later delivery of the same hand-off: the open PR does.
+  if (await hasPr(e.repo, e.issue, await e.closed(e.repo))) return why('has-pr')
   return {
     action: count > 0 ? 'build-spec' : 'build-ticket',
     lock: { kind: 'issue', number: e.issue },
@@ -442,19 +506,32 @@ function releaseFor(lock: Start['lock'], token: string): Promise<boolean> {
   return lock.kind === 'pr' ? releasePrLock(lock.number, token) : releaseIssueLock(lock.number, token)
 }
 
-// What a decision reads besides the delivery: the review config of a repo
-// and the maintainer's login. `route` reads them for each delivery; a sweep
+// What a decision reads besides the delivery: the review config of a repo,
+// the maintainer's login, and the issues of a repo that a trusted open PR
+// closes (closedByOpenPrs). `route` reads them for each delivery; a sweep
 // gives them once for all its items.
 export type Context = {
   config: (repo: string, branch: string | undefined) => Promise<ResolvedConfig | null>
   maintainer: () => Promise<string>
+  closed: (repo: string) => Promise<Set<number>>
 }
 
-// The context of one delivery: the config on the default branch, and the
-// maintainer, looked up once and only when a rule needs it.
+// The context of one delivery: the config on the default branch, the
+// maintainer and the closed issues, each looked up once and only when a rule
+// needs it.
 export function liveContext(): Context {
   let maintainer: Promise<string> | undefined
-  return { config: remoteConfig, maintainer: () => (maintainer ??= userIdentity().then((u) => u.login)) }
+  const closed = new Map<string, Promise<Set<number>>>()
+  const login = () => (maintainer ??= userIdentity().then((u) => u.login))
+  return {
+    config: remoteConfig,
+    maintainer: login,
+    closed: (repo) => {
+      let found = closed.get(repo)
+      if (found === undefined) closed.set(repo, (found = login().then((m) => closedByOpenPrs(repo, m))))
+      return found
+    },
+  }
 }
 
 // Decide one delivery for `app`, and for work take its lock, reserve the
@@ -542,6 +619,7 @@ async function decideBy(
     issue,
     sender: text(payload.sender?.login),
     maintainer: context.maintainer,
+    closed: context.closed,
   }
   const outcome = await rule(event)
   if ('ignore' in outcome) return outcome.issue === undefined ? decided('ignore', outcome.ignore) : decidedOn(outcome.issue, outcome.ignore)

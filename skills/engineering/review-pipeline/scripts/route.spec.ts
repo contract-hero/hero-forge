@@ -788,6 +788,46 @@ test('route --app implementer: the two deliveries of a triage hand-off start one
   }
 })
 
+// An open PR #50 by contract-implementer[bot] that closes #28, as the GraphQL list of open PRs gives it.
+const IMPLEMENTER_PR: FakeGhResponse = {
+  match: 'graphql',
+  stdout: `${JSON.stringify({ number: 50, author: 'contract-implementer', bot: true, closes: [{ number: 28, repo: REPO }] })}\n`,
+}
+
+test('route --app implementer: a hand-off delivery after its build released the lock is ignore (has-pr, paused-run), in either order', async (t) => {
+  for (const [first, second] of [
+    ['issues.unlabeled.json', 'issues.labeled.json'],
+    ['issues.labeled.json', 'issues.unlabeled.json'],
+  ] as const) {
+    // The build opened its draft PR and released the issue lock.
+    const r = await router(t, { review: implementerMd() })
+    assert.deepEqual(await decision(r.route(first, D1, 'implementer')), onIssue('build-ticket'))
+    await endRun(r, 'issue-28.lock')
+    await r.gh.respond([IMPLEMENTER_PR, ...responses({ review: implementerMd() })])
+    assert.deepEqual(await decision(r.route(second, D2, 'implementer')), onIssue('ignore', 'has-pr'))
+    // The build paused at a one-way door and released the issue lock.
+    const p = await router(t, { review: implementerMd() })
+    assert.deepEqual(await decision(p.route(first, D1, 'implementer')), onIssue('build-ticket'))
+    await endRun(p, 'issue-28.lock')
+    await seedPause(p, 'issue', 28)
+    assert.deepEqual(await decision(p.route(second, D2, 'implementer')), onIssue('ignore', 'paused-run'))
+    assert.deepEqual(JSON.parse(await readFile(join(p.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 1 })
+  }
+})
+
+test('route --app implementer: a build that ended with no PR and no pause leaves a later label free to start one more', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+  await endRun(r, 'issue-28.lock')
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D2, 'implementer')), onIssue('build-ticket'))
+})
+
+test('route --app implementer: an open PR by someone else that closes the ticket does not stop the build', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await r.gh.respond([{ ...IMPLEMENTER_PR, stdout: IMPLEMENTER_PR.stdout?.replace('"contract-implementer","bot":true', '"stranger","bot":false') }, ...responses({ review: implementerMd() })])
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+})
+
 test('route --app implementer: two labels at once on one ticket give one build and one attempt', async (t) => {
   const r = await router(t, { review: implementerMd() })
   const both = await Promise.all([r.route('issues.labeled.json', D1, 'implementer'), r.route('issues.labeled.json', D2, 'implementer')].map(decision))
@@ -835,12 +875,14 @@ test('route --app implementer: a stranger label costs no lookup, and the issue i
   await decision(r.route('issues.labeled.stranger.json', D2, 'implementer'))
   assert.deepEqual((await r.gh.calls()).slice(1).map((c) => c.argv[1]), ['-H', 'user'])
   await decision(r.route('issues.labeled.json', D3, 'implementer'))
+  // A build reads the open PRs last, for has-pr.
   assert.deepEqual(
-    (await r.gh.calls()).slice(3).map((c) => c.argv),
+    (await r.gh.calls()).slice(3).map((c) => (c.argv[1] === 'graphql' ? c.argv.slice(0, 2) : c.argv)),
     [
       ['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${REPO}/contents/docs/agents/review.md?ref=main`],
       ['api', 'user', '--jq', '.login'],
       ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'],
+      ['api', 'graphql'],
     ],
   )
 })
