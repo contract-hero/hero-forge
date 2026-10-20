@@ -27,7 +27,8 @@
 //     contract-implementer[bot] posted on an open PR: issue_comment.created
 //     (implementer for review-posted and recheck-failed, reviewer for
 //     adjudicated)                        reconcile-handoff-<N>-<comment id>
-//     A marker older than the PR's run state is an earlier run's: no item.
+//     A marker that the PR's run did not record (handoffs.json) for the
+//     round it is at is an earlier run's or an earlier round's: no item.
 //   - the newest comment by the maintainer on an open PR whose first line is
 //     exactly /recheck, newer than the last hand-off of contract-reviewer[bot]
 //     there: issue_comment.created (reviewer)
@@ -262,11 +263,17 @@ async function handoffItem(repo: string, pull: Pull, comments: Comment[], contex
   const fromApp = (c: Comment) => sameLogin(c.author ?? undefined, REVIEWER_BOT) || sameLogin(c.author ?? undefined, IMPLEMENTER_BOT)
   const last = comments.filter((c) => fromApp(c) && parseHandoff(c.body) !== null).at(-1)
   if (last === undefined) return null
-  // A marker posted before the PR's run began is an earlier run's: it hands
-  // off nothing of this run, whose lost hand-off is dueItem's. GitHub gives
-  // whole seconds, so the run counts from the second it began.
-  const run = (await stateOf(pull.number))?.created_at
-  if (run !== undefined && Date.parse(last.created_at) < pauseSecond(run)) return null
+  // A marker hands off the PR's run only when this run recorded it (its
+  // comment id, under its created_at) for the round the run is at. An earlier
+  // run's marker, or an earlier round's, hands off nothing: the run's lost
+  // hand-off is dueItem's. A record, not a time, because GitHub gives whole
+  // seconds.
+  const state = await stateOf(pull.number)
+  if (state !== null) {
+    const run = state.created_at
+    const round = parseHandoff(last.body)?.round
+    if (round !== state.round || !(await readPosted(pull.number)).some((p) => p.run === run && p.id === last.id && p.round === round)) return null
+  }
   // The marker's kind says whose turn it is.
   const app: AppName = parseHandoff(last.body)?.kind === 'adjudicated' ? 'reviewer' : 'implementer'
   const payload: Payload = {

@@ -291,9 +291,19 @@ async function seedRun(state: string, over: Record<string, unknown>, posted: Pos
   await writeFile(join(state, 'pr-42', 'handoffs.json'), `${JSON.stringify(posted)}\n`)
 }
 
+// The comment id of each kind's marker above, as handoffs.json records it.
+const markerId: Record<string, number> = { 'review-posted': reviewPosted.id, 'recheck-failed': recheckFailed.id, adjudicated: adjudicated.id }
+
+// The records of these markers, as this run posted them.
+const recorded = (...comments: Comment[]): Posted[] =>
+  comments.map((c) => {
+    const [, kind, round] = /kind=(\S+) pr=\d+ round=(\d+)/.exec(c.body) ?? []
+    return { run: RUN, kind: kind ?? '', round: Number(round), id: c.id }
+  })
+
 const atPhase = (phase: string, round = 1) => async (m: { state: string }) => {
   const kind = owes[phase]?.(round)
-  await seedRun(m.state, { phase, round }, kind === undefined ? [] : [{ run: RUN, kind, round, id: 3456000099 }])
+  await seedRun(m.state, { phase, round }, kind === undefined ? [] : [{ run: RUN, kind, round, id: markerId[kind] ?? 0 }])
 }
 
 // Each case: the test name, the comments on PR #42, the run phase, the App and
@@ -309,7 +319,9 @@ const missedHandoffs: [string, Comment[], string, string, string, Partial<Decisi
 for (const [name, comments, phase, app, fixture, outcome] of missedHandoffs) {
   test(`reconcile: ${name} at phase ${phase} is the decision route gives ${fixture}`, async (t) => {
     const m = await machine(t, handoffs(...comments))
-    await atPhase(phase)(m)
+    // The run is at the round of its newest marker, which it recorded with the others.
+    const records = recorded(...comments)
+    await seedRun(m.state, { phase, round: records.at(-1)?.round ?? 1 }, records)
     const expected = await routed(t, {}, app, fixture, atPhase(phase))
     assert.deepEqual(expected, { repo: REPO, pr: 42, issue: null, app, ...outcome })
     assert.deepEqual(await swept(m.reconcile()), [expected])
@@ -616,7 +628,7 @@ const recheck = (id: number, at: string, body = '/recheck'): Comment => ({ id, a
 test('reconcile: a missed /recheck on a maintainer PR at adjudicated is the recheck route gives', async (t) => {
   const github = ownPr(reviewPosted, recheck(3456000004, '2026-10-19T12:00:00Z'))
   const m = await machine(t, github)
-  await atPhase('adjudicated')(m)
+  await seedRun(m.state, { phase: 'adjudicated' }, recorded(reviewPosted))
   const expected = await routed(t, {}, 'reviewer', 'issue_comment.created.recheck.json', atPhase('adjudicated'))
   assert.deepEqual(expected, { action: 'recheck', repo: REPO, pr: 42, issue: null, reason: null, app: 'reviewer' })
   const lines = await swept(m.reconcile())
@@ -634,7 +646,7 @@ test('reconcile: only a /recheck newer than the last review hand-off counts, and
       { ...recheck(3456000006, '2026-10-19T11:30:00Z'), author: 'mallory' },
     ),
   )
-  await atPhase('adjudicated')(m)
+  await seedRun(m.state, { phase: 'adjudicated' }, recorded(reviewPosted))
   assert.deepEqual(await swept(m.reconcile()), [line('ignore', 'implementer', { pr: 42 }, 'author')])
 })
 
@@ -642,7 +654,7 @@ test('reconcile: only a /recheck newer than the last review hand-off counts, and
 
 // The bot's PR #42 with the markers of the hand-offs that did land.
 const landed = (...comments: Comment[]): GitHub => handoffs(...comments)
-const posted = (kind: string, round = 1, run = RUN): Posted => ({ run, kind, round, id: 3456000090 + round })
+const posted = (kind: string, round = 1, run = RUN): Posted => ({ run, kind, round, id: markerId[kind] ?? 0 })
 
 // Each case: the test name, the run, the hand-offs it posted (comments and
 // records), the marker item's ignore (the newest marker is for an earlier
@@ -662,7 +674,8 @@ const lostHandoffs: [string, { phase: string; round: number }, Comment[], Posted
     { phase: 'review-posted', round: 2 },
     [reviewPosted, adjudicated],
     [posted('review-posted'), posted('adjudicated')],
-    [line('ignore', 'reviewer', { pr: 42 }, 'phase')],
+    // The newest marker is round 1's: it hands off nothing of round 2.
+    [],
     line('recheck', 'reviewer', { pr: 42 }),
   ],
 ]
@@ -754,4 +767,17 @@ test('reconcile: a hand-off marker of an earlier run does not hand off the run a
   const m = await machine(t, landed(reviewPosted))
   await seedRun(m.state, { phase: 'review-posted', created_at: '2026-10-19T10:30:00.000Z' }, [posted('review-posted')])
   assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+})
+
+test('reconcile: a marker of an earlier run posted in the second this run began does not hand off this run', async (t) => {
+  const m = await machine(t, landed({ ...reviewPosted, created_at: '2026-10-19T10:30:00Z' }))
+  await seedRun(m.state, { phase: 'review-posted', created_at: '2026-10-19T10:30:00.900Z' }, [posted('review-posted', 1, '2026-10-19T09:00:00.000Z')])
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+})
+
+test('reconcile: a marker of an earlier round of this run does not hand off the round the run is at', async (t) => {
+  // Round 2 lost its recheck-failed hand-off, and round 1's review-posted marker is the newest on the PR.
+  const m = await machine(t, landed(reviewPosted))
+  await seedRun(m.state, { phase: 'review-posted', round: 2 }, [posted('review-posted'), posted('adjudicated')])
+  assert.deepEqual(await swept(m.reconcile()), [line('recheck', 'reviewer', { pr: 42 })])
 })
