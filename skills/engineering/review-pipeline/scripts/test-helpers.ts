@@ -245,7 +245,9 @@ export async function appKey(dir: string, name = 'reviewer-app.pem'): Promise<{ 
 // `raw`: send this exact text as the body in place of JSON.stringify(body), for
 // JSON a JS value cannot hold (an integer above 2^53).
 // `drop` closes the connection with no answer: a network error for the client.
-export type FakeApiRoute = { status: number; body: unknown; headers?: Record<string, string>; raw?: string; drop?: boolean }
+// `dropBody` sends the status and headers, then closes the connection halfway
+// through the body.
+export type FakeApiRoute = { status: number; body: unknown; headers?: Record<string, string>; raw?: string; drop?: boolean; dropBody?: boolean }
 
 export type FakeApiRequest = {
   method: string
@@ -316,6 +318,11 @@ export async function fakeGitHubApi(
         : (routes[`${method} ${path}`] ?? { status: 404, body: { message: 'Not Found' } })
       void (onRequest?.(request) ?? Promise.resolve()).then(() => {
         if (route.drop === true) return void req.socket.destroy()
+        if (route.dropBody === true) {
+          const text = route.raw ?? JSON.stringify(route.body)
+          res.writeHead(route.status, { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(text)), ...route.headers })
+          return void res.write(text.slice(0, Math.floor(text.length / 2)), () => req.socket.destroy())
+        }
         res.writeHead(route.status, { 'content-type': 'application/json', ...route.headers })
         res.end(route.raw ?? JSON.stringify(route.body))
       })

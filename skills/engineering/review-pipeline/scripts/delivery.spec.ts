@@ -445,3 +445,39 @@ test('a detail read that loses its connection on every try exits 1, not a creden
   assert.equal(s.api.requests.filter((r) => r.path === '/app/hook/deliveries/902').length, 5)
   await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
 })
+
+test('a detail read that loses its connection after the headers is retried, and the payload is written', async (t) => {
+  let reads = 0
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      [DETAIL]: { status: 200, body: detail(902, GUID, PAYLOAD), dropBody: true },
+    },
+    onRequest: async (request, routes) => {
+      if (request.path === '/app/hook/deliveries/902' && ++reads === 1) {
+        routes[DETAIL] = { status: 200, body: detail(902, GUID, PAYLOAD) }
+      }
+    },
+  })
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(await readFile(s.out, 'utf8')), PAYLOAD)
+  assert.equal(s.api.requests.filter((r) => r.path === '/app/hook/deliveries/902').length, 2)
+})
+
+test('a detail read that loses its connection after the headers on every try exits 1, not a missing payload', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      [DETAIL]: { status: 200, body: detail(902, GUID, PAYLOAD), dropBody: true },
+    },
+  })
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, new RegExp(`^review\\.ts delivery: GitHub failed to read delivery ${GUID} \\(id 902\\): lost the connection to the GitHub API at http://127\\.0\\.0\\.1:\\d+ while reading the answer \\(.+\\) on all 5 tries\\. Try again later\\.\\n$`))
+  assert.doesNotMatch(stderr, /credentials|no JSON payload/)
+  assert.equal(s.api.requests.filter((r) => r.path === '/app/hook/deliveries/902').length, 5)
+  await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
+})
