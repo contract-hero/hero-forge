@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.18
+
+- `setup-forge`: the router and reconcile prompt templates launch each worker thread with `modelSelection` `{instanceId: "claudeAgent", model: "<<worker_model>>"}`. A worker runs Claude Code plugin commands, so it must not take the model of the router or reconcile thread. Step 6 fills `<<worker_model>>` with the Claude model of the setup thread, or else the newest Claude Opus model in the `orchestrator_capabilities` catalog, and says that a small model is enough for the tasks. A re-run of step 6 updates the prompts of the live tasks in place.
+
 ## 1.0.17
 
 - `review-pipeline`: `review.ts delivery` tries the detail read of a delivery again on a 5xx or a network error, with the same tries and delay as the list read. GitHub can answer the detail read with a 5xx for a few seconds after it sends a delivery, and the router stopped at once with a message that blamed the App credentials. A 5xx or a network error on every try now exits 1 with a message that names the HTTP status or the network error. Another 4xx still exits 4.
