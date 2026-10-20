@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.19
+
+- `setup-forge`: the launch table of the router and reconcile prompt templates has a `worker model` column. `review` and `recheck` workers run on `<<light_worker_model>>`, which step 6 fills with the newest Claude Sonnet model in the `orchestrator_capabilities` catalog: Codex runs the reviewers and the re-checker, and the worker only keeps the run state, posts and hands off. Every other action keeps `<<worker_model>>`, because it writes code or judges findings. The launch step passes the model of the row in `modelSelection`. A re-run of step 6 updates the prompts of the live tasks in place.
+
 ## 1.0.18
 
 - `setup-forge`: the router and reconcile prompt templates launch each worker thread with `modelSelection` `{instanceId: "claudeAgent", model: "<<worker_model>>"}`. A worker runs Claude Code plugin commands, so it must not take the model of the router or reconcile thread. Step 6 fills `<<worker_model>>` with the Claude model of the setup thread, or else the newest Claude Opus model in the `orchestrator_capabilities` catalog, and says that a small model is enough for the tasks. A re-run of step 6 updates the prompts of the live tasks in place.
