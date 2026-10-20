@@ -24,7 +24,7 @@ type Side = { version: string; entries: [string, string][]; skills?: string[]; f
 // main and feature/x start from one commit at 1.0.19. Then the PR and main
 // each make their own commit, and both are pushed to origin. The run state
 // is at `phase` with a passing gate at the PR head.
-async function repo(t: Parameters<typeof tempDir>[0], pr: Side, main: Side, phase = 'explained', app = false) {
+async function repo(t: Parameters<typeof tempDir>[0], pr: Side, main: Side, phase = 'explained', app = true) {
   const root = await tempDir(t)
   const dir = join(root, 'work')
   const origin = join(root, 'origin.git')
@@ -191,6 +191,22 @@ test('prepare refuses a PR that edits an older CHANGELOG entry', async (t) => {
   const { code, stderr } = await s.prepare()
   assert.equal(code, 1)
   assert.match(stderr, /the PR's change to CHANGELOG\.md is not one new entry at the top/)
+})
+
+test('prepare and record refuse a run without the reviewer App and change nothing', async (t) => {
+  const s = await repo(t, PR, MAIN, 'explained', false)
+  const prepared = await s.prepare()
+  assert.equal(prepared.code, 1)
+  assert.match(prepared.stderr, /has no reviewer App .*: resolve-base needs the App to approve the new head/)
+  assert.equal(await s.git('rev-parse', 'HEAD'), s.head)
+  await s.atGitHub(s.head)
+  const recorded = await s.record(s.head)
+  assert.equal(recorded.code, 1)
+  assert.match(recorded.stderr, /has no reviewer App/)
+  const state = await s.state()
+  assert.equal(state.head_sha, s.head)
+  assert.equal(state.phase, 'explained')
+  assert.equal(state.gates.length, 1)
 })
 
 test('prepare refuses a run that is not in Finish yet', async (t) => {

@@ -244,6 +244,12 @@ async function stateFor(args: Args): Promise<State> {
   const state = await loadState(args.pr)
   refuse(state.repo === args.repo, `the run state for PR #${args.pr} is for ${state.repo}, not ${args.repo}`)
   refuse(state.mode === 'single', `the run for PR #${args.pr} is in ${state.mode} mode: the stack lands its layers, resolve-base does not`)
+  // Without the reviewer App no one approves the new head, so the merge would
+  // land a commit no approval covers.
+  refuse(
+    usesApp(state),
+    `the run for PR #${args.pr} has no reviewer App (reviewer_login ${state.reviewer_login}): resolve-base needs the App to approve the new head`,
+  )
   return state
 }
 
