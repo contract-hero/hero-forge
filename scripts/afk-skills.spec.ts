@@ -118,9 +118,10 @@ test('implement-spec-stack holds its own pause and resume protocol, and resumes 
 // the run leaves nothing for the maintainer, marked unread when it needs them.
 const THREAD = /t3_thread_organize|`settle`|`mark_unread`|settle the thread|mark the thread unread/
 
-// Each needle names the thread rule: the tool, both actions, the skip.
+// Each needle names the thread rule: the tool, both actions, the late
+// notification turn (a queued notification keeps a settled thread active), the skip.
 function threadRule(text: string): void {
-  inOrder(text, ['`t3_thread_organize` with no `threadId`', 'action `settle`', 'action `mark_unread`', 'A session with no `t3_thread_organize` tool skips this step'])
+  inOrder(text, ['`t3_thread_organize` with no `threadId`', 'action `settle`', 'action `mark_unread`', 'Settling takes effect when the turn ends', 'A turn that starts only because a background job or a subagent reported', 'does the thread step again, with the same action, and ends', 'A session with no `t3_thread_organize` tool skips this step'])
   assert.match(text, /A run without `--afk` never settles, archives or marks its thread/)
 }
 

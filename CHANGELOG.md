@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.23
+
+- `implement-pr`, `implement-spec-stack`, `review-pipeline`: an AFK thread leaves the active T3 list also when a background notification starts one more turn after the thread step. A queued message keeps a thread active, so the settle of the earlier turn was lost, and the late turn ended with no action. The thread step now says that a turn that starts only because a background job or a subagent reported, after the run (or part) already did its thread step, does nothing else: it does the thread step again, with the same action, and ends.
+
 ## 1.0.22
 
 - `review-pipeline`: **Finish** resolves a merge conflict that only the version bump and the CHANGELOG entry cause, and the PR merges with no maintainer step. New `review.ts resolve-base prepare` merges the base branch into the PR head, sets the version to the next patch above the base branch's version, keeps every CHANGELOG entry of the base branch, and puts the PR's entry on top under the new version. A conflict in any other file still stops the run. After the tests pass, the run pushes as the PR author (the Implementer App on its own PR; an AFK part never pushes as the user). Then `review.ts resolve-base record` re-checks the pushed merge: its tree must be exactly the merge that `prepare` computes from its parents. It posts the gate status, records a gate pass at the new head, and moves the run back to `ready`, so the reviewer App approves the new head before the merge. Without the reviewer App, `resolve-base` refuses and the run stops, because no approval would cover the new head.
