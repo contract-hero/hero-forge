@@ -249,18 +249,27 @@ Find both once, before 6.2, and fill the same values in both templates.
 
 **Each run's worktree.** T3 starts each run of a router or reconcile task in a new worktree of the project. `schedule_task` and `update_scheduled_task` cannot set a task's workspace, and `list_scheduled_tasks` does not show it, so each run removes its own worktree as its last shell command: the step of the template before the thread step. A run edits nothing in its worktree, and runs its commands in the project's `workspaceRoot`. The worker threads it launches keep their worktrees. The live tasks get this step when 6.2 and 6.4 update their prompts.
 
-**Worktrees earlier runs left.** A router or reconcile task made before this step left one worktree per run under T3's worktree folder of the project, and one branch each. When `git -C <workspaceRoot> worktree list` shows such worktrees, ask whether to remove them now (recommended) or not now. A leftover worktree and the worktree of a worker that has not committed yet look the same, so run this only while no AFK run is in flight. It removes a worktree only when it has no change and no commit that the default branch lacks, and never the worktree this thread runs in:
+**Worktrees earlier runs left.** A router or reconcile task made before this step left one worktree per run in T3's worktree folder of the project, and one branch each. The folder is the parent of the paths that `t3_worktree_list` gives for the project (for example `~/.t3/worktrees/<project>`). When `git -C <workspaceRoot> worktree list` shows such worktrees, ask whether to look for them now (recommended) or not now. A leftover worktree and the worktree of a T3 thread that has not committed yet look the same, so run this only while no AFK run is in flight, and remove only the worktrees the user approves. First list the candidates into `<list file>`, a new file outside the repo. A candidate is in T3's worktree folder, is not the worktree this thread runs in, and has no change and no commit that the default branch lacks. A worktree outside that folder is never a candidate:
 
 ```sh
-root=<workspaceRoot>; base=origin/<default branch>; self=$(git rev-parse --show-toplevel)
+root=<workspaceRoot>; t3dir=<T3 worktree folder>; base=origin/<default branch>; self=$(git rev-parse --show-toplevel)
 git -C "$root" fetch -q origin
 git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p' | while read -r wt; do
-  [ "$wt" = "$root" ] || [ "$wt" = "$self" ] && continue
+  case "$wt" in "$t3dir"/*) ;; *) continue ;; esac
+  [ "$wt" = "$self" ] && continue
   [ -z "$(git -C "$wt" status --porcelain)" ] || continue
   git -C "$wt" merge-base --is-ancestor HEAD "$base" || continue
-  branch=$(git -C "$wt" branch --show-current)
+  printf '%s\t%s\n' "$wt" "$(git -C "$wt" branch --show-current)"
+done > <list file>
+```
+
+Show the user every line of `<list file>`: the worktree and its branch. Ask them to approve the list, or to name the lines to keep. Take each line they keep out of the file. Then remove the rest:
+
+```sh
+root=<workspaceRoot>
+while IFS=$'\t' read -r wt branch; do
   git -C "$root" worktree remove "$wt" && { [ -z "$branch" ] || git -C "$root" branch -D "$branch"; }
-done
+done < <list file>
 git -C "$root" worktree prune
 ```
 

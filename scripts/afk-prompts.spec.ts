@@ -3,7 +3,9 @@
 // existing task up to the current template.
 //   node --test scripts/afk-prompts.spec.ts
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -82,8 +84,64 @@ test('setup-forge step 6 says each router and reconcile run removes its own work
   assert.match(SKILL, /`schedule_task` and `update_scheduled_task` cannot set a task's workspace, and `list_scheduled_tasks` does not show it/)
   assert.match(SKILL, /so each run removes its own worktree as its last shell command/)
   assert.match(SKILL, /\*\*Worktrees earlier runs left\.\*\*/)
-  assert.match(SKILL, /only while no AFK run is in flight/)
-  assert.match(SKILL, /never the worktree this thread runs in/)
+  assert.match(SKILL, /only while no AFK run is in flight, and remove only the worktrees the user approves/)
+  assert.match(SKILL, /is not the worktree this thread runs in/)
+  assert.match(SKILL, /A worktree outside that folder is never a candidate/)
+  assert.match(SKILL, /Show the user every line of `<list file>`: the worktree and its branch\. Ask them to approve the list/)
+})
+
+// The two shell blocks of "Worktrees earlier runs left": the list, then the removal.
+function cleanupBlocks(): [string, string] {
+  const start = SKILL.indexOf('**Worktrees earlier runs left.**')
+  const end = SKILL.indexOf('**6.1 ', start)
+  const blocks = [...SKILL.slice(start, end).matchAll(/```sh\n([\s\S]*?)```/g)].map((m) => m[1])
+  assert.equal(blocks.length, 2, 'not exactly two shell blocks')
+  return [blocks[0], blocks[1]]
+}
+
+test('the cleanup of earlier worktrees lists only clean, merged T3 worktrees, and removes only the approved lines', () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'afk-cleanup-')))
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim()
+  try {
+    const origin = join(tmp, 'origin.git')
+    const root = join(tmp, 'root')
+    const t3dir = join(tmp, 't3')
+    git(tmp, 'init', '-q', '--bare', '-b', 'main', origin)
+    git(tmp, 'clone', '-q', origin, root)
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+    git(root, 'push', '-q', 'origin', 'main')
+    mkdirSync(t3dir)
+    const add = (path: string, branch: string) => git(root, 'worktree', 'add', '-q', '-b', branch, path, 'origin/main')
+    add(join(t3dir, 'leftover'), 'chore/route-1')
+    add(join(t3dir, 'kept-by-user'), 'chore/route-2')
+    add(join(t3dir, 'dirty'), 'chore/dirty')
+    writeFileSync(join(t3dir, 'dirty', 'new.txt'), 'x')
+    add(join(t3dir, 'ahead'), 'feat/ahead')
+    git(join(t3dir, 'ahead'), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'ahead')
+    add(join(t3dir, 'self'), 'chore/self')
+    add(join(tmp, 'manual'), 'manual')
+
+    const list = join(tmp, 'list.tsv')
+    const fill = (block: string) => block
+      .replaceAll('<workspaceRoot>', root)
+      .replaceAll('<T3 worktree folder>', t3dir)
+      .replaceAll('<default branch>', 'main')
+      .replaceAll('<list file>', list)
+    const [listBlock, removeBlock] = cleanupBlocks()
+    execFileSync('bash', ['-c', fill(listBlock)], { cwd: join(t3dir, 'self'), stdio: 'pipe' })
+    const lines = readFileSync(list, 'utf8').trim().split('\n').sort()
+    assert.deepEqual(lines, [`${join(t3dir, 'kept-by-user')}\tchore/route-2`, `${join(t3dir, 'leftover')}\tchore/route-1`])
+
+    // The user keeps one line: it leaves the file before the removal.
+    writeFileSync(list, `${join(t3dir, 'leftover')}\tchore/route-1\n`)
+    execFileSync('bash', ['-c', fill(removeBlock)], { cwd: join(t3dir, 'self'), stdio: 'pipe' })
+    const left = git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9)).sort()
+    assert.deepEqual(left, [root, join(t3dir, 'ahead'), join(t3dir, 'dirty'), join(t3dir, 'kept-by-user'), join(t3dir, 'self'), join(tmp, 'manual')].sort())
+    assert.equal(git(root, 'branch', '--list', 'chore/route-1'), '')
+    assert.notEqual(git(root, 'branch', '--list', 'chore/route-2'), '')
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
 })
 
 test('setup-forge 6.2 and 6.4 update an existing task\'s prompt in place, and nothing else of it', () => {

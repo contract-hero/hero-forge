@@ -2,7 +2,7 @@
 
 ## 1.0.21
 
-- `setup-forge`: the router and reconcile prompt templates remove their own T3 worktree on every exit, as the last shell command before the thread step: `t3_worktree_status` gives the path, the branch and the project root, then `git worktree remove --force` and `git branch -D`. T3 starts each run of an unbound task in a new worktree, and the MCP task API cannot set a task's workspace, so one ticket left about 40 worktrees. A run edits nothing in its worktree. Step 6 states this and, while no AFK run is in flight, offers to remove the worktrees that earlier runs left: each one with no change and no commit that the default branch lacks, never the worktree of the setup thread. A re-run of step 6 updates the prompts of the live tasks in place.
+- `setup-forge`: the router and reconcile prompt templates remove their own T3 worktree on every exit, as the last shell command before the thread step: `t3_worktree_status` gives the path, the branch and the project root, then `git worktree remove --force` and `git branch -D`. T3 starts each run of an unbound task in a new worktree, and the MCP task API cannot set a task's workspace, so one ticket left about 40 worktrees. A run edits nothing in its worktree. Step 6 states this and, while no AFK run is in flight, offers to remove the worktrees that earlier runs left. It lists the candidates first: each one in T3's worktree folder of the project, with no change and no commit that the default branch lacks, never the worktree of the setup thread. It removes only the lines the user approves, and never a worktree outside that folder. `scripts/afk-prompts.spec.ts` runs both shell blocks against a Git fixture. A re-run of step 6 updates the prompts of the live tasks in place.
 
 ## 1.0.20
 
