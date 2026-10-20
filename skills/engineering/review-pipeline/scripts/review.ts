@@ -18,6 +18,7 @@ import { main as pause } from './pause.ts'
 import { main as postReview } from './post-review.ts'
 import { main as reconcile } from './reconcile.ts'
 import { main as reply } from './reply.ts'
+import { main as resolveBase } from './resolve-base.ts'
 import { main as route } from './route.ts'
 import { main as runState } from './run-state.ts'
 import { main as stack } from './stack.ts'
@@ -38,6 +39,7 @@ const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
   'merge-gate': mergeGate,
   merge,
   explainer,
+  'resolve-base': resolveBase,
   stack,
   route,
   reconcile,

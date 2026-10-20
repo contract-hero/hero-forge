@@ -106,6 +106,13 @@ export const COMMANDS = {
     summary: 'Run the merge gate again and, on go, squash-merge the re-checked head.',
     usage: 'usage: review.ts merge --repo O/R --pr N [--config <path>]',
   },
+  'resolve-base': {
+    summary: 'Merge the base branch into the PR when only the version file and CHANGELOG.md conflict, then re-check the pushed merge.',
+    usage: `usage:
+  review.ts resolve-base prepare --repo O/R --pr N    (in the worktree at the run's head: merge, resolve, move the branch)
+  review.ts resolve-base record  --repo O/R --pr N --commit <sha> [--config <path>]    (after the push: re-check, gate pass, phase ready)
+  Any other conflict, or a version or CHANGELOG change it cannot read, exits 1 with nothing changed.`,
+  },
   explainer: {
     summary: 'Record the explainer path in the run state and link it from the PR in one comment.',
     usage: 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>',

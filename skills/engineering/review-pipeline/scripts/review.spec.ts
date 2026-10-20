@@ -22,6 +22,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['merge-gate', 'usage: review.ts merge-gate --repo O/R --pr N [--config <path>]'],
   ['merge', 'usage: review.ts merge --repo O/R --pr N [--config <path>]'],
   ['explainer', 'usage: review.ts explainer --repo O/R --pr N --file <absolute path to explainer.html>'],
+  ['resolve-base', '  review.ts resolve-base prepare --repo O/R --pr N    (in the worktree at the run\'s head: merge, resolve, move the branch)'],
   ['stack', '  review.ts stack order       --repo O/R --spec N'],
   ['route', 'usage: review.ts route --app reviewer|implementer --event <X-GitHub-Event> --delivery <X-GitHub-Delivery> --payload <file>'],
   ['reconcile', 'usage: review.ts reconcile --repo O/R   (in a checkout of the repo, as route)'],
@@ -29,7 +30,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['app-check', 'usage: review.ts app-check --app reviewer|implementer --repo O/R [--webhook-url <url>]'],
 ]
 
-const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'], lock: ['release'], pause: ['write'] }
+const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'], lock: ['release'], pause: ['write'], 'resolve-base': ['prepare'] }
 
 for (const [name, line] of SUBCOMMANDS) {
   test(`${name} --help prints a summary and the usage to stdout, and exits 0`, async () => {
