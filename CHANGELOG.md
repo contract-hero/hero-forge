@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.17
+
+- `review-pipeline`: `review.ts delivery` tries the detail read of a delivery again on a 5xx or a network error, with the same tries and delay as the list read. GitHub can answer the detail read with a 5xx for a few seconds after it sends a delivery, and the router stopped at once with a message that blamed the App credentials. A 5xx or a network error on every try now exits 1 with a message that names the HTTP status or the network error. Another 4xx still exits 4.
+
 ## 1.0.16
 
 - `setup-forge`: the router and reconcile prompt templates settle their own T3 thread on a clean exit, in place of archiving it. Archiving the calling thread takes effect at once and cuts the turn, so the run failed before it wrote its line; settling takes effect when the turn ends. A `stop: ...` line or a failed launch still marks the thread unread.
