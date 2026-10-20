@@ -85,7 +85,7 @@ import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
 import { resolveConfigText, type ResolvedConfig } from './config.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
 import { parseHandoff, type HandoffKind } from './handoff.ts'
-import { issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, whileHolding } from './lock.ts'
+import { issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, underPrLockGuard, whileHolding } from './lock.ts'
 import { readPause } from './pause.ts'
 import { loadState, stateRoot, TERMINAL, type Phase } from './run-state.ts'
 
@@ -265,6 +265,16 @@ async function recordDelivery(
   }
 }
 
+// The record of `delivery` for `app`, or null when there is none or it
+// cannot be read.
+async function deliveryRecord(app: AppName, delivery: string): Promise<{ state?: unknown; token?: unknown } | null> {
+  try {
+    return JSON.parse(await readFile(deliveryFile(app, delivery), 'utf8')) as { state?: unknown; token?: unknown }
+  } catch {
+    return null
+  }
+}
+
 async function forgetDelivery(app: AppName, delivery: string): Promise<void> {
   await rm(deliveryFile(app, delivery), { force: true })
 }
@@ -435,13 +445,54 @@ export function liveContext(): Context {
 // this file say. `before` is a caller's own ignore reason, asked after the
 // rules for both Apps (paused, duplicate) and before the App's rules; route
 // gives none.
-export async function decide(
+export function decide(
   app: AppName,
   name: string,
   delivery: string,
   payload: Payload,
   context: Context,
   before?: () => Promise<string | null>,
+): Promise<Decision> {
+  return decideBy(app, name, delivery, payload, context, before, (e) => (app === 'reviewer' ? reviewerRule(e) : implementerRule(e)))
+}
+
+// The parts that a lost hand-off starts again (reconcile.ts finds them).
+export type RelaunchAction = 'review' | 'adjudicate' | 'recheck'
+
+// Decide the relaunch of part `action` of the AFK run on PR `pr`, for `app`,
+// whose hand-off reconcile found due. GitHub sent no event for it, so its one
+// rule is the App's switch (the part posts the hand-off as that App):
+// no app: enabled, or no implementer.app: enabled, is ignore, disabled. The
+// rules for both Apps come first, and the lock and the cap after, as decide.
+// A relaunch is a duplicate only while the part it started holds its lock:
+// a part that released the lock (or let it expire) with the hand-off still
+// lost is started again, so its done record is forgotten first. The record
+// is read and forgotten under the PR lock's guard: a relaunch writes its new
+// record only after it takes the lock, so an overlapping sweep sees either
+// no record or one whose token holds the lock, and never forgets it.
+export async function relaunch(app: AppName, action: RelaunchAction, delivery: string, repo: string, pr: number, context: Context): Promise<Decision> {
+  await underPrLockGuard(pr, async (holds) => {
+    const started = await deliveryRecord(app, delivery)
+    if (started?.state === 'done' && !(typeof started.token === 'string' && (await holds(started.token)))) {
+      await forgetDelivery(app, delivery)
+    }
+  })
+  const payload: Payload = { repository: { full_name: repo }, pull_request: { number: pr } }
+  return decideBy(app, 'relaunch', delivery, payload, context, undefined, (e) => {
+    if (e.config === null) return why('no-config')
+    if (!(app === 'reviewer' ? e.config.app : e.config.implementer.app)) return why('disabled')
+    return { action, lock: { kind: 'pr', number: pr } }
+  })
+}
+
+async function decideBy(
+  app: AppName,
+  name: string,
+  delivery: string,
+  payload: Payload,
+  context: Context,
+  before: (() => Promise<string | null>) | undefined,
+  rule: (e: Event) => Promise<Outcome> | Outcome,
 ): Promise<Decision> {
   const full = payload.repository?.full_name
   const repo = isRepo(full) ? full : null
@@ -475,7 +526,7 @@ export async function decide(
     sender: text(payload.sender?.login),
     maintainer: context.maintainer,
   }
-  const outcome = await (app === 'reviewer' ? reviewerRule(event) : implementerRule(event))
+  const outcome = await rule(event)
   if ('ignore' in outcome) return outcome.issue === undefined ? decided('ignore', outcome.ignore) : decidedOn(outcome.issue, outcome.ignore)
   // Every rule that starts work has checked the config is there.
   if (config === null || repo === null) throw new Failure('no config for a decision that starts work', 1)

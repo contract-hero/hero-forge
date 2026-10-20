@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.20
+
+- `review-pipeline`: `review.ts reconcile` recovers a hand-off lost between `advance` and the post. An AFK part that died after `run-state advance` and before its hand-off marker landed left a run that nothing started again. The sweep now finds a run on a `contract-implementer[bot]` PR, at the PR head, whose phase owes a hand-off that `<run dir>/handoffs.json` does not record for this run and round (`review-posted` in round 1, `adjudicated`, `recheck-failed` in round 2 or later). With no lock held, it starts the matching part again (`review`, `adjudicate` or `recheck`), which only posts the hand-off. A zero-finding round owes none. A relaunched part that gave up its lock (released or expired) before its hand-off landed starts again on the next sweep. A hand-off marker starts something only when this run recorded it in `handoffs.json` for the round the run is at: a marker of an earlier run, or of an earlier round, starts nothing.
+
 ## 1.0.19
 
 - `setup-forge`: the launch table of the router and reconcile prompt templates has a `worker model` column. `review` and `recheck` workers run on `<<light_worker_model>>`, which step 6 fills with the newest Claude Sonnet model in the `orchestrator_capabilities` catalog: Codex runs the reviewers and the re-checker, and the worker only keeps the run state, posts and hands off. Every other action keeps `<<worker_model>>`, because it writes code or judges findings. The launch step passes the model of the row in `modelSelection`. A re-run of step 6 updates the prompts of the live tasks in place.
