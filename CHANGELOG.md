@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.20
+
+- `review-pipeline`: **Finish** resolves a merge conflict that only the version bump and the CHANGELOG entry cause, and the PR merges with no maintainer step. New `review.ts resolve-base prepare` merges the base branch into the PR head, sets the version to the next patch above the base branch's version, keeps every CHANGELOG entry of the base branch, and puts the PR's entry on top under the new version. A conflict in any other file still stops the run. After the tests pass, the run pushes as the PR author (the Implementer App on its own PR; an AFK part never pushes as the user). Then `review.ts resolve-base record` re-checks the pushed merge: its tree must be exactly the merge that `prepare` computes from its parents. It posts the gate status, records a gate pass at the new head, and moves the run back to `ready`, so the reviewer App approves the new head before the merge.
+
 ## 1.0.19
 
 - `setup-forge`: the launch table of the router and reconcile prompt templates has a `worker model` column. `review` and `recheck` workers run on `<<light_worker_model>>`, which step 6 fills with the newest Claude Sonnet model in the `orchestrator_capabilities` catalog: Codex runs the reviewers and the re-checker, and the worker only keeps the run state, posts and hands off. Every other action keeps `<<worker_model>>`, because it writes code or judges findings. The launch step passes the model of the row in `modelSelection`. A re-run of step 6 updates the prompts of the live tasks in place.
