@@ -23,8 +23,11 @@ type Side = { version: string; entries: [string, string][]; skills?: string[]; f
 
 // main and feature/x start from one commit at 1.0.19. Then the PR and main
 // each make their own commit, and both are pushed to origin. The run state
-// is at `phase` with a passing gate at the PR head.
-async function repo(t: Parameters<typeof tempDir>[0], pr: Side, main: Side, phase = 'explained', app = true) {
+// is at `phase` with a passing gate at the PR head. `versionFile` is where the
+// one version lives, and `mode` is the run's mode.
+type Options = { versionFile?: string; mode?: string }
+async function repo(t: Parameters<typeof tempDir>[0], pr: Side, main: Side, phase = 'explained', app = true, options: Options = {}) {
+  const versionFile = options.versionFile ?? '.claude-plugin/plugin.json'
   const root = await tempDir(t)
   const dir = join(root, 'work')
   const origin = join(root, 'origin.git')
@@ -51,7 +54,7 @@ async function repo(t: Parameters<typeof tempDir>[0], pr: Side, main: Side, phas
   }
   const write = (name: string, text: string) => writeFile(join(dir, name), text)
   const commit = async (side: Side, message: string) => {
-    await write('.claude-plugin/plugin.json', manifest(side.version, side.skills))
+    await write(versionFile, manifest(side.version, side.skills))
     await write('CHANGELOG.md', changelog(...side.entries))
     for (const [name, text] of Object.entries(side.files ?? {})) await write(name, text)
     await git('add', '.')
@@ -76,6 +79,7 @@ async function repo(t: Parameters<typeof tempDir>[0], pr: Side, main: Side, phas
     head_ref: 'feature/x',
     head_sha: head,
     phase,
+    mode: options.mode ?? 'single',
     reviewer_login: app ? BOT : 'none',
     gates: [{ round: 1, commit: head, result: 'pass' }],
   })
@@ -86,7 +90,7 @@ async function repo(t: Parameters<typeof tempDir>[0], pr: Side, main: Side, phas
   const record = (sha: string) => cli('resolve-base', 'record', '--repo', REPO, '--pr', '13', '--commit', sha, '--config', config)
   const atGitHub = (sha: string) => gh.respond([{ match: 'pr view 13', stdout: JSON.stringify({ headRefOid: sha }) }])
   const state = async () => JSON.parse(await readFile(join(stateDir, 'pr-13', 'state.json'), 'utf8'))
-  return { dir, git, write, head, prepare, record, atGitHub, state, gh }
+  return { dir, git, write, head, prepare, record, atGitHub, state, gh, versionFile }
 }
 
 const PR: Side = {
@@ -338,4 +342,42 @@ test('record keeps the run where it was when the gate status post fails, and a r
   assert.equal(after.head_sha, sha)
   assert.equal(after.phase, 'ready')
   assert.deepEqual(after.gates.at(-1), { round: 1, commit: sha, result: 'pass' })
+})
+
+for (const mode of ['layer', 'stack-final']) {
+  test(`prepare and record refuse a ${mode} run and change nothing`, async (t) => {
+    const s = await repo(t, PR, MAIN, 'explained', true, { mode })
+    const prepared = await s.prepare()
+    assert.equal(prepared.code, 1)
+    assert.match(prepared.stderr, new RegExp(`is in ${mode} mode: the stack lands its layers, resolve-base does not`))
+    assert.equal(await s.git('rev-parse', 'HEAD'), s.head)
+    assert.equal(await s.git('status', '--porcelain'), '')
+    await refusedAndUntouched(s, await rogue(s, s.head, await s.git('rev-parse', 'origin/main')), new RegExp(`is in ${mode} mode`))
+  })
+}
+
+test('prepare and record use package.json when the repo has no plugin manifest', async (t) => {
+  const s = await repo(t, PR, MAIN, 'explained', true, { versionFile: 'package.json' })
+  const prepared = await s.prepare()
+  assert.equal(prepared.stderr, '')
+  assert.equal(prepared.code, 0)
+  const out = JSON.parse(prepared.stdout)
+  assert.equal(out.version, '1.0.22')
+  assert.equal(out.version_file, 'package.json')
+  assert.deepEqual(out.files, ['CHANGELOG.md', 'package.json'])
+  // The PR's other change to the file (a new skill) stays.
+  assert.equal(await s.git('show', 'HEAD:package.json'), manifest('1.0.22', ['a', 'b']).trim())
+  assert.equal(
+    await s.git('show', 'HEAD:CHANGELOG.md'),
+    changelog(['1.0.22', 'the PR change.'], ['1.0.21', 'second on main.'], ['1.0.20', 'first on main.'], ['1.0.19', 'old.']).trim(),
+  )
+  await s.git('push', '-q', 'origin', 'feature/x')
+  await s.atGitHub(out.commit)
+  const recorded = await s.record(out.commit)
+  assert.equal(recorded.stderr, '')
+  assert.equal(recorded.code, 0)
+  const state = await s.state()
+  assert.equal(state.head_sha, out.commit)
+  assert.equal(state.phase, 'ready')
+  assert.deepEqual(state.gates.at(-1), { round: 1, commit: out.commit, result: 'pass' })
 })
