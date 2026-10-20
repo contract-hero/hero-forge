@@ -85,7 +85,7 @@ import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
 import { resolveConfigText, type ResolvedConfig } from './config.ts'
 import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
 import { parseHandoff, type HandoffKind } from './handoff.ts'
-import { issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, whileHolding } from './lock.ts'
+import { holdsPrLock, issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, whileHolding } from './lock.ts'
 import { readPause } from './pause.ts'
 import { loadState, stateRoot, TERMINAL, type Phase } from './run-state.ts'
 
@@ -262,6 +262,16 @@ async function recordDelivery(
     await rename(tmp, file)
   } finally {
     await rm(tmp, { force: true })
+  }
+}
+
+// The record of `delivery` for `app`, or null when there is none or it
+// cannot be read.
+async function deliveryRecord(app: AppName, delivery: string): Promise<{ state?: unknown; token?: unknown } | null> {
+  try {
+    return JSON.parse(await readFile(deliveryFile(app, delivery), 'utf8')) as { state?: unknown; token?: unknown }
+  } catch {
+    return null
   }
 }
 
@@ -454,7 +464,14 @@ export type RelaunchAction = 'review' | 'adjudicate' | 'recheck'
 // rule is the App's switch (the part posts the hand-off as that App):
 // no app: enabled, or no implementer.app: enabled, is ignore, disabled. The
 // rules for both Apps come first, and the lock and the cap after, as decide.
-export function relaunch(app: AppName, action: RelaunchAction, delivery: string, repo: string, pr: number, context: Context): Promise<Decision> {
+// A relaunch is a duplicate only while the part it started holds its lock:
+// a part that released the lock (or let it expire) with the hand-off still
+// lost is started again, so its done record is forgotten first.
+export async function relaunch(app: AppName, action: RelaunchAction, delivery: string, repo: string, pr: number, context: Context): Promise<Decision> {
+  const started = await deliveryRecord(app, delivery)
+  if (started?.state === 'done' && !(typeof started.token === 'string' && (await holdsPrLock(pr, started.token)))) {
+    await forgetDelivery(app, delivery)
+  }
   const payload: Payload = { repository: { full_name: repo }, pull_request: { number: pr } }
   return decideBy(app, 'relaunch', delivery, payload, context, undefined, (e) => {
     if (e.config === null) return why('no-config')

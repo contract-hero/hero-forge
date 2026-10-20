@@ -200,6 +200,15 @@ export function releasePrLock(pr: number, token: string): Promise<boolean> {
   return releaseLock(prLockFile(pr), token)
 }
 
+// Whether `token` still holds the per-PR lock: it owns the lock file, and
+// the lock is not older than the TTL (an older one is free to take).
+export async function holdsPrLock(pr: number, token: string): Promise<boolean> {
+  const file = prLockFile(pr)
+  if ((await tokenOf(file)) !== token) return false
+  const held = await age(file)
+  return held !== null && held < LOCK_TTL_HOURS * HOUR
+}
+
 export function issueLockFile(issue: number): string {
   return join(stateRoot(), 'locks', `issue-${issue}.lock`)
 }

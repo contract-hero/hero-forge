@@ -27,6 +27,7 @@
 //     contract-implementer[bot] posted on an open PR: issue_comment.created
 //     (implementer for review-posted and recheck-failed, reviewer for
 //     adjudicated)                        reconcile-handoff-<N>-<comment id>
+//     A marker older than the PR's run state is an earlier run's: no item.
 //   - the newest comment by the maintainer on an open PR whose first line is
 //     exactly /recheck, newer than the last hand-off of contract-reviewer[bot]
 //     there: issue_comment.created (reviewer)
@@ -50,7 +51,9 @@
 //     due. The part starts again at the phase it reached, so it only posts
 //     the hand-off. It is route's `relaunch`: paused, duplicate, the App's
 //     switch, the PR lock and the cap. A held lock is ignore, locked, so a
-//     part still running is never started twice.
+//     part still running is never started twice. A relaunch whose part gave
+//     up its lock (released or expired) with the hand-off still lost is no
+//     duplicate: the next sweep starts it again.
 //                                         reconcile-due-<N>-<kind>-<round>-<run>
 //     <run> is the run's created_at, digits only, so a new run at the same
 //     head is a new item.
@@ -259,6 +262,11 @@ async function handoffItem(repo: string, pull: Pull, comments: Comment[], contex
   const fromApp = (c: Comment) => sameLogin(c.author ?? undefined, REVIEWER_BOT) || sameLogin(c.author ?? undefined, IMPLEMENTER_BOT)
   const last = comments.filter((c) => fromApp(c) && parseHandoff(c.body) !== null).at(-1)
   if (last === undefined) return null
+  // A marker posted before the PR's run began is an earlier run's: it hands
+  // off nothing of this run, whose lost hand-off is dueItem's. GitHub gives
+  // whole seconds, so the run counts from the second it began.
+  const run = (await stateOf(pull.number))?.created_at
+  if (run !== undefined && Date.parse(last.created_at) < pauseSecond(run)) return null
   // The marker's kind says whose turn it is.
   const app: AppName = parseHandoff(last.body)?.kind === 'adjudicated' ? 'reviewer' : 'implementer'
   const payload: Payload = {

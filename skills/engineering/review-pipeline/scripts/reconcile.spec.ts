@@ -2,7 +2,7 @@
 // item out. Each kind of missed work must get the decision that `route`
 // gives the recorded event of that kind.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -733,4 +733,25 @@ test('reconcile: a lost hand-off of an App that is off is the ignore (disabled),
     line('ignore', 'implementer', { pr: 42 }, 'disabled'),
   ])
   await assert.rejects(readFile(join(m.state, 'locks', 'pr-42.lock')), { code: 'ENOENT' })
+})
+
+test('reconcile: a relaunch whose part gave up its lock with the hand-off still lost starts again on the next sweep', async (t) => {
+  const m = await machine(t, landed())
+  await seedRun(m.state, { phase: 'review-posted' }, [])
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+  // The part released its lock, then died before its hand-off landed.
+  await rm(join(m.state, 'locks', 'pr-42.lock'))
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+  // The part died holding its lock: once the lock expires, the next sweep starts it again.
+  const lock = join(m.state, 'locks', 'pr-42.lock')
+  await utimes(lock, new Date(0), new Date(0))
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+})
+
+test('reconcile: a hand-off marker of an earlier run does not hand off the run at the head', async (t) => {
+  // An aborted run posted its review-posted marker (with no reconcile record);
+  // the new run reached review-posted in round 1 and lost its own hand-off.
+  const m = await machine(t, landed(reviewPosted))
+  await seedRun(m.state, { phase: 'review-posted', created_at: '2026-10-19T10:30:00.000Z' }, [posted('review-posted')])
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
 })
