@@ -140,8 +140,10 @@ usage: review.ts route undo --app reviewer|implementer --token <lock_token>
     summary: 'Sweep the open work a missed webhook should have started, and decide each item as route does.',
     usage: `usage: review.ts reconcile --repo O/R   (in a checkout of the repo, as route)
   Lists open issues labelled ready-for-agent (unless paused), open PRs with no run state at their head, the
-  newest hand-off and maintainer /recheck on each open PR, and needs-info issues and PRs with a maintainer
-  comment after their pause record.
+  newest hand-off and maintainer /recheck on each open PR, needs-info issues and PRs with a maintainer
+  comment after their pause record, and a lost hand-off: a run on a contract-implementer[bot] PR, at its
+  head, whose phase owes a hand-off that handoffs.json does not record for this run (review, adjudicate or
+  recheck again, which only posts it).
   Prints one line per item: route's decision plus app (reviewer or implementer), and exits 0. Work takes its lock
   as route does: start a run for each line whose action is not ignore. A ticket or spec that an open PR by the
   maintainer or contract-implementer[bot] closes (itself, or one of its sub-issues) is ignore, has-pr. An item

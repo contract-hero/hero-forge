@@ -3,8 +3,9 @@
 // started (the Mac was off, or T3 dropped it). It lists the open work, builds
 // for each item the event and payload that `route` would have received, and
 // decides it with route's own `decide`, so caps, paused, locks, sender and
-// author rules give the same answers. It never holds a rule of its own, but
-// one: a ticket or spec that a trusted open PR closes is ignore, has-pr. The
+// author rules give the same answers. It holds two rules of its own: a ticket
+// or spec that a trusted open PR closes is ignore, has-pr; and a hand-off
+// that no event can carry, because it was never posted (the last kind). The
 // lists pick which comment stands for an item; route still judges it.
 //
 // The items, each with its App and its delivery id. A delivery id is the
@@ -26,6 +27,8 @@
 //     contract-implementer[bot] posted on an open PR: issue_comment.created
 //     (implementer for review-posted and recheck-failed, reviewer for
 //     adjudicated)                        reconcile-handoff-<N>-<comment id>
+//     A marker that the PR's run did not record (handoffs.json) for the
+//     round it is at is an earlier run's or an earlier round's: no item.
 //   - the newest comment by the maintainer on an open PR whose first line is
 //     exactly /recheck, newer than the last hand-off of contract-reviewer[bot]
 //     there: issue_comment.created (reviewer)
@@ -34,6 +37,27 @@
 //     by the maintainer newer than the record's paused_at: the newest such
 //     comment, as issue_comment.created (implementer)
 //                                         reconcile-resume-<N>-<comment id>
+//   - a hand-off that is due and lost: an AFK part ends with `advance`, lock
+//     release, then its hand-off, so a session that died between the two
+//     leaves a run that nothing starts again. An open PR by
+//     contract-implementer[bot] with a single-mode run at its head is one
+//     when the run's phase owes a hand-off and `<run dir>/handoffs.json`
+//     holds none of this run (its created_at) for that kind and round:
+//       review-posted in round 1: review-posted, the review part (reviewer)
+//       adjudicated: adjudicated, the adjudicate part (implementer)
+//       review-posted in round 2 or later: recheck-failed, the recheck part
+//       (reviewer)
+//     A round with a gate pass at the run's head was a zero-finding round:
+//     its review part goes on to Finish and posts no hand-off, so none is
+//     due. The part starts again at the phase it reached, so it only posts
+//     the hand-off. It is route's `relaunch`: paused, duplicate, the App's
+//     switch, the PR lock and the cap. A held lock is ignore, locked, so a
+//     part still running is never started twice. A relaunch whose part gave
+//     up its lock (released or expired) with the hand-off still lost is no
+//     duplicate: the next sweep starts it again.
+//                                         reconcile-due-<N>-<kind>-<round>-<run>
+//     <run> is the run's created_at, digits only, so a new run at the same
+//     head is a new item.
 //
 // Only open issues and PRs are swept. The lists are read first, so a list
 // that fails starts nothing. Then each item is decided and printed at once:
@@ -41,7 +65,8 @@
 import type { AppName } from './app-token.ts'
 import { Failure, parse, repoOption, runMain, usageFor } from './cli.ts'
 import { listLines } from './github.ts'
-import { parseHandoff } from './handoff.ts'
+import { parseHandoff, type HandoffKind } from './handoff.ts'
+import { readPosted } from './handoff-post.ts'
 import { readPause } from './pause.ts'
 import {
   BUILD_LABEL,
@@ -50,12 +75,14 @@ import {
   liveContext,
   PAUSED_LABEL,
   pauseSecond,
+  relaunch,
   REVIEWER_BOT,
   sameLogin,
   subIssues,
   type Context,
   type Decision,
   type Payload,
+  type RelaunchAction,
 } from './route.ts'
 import { loadState, type State } from './run-state.ts'
 
@@ -236,6 +263,17 @@ async function handoffItem(repo: string, pull: Pull, comments: Comment[], contex
   const fromApp = (c: Comment) => sameLogin(c.author ?? undefined, REVIEWER_BOT) || sameLogin(c.author ?? undefined, IMPLEMENTER_BOT)
   const last = comments.filter((c) => fromApp(c) && parseHandoff(c.body) !== null).at(-1)
   if (last === undefined) return null
+  // A marker hands off the PR's run only when this run recorded it (its
+  // comment id, under its created_at) for the round the run is at. An earlier
+  // run's marker, or an earlier round's, hands off nothing: the run's lost
+  // hand-off is dueItem's. A record, not a time, because GitHub gives whole
+  // seconds.
+  const state = await stateOf(pull.number)
+  if (state !== null) {
+    const run = state.created_at
+    const round = parseHandoff(last.body)?.round
+    if (round !== state.round || !(await readPosted(pull.number)).some((p) => p.run === run && p.id === last.id && p.round === round)) return null
+  }
   // The marker's kind says whose turn it is.
   const app: AppName = parseHandoff(last.body)?.kind === 'adjudicated' ? 'reviewer' : 'implementer'
   const payload: Payload = {
@@ -297,6 +335,28 @@ async function resumeItem(repo: string, paused: Listed, comments: (number: numbe
   return { ...(await decide('implementer', 'issue_comment', delivery, payload, context)), app: 'implementer' }
 }
 
+// The hand-off a run at `state` owes, and the part (and its App) that posts it.
+function owed(state: State): { kind: HandoffKind; action: RelaunchAction; app: AppName } | null {
+  if (state.phase === 'adjudicated') return { kind: 'adjudicated', action: 'adjudicate', app: 'implementer' }
+  if (state.phase !== 'review-posted') return null
+  return state.round === 1 ? { kind: 'review-posted', action: 'review', app: 'reviewer' } : { kind: 'recheck-failed', action: 'recheck', app: 'reviewer' }
+}
+
+// A lost hand-off: the run's phase owes one, and this run recorded none.
+async function dueItem(repo: string, pull: Pull, context: Context): Promise<Line | null> {
+  // Only a hand-off on the bot's PR starts the other App's part.
+  if (!sameLogin(pull.author ?? undefined, IMPLEMENTER_BOT)) return null
+  const state = await stateOf(pull.number)
+  if (state === null || state.repo !== repo || state.mode !== 'single' || state.head_sha !== pull.head_sha) return null
+  const due = owed(state)
+  if (due === null) return null
+  const { round, head_sha: head, created_at: run } = state
+  if (state.gates.some((g) => g.round === round && g.commit === head && g.result === 'pass')) return null
+  if ((await readPosted(pull.number)).some((p) => p.run === run && p.kind === due.kind && p.round === round)) return null
+  const delivery = `reconcile-due-${pull.number}-${due.kind}-${round}-${run.replace(/[^0-9]/g, '')}`
+  return { ...(await relaunch(due.app, due.action, delivery, repo, pull.number, context)), app: due.app }
+}
+
 async function reconcile(argv: string[]): Promise<number> {
   const { values } = parse(argv, { repo: { type: 'string' } }, usage)
   const repo = repoOption(values.repo, usage)
@@ -319,6 +379,8 @@ async function reconcile(argv: string[]): Promise<number> {
     ...pulls.map((pull) => () => pullItem(repo, pull, context)),
     ...pulls.map((pull) => async () => handoffItem(repo, pull, await comments(pull.number), context)),
     ...pulls.map((pull) => async () => recheckItem(repo, pull, await comments(pull.number), context)),
+    // After the hand-off items: a marker that is there takes the PR lock first.
+    ...pulls.map((pull) => () => dueItem(repo, pull, context)),
     ...paused.map((issue) => () => resumeItem(repo, issue, comments, context)),
   ]
 

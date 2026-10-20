@@ -1,8 +1,16 @@
 # hero-forge
 
-## 1.0.20
+## 1.0.22
 
 - `review-pipeline`: **Finish** resolves a merge conflict that only the version bump and the CHANGELOG entry cause, and the PR merges with no maintainer step. New `review.ts resolve-base prepare` merges the base branch into the PR head, sets the version to the next patch above the base branch's version, keeps every CHANGELOG entry of the base branch, and puts the PR's entry on top under the new version. A conflict in any other file still stops the run. After the tests pass, the run pushes as the PR author (the Implementer App on its own PR; an AFK part never pushes as the user). Then `review.ts resolve-base record` re-checks the pushed merge: its tree must be exactly the merge that `prepare` computes from its parents. It posts the gate status, records a gate pass at the new head, and moves the run back to `ready`, so the reviewer App approves the new head before the merge. Without the reviewer App, `resolve-base` refuses and the run stops, because no approval would cover the new head.
+
+## 1.0.21
+
+- `setup-forge`: the router and reconcile prompt templates remove their own T3 worktree on every exit, as the last shell command before the thread step: `t3_worktree_status` gives the path, the branch and the project root, then `git worktree remove --force` and `git branch -D`. T3 starts each run of an unbound task in a new worktree, and the MCP task API cannot set a task's workspace, so one ticket left about 40 worktrees. A run edits nothing in its worktree. Step 6 states this and, while no AFK run is in flight, offers to remove the worktrees that earlier runs left. It lists the candidates first: each one in T3's worktree folder of the project, with no change and no commit that the default branch lacks, never the worktree of the setup thread. It removes only the lines the user approves, and never a worktree outside that folder. `scripts/afk-prompts.spec.ts` runs both shell blocks against a Git fixture. A re-run of step 6 updates the prompts of the live tasks in place.
+
+## 1.0.20
+
+- `review-pipeline`: `review.ts reconcile` recovers a hand-off lost between `advance` and the post. An AFK part that died after `run-state advance` and before its hand-off marker landed left a run that nothing started again. The sweep now finds a run on a `contract-implementer[bot]` PR, at the PR head, whose phase owes a hand-off that `<run dir>/handoffs.json` does not record for this run and round (`review-posted` in round 1, `adjudicated`, `recheck-failed` in round 2 or later). With no lock held, it starts the matching part again (`review`, `adjudicate` or `recheck`), which only posts the hand-off. A zero-finding round owes none. A relaunched part that gave up its lock (released or expired) before its hand-off landed starts again on the next sweep. A hand-off marker starts something only when this run recorded it in `handoffs.json` for the round the run is at: a marker of an earlier run, or of an earlier round, starts nothing.
 
 ## 1.0.19
 
