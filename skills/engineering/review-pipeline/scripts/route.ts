@@ -60,14 +60,19 @@
 //                                                   ignore, author (issue: the one at fault)
 //  13. an open PR by the maintainer or contract-implementer[bot] closes the
 //      ticket, or (for a spec) one of its sub-issues ignore, has-pr
-//  14. build-spec when it has sub-issues, else build-ticket, once the issue
+//  14. a build already started from the event that last added
+//      ready-for-agent to the issue                 ignore, duplicate
+//      (both deliveries of a hand-off, and a redelivery of either, come from
+//      that one event, so the second one starts nothing, also after a build
+//      that ended with no PR and no pause. A retry adds the label again,
+//      which is a new event. A reconcile sweep keys a missed label by its
+//      own delivery id, so it can still start one more build)
+//  15. build-spec when it has sub-issues, else build-ticket, once the issue
 //      lock is held and one of implementer.attempts is reserved (below).
-//      The second delivery of a hand-off then finds the lock held, or the
-//      attempt spent, or the delivery a duplicate. A build releases the
-//      issue lock when it opens its PR or pauses, so a later second delivery
-//      finds the PR (13) or the pause record (9). A build that ended with
-//      neither leaves the ticket free for one more attempt, as reconcile
-//      also does.
+//      The second delivery of a hand-off then finds the build's record (14)
+//      or the lock held. A build releases the issue lock when it opens its
+//      PR or pauses, so a later second delivery also finds the PR (13) or
+//      the pause record (9).
 // --app implementer, an issue_comment event:
 //   3. not created                                  ignore, action:<name>
 //   4, 5 as above
@@ -146,11 +151,13 @@ export type Decision = {
 
 // What a rule found: an ignore with its reason, or work to start. Work names
 // the lock it takes and, for a build, the ticket whose attempt it reserves
-// under the cap `limit`.
+// under the cap `limit`. `key` names the record that makes a repeat a
+// duplicate, in place of the delivery id.
 type Start = {
   action: Exclude<Action, 'ignore'>
   lock: { kind: 'pr' | 'issue'; number: number }
   attempt?: { issue: number; limit: number }
+  key?: string
 }
 // An ignore may name another issue than the delivery's: the one at fault.
 type Outcome = { ignore: string; issue?: number } | Start
@@ -274,6 +281,23 @@ export async function closedByOpenPrs(repo: string, maintainer: string): Promise
   return new Set(closers.filter(trusted).flatMap((pr) => pr.closes.filter((c) => same(c.repo)).map((c) => c.number)))
 }
 
+// The latest event that added ready-for-agent to `issue`, with its actor, or
+// null when GitHub lists none, every page.
+export async function buildLabelEvent(repo: string, issue: number): Promise<{ id: number; actor: string | null } | null> {
+  const events = await listLines<{ id: number; label: string | null; actor: string | null }>(
+    [
+      'api',
+      '--paginate',
+      '--jq',
+      '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}',
+      `repos/${repo}/issues/${issue}/events?per_page=100`,
+    ],
+    `the events of #${issue}`,
+  )
+  const labeled = events.filter((e) => e.label === BUILD_LABEL).at(-1)
+  return labeled === undefined ? null : { id: labeled.id, actor: labeled.actor }
+}
+
 // Whether an open PR closes ticket `issue`, or one of its sub-issues.
 export async function hasPr(repo: string, issue: number, closed: Set<number>): Promise<boolean> {
   if (closed.has(issue)) return true
@@ -380,6 +404,7 @@ type Event = {
   sender: string | undefined
   maintainer: () => Promise<string>
   closed: (repo: string) => Promise<Set<number>>
+  labelEvent?: (repo: string, issue: number) => Promise<number | null>
 }
 
 function reviewerRule(e: Event): Promise<Outcome> | Outcome {
@@ -457,9 +482,13 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
   // A build that opened its PR has released the issue lock, so the lock does
   // not stop a later delivery of the same hand-off: the open PR does.
   if (await hasPr(e.repo, e.issue, await e.closed(e.repo))) return why('has-pr')
+  // The two deliveries of a hand-off come from one ready-for-agent event: the
+  // build is recorded under it, so the later one is a duplicate (rule 14).
+  const event = e.labelEvent === undefined ? null : await e.labelEvent(e.repo, e.issue)
   return {
     action: count > 0 ? 'build-spec' : 'build-ticket',
     lock: { kind: 'issue', number: e.issue },
+    ...(event === null ? {} : { key: `label-${e.issue}-${event}` }),
     attempt: { issue: e.issue, limit: config.implementer.attempts },
   }
 }
@@ -507,18 +536,21 @@ function releaseFor(lock: Start['lock'], token: string): Promise<boolean> {
 }
 
 // What a decision reads besides the delivery: the review config of a repo,
-// the maintainer's login, and the issues of a repo that a trusted open PR
-// closes (closedByOpenPrs). `route` reads them for each delivery; a sweep
-// gives them once for all its items.
+// the maintainer's login, the issues of a repo that a trusted open PR
+// closes (closedByOpenPrs), and the id of the event that last added
+// ready-for-agent to an issue (buildLabelEvent). `route` reads them for each
+// delivery; a sweep gives them once for all its items, and gives no
+// labelEvent: it keys a missed label by its own delivery id.
 export type Context = {
   config: (repo: string, branch: string | undefined) => Promise<ResolvedConfig | null>
   maintainer: () => Promise<string>
   closed: (repo: string) => Promise<Set<number>>
+  labelEvent?: (repo: string, issue: number) => Promise<number | null>
 }
 
 // The context of one delivery: the config on the default branch, the
-// maintainer and the closed issues, each looked up once and only when a rule
-// needs it.
+// maintainer, the closed issues and the label event, each looked up once and
+// only when a rule needs it.
 export function liveContext(): Context {
   let maintainer: Promise<string> | undefined
   const closed = new Map<string, Promise<Set<number>>>()
@@ -531,6 +563,7 @@ export function liveContext(): Context {
       if (found === undefined) closed.set(repo, (found = login().then((m) => closedByOpenPrs(repo, m))))
       return found
     },
+    labelEvent: async (repo, issue) => (await buildLabelEvent(repo, issue))?.id ?? null,
   }
 }
 
@@ -620,11 +653,14 @@ async function decideBy(
     sender: text(payload.sender?.login),
     maintainer: context.maintainer,
     closed: context.closed,
+    labelEvent: context.labelEvent,
   }
   const outcome = await rule(event)
   if ('ignore' in outcome) return outcome.issue === undefined ? decided('ignore', outcome.ignore) : decidedOn(outcome.issue, outcome.ignore)
   // Every rule that starts work has checked the config is there.
   if (config === null || repo === null) throw new Failure('no config for a decision that starts work', 1)
+  const key = outcome.key ?? delivery
+  if (key !== delivery && (await doneDelivery(app, key))) return decided('ignore', 'duplicate')
 
   const token = await takeFor(outcome.lock, { app, delivery })
   if (token === null) return decided('ignore', 'locked')
@@ -646,18 +682,18 @@ async function decideBy(
       await releaseAttempt(repo, attempt.issue)
     }
     await releaseFor(outcome.lock, token)
-    await forgetDelivery(app, delivery)
+    await forgetDelivery(app, key)
     return decided('ignore', reason)
   }
   try {
-    await recordDelivery(app, delivery, 'pending', outcome.lock, token)
+    await recordDelivery(app, key, 'pending', outcome.lock, token)
     if (attempt !== undefined) {
       if (!(await reserveAttempt(repo, attempt.issue, attempt.limit))) return await stop('attempts')
       reserved = true
     }
     const counted = await countRun(app, limit)
     if (counted === null) return await stop('cap')
-    await recordDelivery(app, delivery, 'done', outcome.lock, token, {
+    await recordDelivery(app, key, 'done', outcome.lock, token, {
       repo,
       attempt: attempt === undefined ? null : attempt.issue,
       counted_at: counted,
@@ -667,7 +703,7 @@ async function decideBy(
     await releaseFor(outcome.lock, token)
     // The error that stopped the call is the one to report: when the record
     // itself failed, there may be nothing to forget, or no way to reach it.
-    await forgetDelivery(app, delivery).catch(() => {})
+    await forgetDelivery(app, key).catch(() => {})
     throw error
   }
   return decided(outcome.action, null, token)

@@ -71,6 +71,7 @@ import { readPosted } from './handoff-post.ts'
 import { readPause } from './pause.ts'
 import {
   BUILD_LABEL,
+  buildLabelEvent,
   decide,
   IMPLEMENTER_BOT,
   liveContext,
@@ -116,17 +117,7 @@ const labelsOf = (names: string[]) => names.map((name) => ({ name }))
 async function labelItem(repo: string, issue: Listed, closed: Set<number>, context: Context): Promise<Line | null> {
   // A build that paused goes on only through its answer (resumeItem).
   if ((await readPause({ kind: issue.pull_request ? 'pr' : 'issue', number: issue.number }))?.repo === repo) return null
-  const events = await listLines<{ id: number; label: string | null; actor: string | null }>(
-    [
-      'api',
-      '--paginate',
-      '--jq',
-      '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}',
-      `repos/${repo}/issues/${issue.number}/events?per_page=100`,
-    ],
-    `the events of #${issue.number}`,
-  )
-  const labeled = events.filter((e) => e.label === BUILD_LABEL).at(-1)
+  const labeled = await buildLabelEvent(repo, issue.number)
   const payload: Payload = {
     action: 'labeled',
     repository: { full_name: repo },
@@ -316,6 +307,8 @@ async function reconcile(argv: string[]): Promise<number> {
   // config exits 4 before anything is decided.
   const live = liveContext()
   const config = await live.config(repo, undefined)
+  // No labelEvent: a missed label keys its build by this sweep's own delivery
+  // id (labelItem), so a build that ended with no PR and no pause can get one more.
   const context: Context = { config: async () => config, maintainer: live.maintainer, closed: live.closed }
 
   const labelled = await listLabelled(repo, BUILD_LABEL)
