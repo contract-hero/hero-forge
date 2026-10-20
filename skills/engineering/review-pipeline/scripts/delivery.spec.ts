@@ -348,15 +348,100 @@ test('a 404 on the detail read names the delivery, not the credentials', async (
   assert.doesNotMatch(stderr, /Fix the App credentials/)
 })
 
-test('a non-404 failure on the detail read stays a broken App: exit 4, its HTTP status, and no payload file', async (t) => {
+test('a 4xx other than 404 on the detail read stays a broken App: exit 4, its HTTP status, no retry and no payload file', async (t) => {
   const s = await setup(t, {
     routes: {
       [LIST]: { status: 200, body: [entry(902, GUID)] },
-      'GET /app/hook/deliveries/902': { status: 500, body: { message: 'Server Error' } },
+      'GET /app/hook/deliveries/902': { status: 403, body: { message: 'Resource not accessible by integration' } },
     },
   })
   const { code, stderr } = await s.fetchDelivery()
   assert.equal(code, 4)
-  assert.match(stderr, /read the webhook delivery failed: HTTP 500 \(Server Error\)/)
+  assert.match(stderr, /read the webhook delivery failed: HTTP 403 \(Resource not accessible by integration\)/)
+  assert.equal(s.api.requests.filter((r) => r.path === '/app/hook/deliveries/902').length, 1)
+  await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
+})
+
+// GitHub's detail read can answer 5xx for a few seconds right after it sends
+// a delivery: it is retried as the list read is.
+const DETAIL = 'GET /app/hook/deliveries/902'
+
+test('a detail read that answers 500 once is retried, and the payload is written', async (t) => {
+  let reads = 0
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      [DETAIL]: { status: 500, body: { message: 'Something went wrong.' } },
+    },
+    onRequest: async (request, routes) => {
+      if (request.path === '/app/hook/deliveries/902' && ++reads === 1) {
+        routes[DETAIL] = { status: 200, body: detail(902, GUID, PAYLOAD) }
+      }
+    },
+  })
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout), { event: 'issues', action: 'labeled', repo: 'contract-hero/hero-forge' })
+  assert.deepEqual(JSON.parse(await readFile(s.out, 'utf8')), PAYLOAD)
+  assert.deepEqual(s.api.requests.map((r) => r.path), [
+    '/app/hook/deliveries?per_page=100',
+    '/app/hook/deliveries/902',
+    '/app/hook/deliveries/902',
+  ])
+})
+
+test('a detail read that answers 500 on every try exits 1, names the status, not the credentials, and writes nothing', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      [DETAIL]: { status: 500, body: { message: 'Something went wrong.' } },
+    },
+  })
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.equal(
+    stderr,
+    `review.ts delivery: GitHub failed to read delivery ${GUID} (id 902): HTTP 500 (Something went wrong.) on all 5 tries. Try again later.\n`,
+  )
+  assert.doesNotMatch(stderr, /credentials/)
+  assert.equal(s.api.requests.filter((r) => r.path === '/app/hook/deliveries/902').length, 5)
+  await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
+})
+
+test('a detail read that loses its connection once is retried, and the payload is written', async (t) => {
+  let reads = 0
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      [DETAIL]: { status: 0, body: null, drop: true },
+    },
+    onRequest: async (request, routes) => {
+      if (request.path === '/app/hook/deliveries/902' && ++reads === 1) {
+        routes[DETAIL] = { status: 200, body: detail(902, GUID, PAYLOAD) }
+      }
+    },
+  })
+  const { code, stderr } = await s.fetchDelivery()
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(await readFile(s.out, 'utf8')), PAYLOAD)
+  assert.equal(s.api.requests.filter((r) => r.path === '/app/hook/deliveries/902').length, 2)
+})
+
+test('a detail read that loses its connection on every try exits 1, not a credentials failure', async (t) => {
+  const s = await setup(t, {
+    routes: {
+      [LIST]: { status: 200, body: [entry(902, GUID)] },
+      [DETAIL]: { status: 0, body: null, drop: true },
+    },
+  })
+  const { code, stdout, stderr } = await s.fetchDelivery()
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.match(stderr, new RegExp(`^review\\.ts delivery: GitHub failed to read delivery ${GUID} \\(id 902\\): cannot reach the GitHub API at http://127\\.0\\.0\\.1:\\d+ \\(.+\\) on all 5 tries\\. Try again later\\.\\n$`))
+  assert.doesNotMatch(stderr, /credentials/)
+  assert.equal(s.api.requests.filter((r) => r.path === '/app/hook/deliveries/902').length, 5)
   await assert.rejects(readFile(s.out, 'utf8'), { code: 'ENOENT' })
 })

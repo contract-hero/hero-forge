@@ -146,7 +146,8 @@ async function request<T>(step: string, jwt: string, method: string, path: strin
     })
   } catch (error) {
     const cause = (error as { cause?: { code?: string } }).cause?.code
-    throw broken(`${step}: cannot reach the GitHub API at ${apiBase()} (${cause ?? (error as Error).message})`)
+    const answer = `cannot reach the GitHub API at ${apiBase()} (${cause ?? (error as Error).message})`
+    throw new ApiUnreachable(`${step}: ${answer}. ${FIX}.`, answer)
   }
   let parsed: unknown = null
   try {
@@ -156,7 +157,8 @@ async function request<T>(step: string, jwt: string, method: string, path: strin
   }
   if (!response.ok) {
     const said = (parsed as { message?: unknown } | null)?.message
-    throw new ApiFailure(`${step} failed: HTTP ${response.status}${typeof said === 'string' ? ` (${said})` : ''}. ${FIX}.`, response.status)
+    const answer = `HTTP ${response.status}${typeof said === 'string' ? ` (${said})` : ''}`
+    throw new ApiFailure(`${step} failed: ${answer}. ${FIX}.`, response.status, answer)
   }
   return { parsed: (parsed ?? {}) as T, link: response.headers.get('link') }
 }
@@ -170,12 +172,25 @@ function parseExact(text: string): unknown {
 }
 
 // An HTTP error answer from GitHub (exit 4), with its status, so a caller can
-// tell a 404 from a broken App.
+// tell a 404 from a broken App, and its `answer` (`HTTP <status> (<message>)`)
+// for a caller that names the failure itself.
 export class ApiFailure extends Failure {
   status: number
-  constructor(message: string, status: number) {
+  answer: string
+  constructor(message: string, status: number, answer: string) {
     super(message, 4)
     this.status = status
+    this.answer = answer
+  }
+}
+
+// No answer from GitHub at all, a network error (exit 4), with `answer` as
+// ApiFailure has it.
+export class ApiUnreachable extends Failure {
+  answer: string
+  constructor(message: string, answer: string) {
+    super(message, 4)
+    this.answer = answer
   }
 }
 

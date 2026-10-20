@@ -145,8 +145,9 @@ usage: review.ts route undo --app reviewer|implementer --token <lock_token>
     usage: `usage: review.ts delivery --app reviewer|implementer --delivery <X-GitHub-Delivery> --out <file>
   Finds the delivery in the App's webhook deliveries (with a short retry while GitHub lists it),
   writes its payload to <file>, and prints {event, action, repo}. Exit 3: GitHub does not list it.
-  Exit 1: GitHub sent it more than ${MAX_DELIVERY_AGE_HOURS} hours ago (a replay), or <file> already exists
-  (pass a fresh path in a private directory, such as one from mktemp -d).`,
+  Exit 1: GitHub sent it more than ${MAX_DELIVERY_AGE_HOURS} hours ago (a replay), GitHub still fails to read it
+  (a 5xx or a network error, with the same retry), or <file> already exists (pass a fresh path in a
+  private directory, such as one from mktemp -d).`,
   },
   'app-check': {
     summary: "Check a GitHub App's settings for AFK mode: permissions, events, webhook and installation.",

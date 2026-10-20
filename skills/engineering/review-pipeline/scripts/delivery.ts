@@ -9,16 +9,19 @@
 // delivery older than MAX_DELIVERY_AGE_HOURS (an older one would be refused
 // anyway), or runs out of pages. GitHub can take a moment to list a delivery
 // it has just sent, so the walk runs up to DELIVERY_TRIES times,
-// HERO_FORGE_DELIVERY_RETRY_MS apart.
+// HERO_FORGE_DELIVERY_RETRY_MS apart. The detail read of the delivery found
+// is tried the same way on a 5xx or a network error.
 // Exit 1: GitHub sent the delivery more than MAX_DELIVERY_AGE_HOURS ago (its
-// signature has no timestamp, so an old one is a replay), or --out already
-// exists (a file or a symlink: it is created new, never followed).
+// signature has no timestamp, so an old one is a replay), the detail read
+// still fails with a 5xx or a network error after DELIVERY_TRIES tries, or
+// --out already exists (a file or a symlink: it is created new, never
+// followed).
 // Exit 3: GitHub still does not list the delivery. Exit 4: the App's
-// credentials are broken, or GitHub answers with an error (a 404 for an App
-// with no webhook). Output: {event, action, repo}; never a token or key.
+// credentials are broken, or GitHub answers with another error (a 404 for an
+// App with no webhook). Output: {event, action, repo}; never a token or key.
 import { writeFile } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { APPS, ApiFailure, appApi, type AppName } from './app-token.ts'
+import { APPS, ApiFailure, ApiUnreachable, appApi, type AppName } from './app-token.ts'
 import { Failure, isRepo, MAX_DELIVERY_AGE_HOURS, parse, runMain, usageFor } from './cli.ts'
 
 const usage = usageFor('delivery')
@@ -91,15 +94,24 @@ async function delivery(argv: string[]): Promise<string> {
     )
   }
 
+  // GitHub can answer the detail read with a 5xx for a few seconds after it
+  // sends a delivery, so a 5xx or a network error is tried again as the list
+  // walk is.
   const id = String(found.id)
-  let detail: Detail
-  try {
-    detail = await api<Detail>('read the webhook delivery', 'GET', `/app/hook/deliveries/${id}`)
-  } catch (error) {
-    if (error instanceof ApiFailure && error.status === 404) {
-      throw new Failure(`delivery ${guid} (id ${id}) is listed, but GitHub has no detail for it (HTTP 404)`, 1)
+  let detail: Detail | undefined
+  for (let tries = 1; detail === undefined; tries++) {
+    try {
+      detail = await api<Detail>('read the webhook delivery', 'GET', `/app/hook/deliveries/${id}`)
+    } catch (error) {
+      if (error instanceof ApiFailure && error.status === 404) {
+        throw new Failure(`delivery ${guid} (id ${id}) is listed, but GitHub has no detail for it (HTTP 404)`, 1)
+      }
+      if (!((error instanceof ApiFailure && error.status >= 500) || error instanceof ApiUnreachable)) throw error
+      if (tries === DELIVERY_TRIES) {
+        throw new Failure(`GitHub failed to read delivery ${guid} (id ${id}): ${error.answer} on all ${DELIVERY_TRIES} tries. Try again later.`, 1)
+      }
+      await sleep(retryMs())
     }
-    throw error
   }
   const payload = detail.request?.payload
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
