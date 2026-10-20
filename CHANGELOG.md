@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.18
+
+- `review-pipeline`: `review.ts reconcile` recovers a hand-off lost between `advance` and the post. An AFK part that died after `run-state advance` and before its hand-off marker landed left a run that nothing started again. The sweep now finds a run on a `contract-implementer[bot]` PR, at the PR head, whose phase owes a hand-off that `<run dir>/handoffs.json` does not record for this run and round (`review-posted` in round 1, `adjudicated`, `recheck-failed` in round 2 or later). With no lock held, it starts the matching part again (`review`, `adjudicate` or `recheck`), which only posts the hand-off. A zero-finding round owes none.
+
 ## 1.0.17
 
 - `review-pipeline`: `review.ts delivery` tries the detail read of a delivery again on a 5xx or a network error, with the same tries and delay as the list read. GitHub can answer the detail read with a 5xx for a few seconds after it sends a delivery, and the router stopped at once with a message that blamed the App credentials. A 5xx or a network error on every try now exits 1 with a message that names the HTTP status or the network error. Another 4xx still exits 4.

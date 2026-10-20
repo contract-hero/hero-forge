@@ -2,10 +2,11 @@
 // item out. Each kind of missed work must get the decision that `route`
 // gives the recorded event of that kind.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { takeLock } from './lock.ts'
 import { fakeGh, runCli, seedState, tempDir, type FakeGhResponse } from './test-helpers.ts'
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'route')
@@ -275,7 +276,25 @@ const reviewPosted: Comment = { id: 3456000001, author: REVIEWER_BOT, body: mark
 const recheckFailed: Comment = { id: 3456000002, author: REVIEWER_BOT, body: marker('recheck-failed', 42, 2), created_at: '2026-10-19T11:00:00Z' }
 const adjudicated: Comment = { id: 3456000003, author: IMPLEMENTER_BOT, body: marker('adjudicated'), created_at: '2026-10-19T12:00:00Z' }
 
-const atPhase = (phase: string) => (m: { state: string }) => seedState(m.state, { pr: 42, phase, head_sha: HEAD }).then(() => {})
+// The run on PR #42 began at RUN. A part that reached a phase owing a
+// hand-off posted it: atPhase records that hand-off of this run in
+// handoffs.json, as `review.ts handoff` does.
+const RUN = '2026-10-19T09:00:00.000Z'
+type Posted = { run: string; kind: string; round: number; id: number }
+const owes: Record<string, (round: number) => string | undefined> = {
+  'review-posted': (round) => (round === 1 ? 'review-posted' : 'recheck-failed'),
+  adjudicated: () => 'adjudicated',
+}
+
+async function seedRun(state: string, over: Record<string, unknown>, posted: Posted[]): Promise<void> {
+  await seedState(state, { pr: 42, head_sha: HEAD, created_at: RUN, ...over })
+  await writeFile(join(state, 'pr-42', 'handoffs.json'), `${JSON.stringify(posted)}\n`)
+}
+
+const atPhase = (phase: string, round = 1) => async (m: { state: string }) => {
+  const kind = owes[phase]?.(round)
+  await seedRun(m.state, { phase, round }, kind === undefined ? [] : [{ run: RUN, kind, round, id: 3456000099 }])
+}
 
 // Each case: the test name, the comments on PR #42, the run phase, the App and
 // recorded event that route decides, and its decision.
@@ -617,4 +636,101 @@ test('reconcile: only a /recheck newer than the last review hand-off counts, and
   )
   await atPhase('adjudicated')(m)
   assert.deepEqual(await swept(m.reconcile()), [line('ignore', 'implementer', { pr: 42 }, 'author')])
+})
+
+// --- A hand-off lost between advance and post ------------------------------
+
+// The bot's PR #42 with the markers of the hand-offs that did land.
+const landed = (...comments: Comment[]): GitHub => handoffs(...comments)
+const posted = (kind: string, round = 1, run = RUN): Posted => ({ run, kind, round, id: 3456000090 + round })
+
+// Each case: the test name, the run, the hand-offs it posted (comments and
+// records), the marker item's ignore (the newest marker is for an earlier
+// step), and the part that starts again.
+const lostHandoffs: [string, { phase: string; round: number }, Comment[], Posted[], Decision[], Decision][] = [
+  ['a review-posted hand-off in round 1', { phase: 'review-posted', round: 1 }, [], [], [], line('review', 'reviewer', { pr: 42 })],
+  [
+    'an adjudicated hand-off',
+    { phase: 'adjudicated', round: 1 },
+    [reviewPosted],
+    [posted('review-posted')],
+    [line('ignore', 'implementer', { pr: 42 }, 'phase')],
+    line('adjudicate', 'implementer', { pr: 42 }),
+  ],
+  [
+    'a recheck-failed hand-off in round 2',
+    { phase: 'review-posted', round: 2 },
+    [reviewPosted, adjudicated],
+    [posted('review-posted'), posted('adjudicated')],
+    [line('ignore', 'reviewer', { pr: 42 }, 'phase')],
+    line('recheck', 'reviewer', { pr: 42 }),
+  ],
+]
+
+for (const [name, run, comments, records, before, relaunched] of lostHandoffs) {
+  test(`reconcile: ${name} that never landed, with no lock held, starts its part again once`, async (t) => {
+    const m = await machine(t, landed(...comments))
+    await seedRun(m.state, run, records)
+    assert.deepEqual(await swept(m.reconcile()), [...before, relaunched])
+    // The part holds the PR lock it took, and its delivery is done.
+    await assert.doesNotReject(readFile(join(m.state, 'locks', 'pr-42.lock')))
+    assert.deepEqual(await swept(m.reconcile()), [...before, { ...relaunched, action: 'ignore', reason: 'duplicate' }])
+    // Once the part posted its hand-off, the run owes none: no line.
+    const kind = owes[run.phase]?.(run.round) ?? ''
+    await writeFile(join(m.state, 'pr-42', 'handoffs.json'), `${JSON.stringify([...records, posted(kind, run.round)])}\n`)
+    assert.deepEqual(await swept(m.reconcile()), before)
+  })
+}
+
+test('reconcile: a hand-off recorded by an earlier run of the PR does not count for this run', async (t) => {
+  const m = await machine(t, landed())
+  await seedRun(m.state, { phase: 'review-posted' }, [posted('review-posted', 1, '2026-10-01T09:00:00.000Z')])
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+})
+
+test('reconcile: a new run at the same head is a new item, not a duplicate of the last run', async (t) => {
+  const m = await machine(t, landed())
+  await seedRun(m.state, { phase: 'review-posted', created_at: '2026-10-01T09:00:00.000Z' }, [])
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+  await rm(join(m.state, 'locks'), { recursive: true })
+  await seedRun(m.state, { phase: 'review-posted' }, [])
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+})
+
+test('reconcile: a lost hand-off whose PR lock is held is the ignore (locked), and starts on the next sweep', async (t) => {
+  const m = await machine(t, landed())
+  await seedRun(m.state, { phase: 'review-posted' }, [])
+  const lock = join(m.state, 'locks', 'pr-42.lock')
+  await mkdir(dirname(lock), { recursive: true })
+  assert.notEqual(await takeLock(lock, 60 * 60 * 1000, { app: 'reviewer', delivery: 'still-running' }), null)
+  assert.deepEqual(await swept(m.reconcile()), [line('ignore', 'reviewer', { pr: 42 }, 'locked')])
+  await rm(lock)
+  assert.deepEqual(await swept(m.reconcile()), [line('review', 'reviewer', { pr: 42 })])
+})
+
+test('reconcile: no hand-off is due for a zero-finding round, a run at another head, a stack, or a maintainer PR', async (t) => {
+  const zero = await machine(t, landed())
+  await seedRun(zero.state, { phase: 'adjudicated', gates: [{ round: 1, commit: HEAD, result: 'pass' }] }, [])
+  assert.deepEqual(await swept(zero.reconcile()), [])
+  // The PR head moved: the review of the new head is pull's item (locked by the run), no relaunch.
+  const moved = await machine(t, landed())
+  await seedRun(moved.state, { phase: 'review-posted', head_sha: 'e'.repeat(40) }, [])
+  assert.deepEqual(await swept(moved.reconcile()), [line('ignore', 'reviewer', { pr: 42 }, 'locked')])
+  const layer = await machine(t, landed())
+  await seedRun(layer.state, { phase: 'review-posted', mode: 'layer' }, [])
+  assert.deepEqual(await swept(layer.reconcile()), [])
+  // A maintainer PR: its hand-off would start no part, so none is due.
+  const own = await machine(t, pr42(MAINTAINER, false))
+  await seedRun(own.state, { phase: 'adjudicated' }, [])
+  assert.deepEqual(await swept(own.reconcile()), [])
+})
+
+test('reconcile: a lost hand-off of an App that is off is the ignore (disabled), and takes no lock', async (t) => {
+  const m = await machine(t, { ...landed(reviewPosted), review: '# Review pipeline\n\n```yaml\nruntime: codex\napp: enabled\n```\n' })
+  await seedRun(m.state, { phase: 'adjudicated' }, [posted('review-posted')])
+  assert.deepEqual(await swept(m.reconcile()), [
+    line('ignore', 'implementer', { pr: 42 }, 'disabled'),
+    line('ignore', 'implementer', { pr: 42 }, 'disabled'),
+  ])
+  await assert.rejects(readFile(join(m.state, 'locks', 'pr-42.lock')), { code: 'ENOENT' })
 })

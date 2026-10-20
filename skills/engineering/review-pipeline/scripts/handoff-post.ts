@@ -65,7 +65,7 @@ const KINDS: Record<HandoffKind, { app: AppName; phase: Phase; text: (round: num
 // `run` is the run state's `created_at`: it names the run that posted the
 // hand-off. `run-state create` over a terminal run reuses the run dir, so an
 // entry of another run stays in the file but never counts for this one.
-type Posted = { run: string; kind: HandoffKind; round: number; id: number }
+export type Posted = { run: string; kind: HandoffKind; round: number; id: number }
 
 function recordFile(pr: number): string {
   return join(runDir(pr), 'handoffs.json')
@@ -73,7 +73,7 @@ function recordFile(pr: number): string {
 
 // Every recorded hand-off, of any run; none when there is no record yet. A
 // record that is there but not a list of hand-offs exits 4.
-async function readPosted(pr: number): Promise<Posted[]> {
+export async function readPosted(pr: number): Promise<Posted[]> {
   const file = recordFile(pr)
   let text: string
   try {
