@@ -70,3 +70,52 @@ test('setup-forge 6.2 and 6.4 create a task only when none exists, and leave a m
     assert.doesNotMatch(text, /\bElse\b/, label)
   }
 })
+
+// The worker runs Claude Code plugin commands, so its thread must not take the
+// model of the router or reconcile thread, which can run on a small model. The
+// launch table names the worker model of each action.
+const WORKER_MODEL = '`modelSelection` `{instanceId: "claudeAgent", model: <the worker model of the table>}`'
+
+test('the router and reconcile prompts launch the worker on the worker model of its table row', () => {
+  for (const [name, text] of [['router', ROUTER], ['reconcile', RECONCILE]] as const) {
+    const launch = text.split('\n').find((line) => line.includes('with `t3_thread_launch`'))
+    assert.ok(launch, `${name}: no launch step`)
+    assert.ok(launch.includes(WORKER_MODEL), `${name}: the launch passes no worker model`)
+    assert.match(launch, /\(always set it: the worker runs Claude Code plugin commands/, name)
+  }
+})
+
+// review and recheck workers only do bookkeeping around Codex runs; the other
+// actions write code or judge findings, so they keep the strongest model.
+const LIGHT = ['review', 'recheck']
+
+test('the launch table runs review and recheck on <<light_worker_model>>, every other action on <<worker_model>>', () => {
+  for (const [name, text] of [['router', ROUTER], ['reconcile', RECONCILE]] as const) {
+    assert.match(text, /[Pp]ick the launch message, with `<n>` the `pr` or the `issue` of the decision, its base and its worker model:/, name)
+    assert.match(text, /^   \| action \| message \| base \| worker model \|$/m, name)
+    const rows = text.split('\n').filter((line) => /^   \| `/.test(line))
+    assert.equal(rows.length, 7, `${name}: the table has 7 actions`)
+    for (const row of rows) {
+      const action = row.match(/^   \| `([a-z-]+)`/)?.[1] ?? ''
+      const model = LIGHT.includes(action) ? '<<light_worker_model>>' : '<<worker_model>>'
+      assert.ok(row.endsWith(` | \`${model}\` |`), `${name}: ${action} runs on ${model}`)
+    }
+  }
+})
+
+test('setup-forge says how it fills <<worker_model>> and <<light_worker_model>>, and fills both in both templates', () => {
+  assert.match(SKILL, /`<<worker_model>>`: the model of this thread when `orchestrator_capabilities` gives `inheritedProviderInstanceId` `claudeAgent` \(its `inheritedModel`\), else the newest Claude Opus model of the `claudeAgent` provider in its catalog/)
+  assert.match(SKILL, /`<<light_worker_model>>`: the newest Claude Sonnet model of the `claudeAgent` provider in the `orchestrator_capabilities` catalog/)
+  for (const label of ['6.2 The router tasks.', '6.4 The reconcile task.']) {
+    assert.match(part(label), /each `<<worker_model>>` by the worker model, each `<<light_worker_model>>` by the light worker model/, label)
+  }
+})
+
+test('setup-forge step 6 says the tasks can run on a small model and the workers stay on Claude', () => {
+  assert.doesNotMatch(SKILL, /Tell the user, so they run this part from a thread with the model and runtime mode the runs should use/)
+  assert.match(SKILL, /The T3 tasks copy the provider, the model and the runtime mode of the thread that creates them/)
+  assert.match(SKILL, /each worker thread runs on the Claude model its row of the launch table names/)
+  assert.match(SKILL, /`review` and `recheck` run on `<<light_worker_model>>`/)
+  assert.match(SKILL, /a small model is enough for the tasks/)
+  assert.match(SKILL, /`update_scheduled_task` has no model field/)
+})
