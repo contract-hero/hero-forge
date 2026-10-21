@@ -57,8 +57,8 @@ test('each bucket README links every skill in its bucket to its SKILL.md', () =>
   assert.deepEqual(missing, [])
 })
 
-// Claude Code commands the README may name that are not skills.
-const BUILT_INS = ['clear', 'compact']
+// Claude Code built-ins the README may name that hero-forge does not ship.
+const BUILT_INS = ['clear', 'compact', 'simplify']
 
 test('the top-level README names no skill that is gone', () => {
   const readme = read('README.md')

@@ -49,7 +49,7 @@ With `--afk`, the worktree is new, on a local branch the router named, and you s
 
 The worktree is new and holds no work, so the reset loses nothing. Every AFK push goes to the ticket branch with `--to` (step 4).
 
-Then check for an open PR on the branch: `gh pr view --json number,state,body` (with `--afk`: `gh pr list --head <ticket branch> --state open --json number,body`). An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing, and push it as step 4 says. Then write its body again as step 5 says, keeping what it held: with `--afk`, its `## Decisions` section keeps the earlier entries and gains each decision of this build. Save it to a file outside the repo, run `gh pr edit <PR> --body-file <file>`, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
+Then check for an open PR on the branch: `gh pr view --json number,state,body` (with `--afk`: `gh pr list --head <ticket branch> --state open --json number,body`). An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing, run the simplify pass on it, and push it as step 4 says. Then write its body again as step 5 says, keeping what it held: with `--afk`, its `## Decisions` section keeps the earlier entries and gains each decision of this build. Save it to a file outside the repo, run `gh pr edit <PR> --body-file <file>`, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
 
 ## 4. Build it
 
@@ -57,7 +57,9 @@ Call the Skill tool with "tdd" where possible, at pre-agreed seams. With `--afk`
 
 Run typechecking regularly, single test files regularly, and the full test suite once at the end.
 
-Commit the work to the branch. Then push it: `git push -u origin <branch>`.
+Commit the work to the branch. Then simplify it: call the Skill tool with "simplify", on the branch's changes (`git diff origin/<default branch>...HEAD`). It cleans up reuse, simplification and efficiency, and does not hunt bugs: the review does that. When it changes code, commit its changes on their own, then run the typecheck and the full test suite again. When either fails and the cause is not plain, revert that simplify commit (`git revert --no-edit <the simplify commit>`), run both checks again, and say so in the PR body's Evidence. Push only when both checks pass: when they still fail, stop and report the output. When it changes nothing, it makes no commit, so nothing is reverted. The pass comes before the push, never after the PR opens: with `--afk`, the reviewer App's router starts the review when the PR opens, and a later commit would move the head under it.
+
+Then push it: `git push -u origin <branch>`.
 
 With `--afk`, push as the App instead: `review.ts implementer push --repo <owner/repo> --branch <the worktree's branch> --to <ticket branch>`. It pushes the local branch's tip to the ticket branch on GitHub, over https, from a scratch repo that reads none of the system's, the user's or the repo's git config, and prints the branch, the commit and the App's login. Exit 1 with GitHub's message means GitHub refused the push (for example, the App has no permission to change `.github/workflows/`): show the message and stop. Exit 4: stop as in step 1. Never push as the user instead.
 
