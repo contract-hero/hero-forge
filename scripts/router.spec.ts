@@ -14,8 +14,8 @@ const BUCKETS = ['engineering', 'productivity']
 
 const ROUTER = 'skills/engineering/ask-forge'
 
-// Claude Code commands the router names that are not skills.
-const BUILT_INS = ['clear', 'compact']
+// Claude Code built-ins the router names that hero-forge does not ship.
+const BUILT_INS = ['clear', 'compact', 'simplify']
 
 // Each skill name: a folder in a bucket that holds a SKILL.md.
 function shipped() {

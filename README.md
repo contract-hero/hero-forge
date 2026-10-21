@@ -48,7 +48,7 @@ Not sure where to start? Ask `/ask-forge`. The skills below are grouped by flow,
 - **[handoff](./skills/productivity/handoff/SKILL.md)**: Compact the current conversation into a handoff document so another agent can continue the work.
 - **[to-spec](./skills/engineering/to-spec/SKILL.md)**: Turn the current conversation into a spec and publish it to the issue tracker.
 - **[to-tickets](./skills/engineering/to-tickets/SKILL.md)**: Break a plan, spec, or conversation into tracer-bullet tickets, each declaring its blocking edges.
-- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge, or, in [AFK mode](#afk-mode), stop at the draft PR.
+- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd`, clean it up with `/simplify`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge, or, in [AFK mode](#afk-mode), stop at the draft PR.
 - **[implement-spec-stack](./skills/engineering/implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket, reviewed layer by layer and then as a whole, and landed bottom-up.
 - **[tdd](./skills/engineering/tdd/SKILL.md)**: Test-driven development with a red-green loop. Builds features or fixes bugs one vertical slice at a time.
 - **[pr](./skills/engineering/pr/SKILL.md)**: The shape a pull request body should take: the smallest visual that makes the change clear, before/after evidence, and a merge-danger call.
