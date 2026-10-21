@@ -91,8 +91,11 @@ test('implement-pr --afk stays on the router\'s local branch and pushes to the t
 // The reviewer App's router starts the review when the PR opens, so the
 // simplify commit must be on the branch before the push that opens it.
 test('implement-pr and implement-spec-stack simplify the build before the push', () => {
-  inOrder(section(IMPLEMENT_PR, '4. Build it'), ['Call the Skill tool with "tdd"', 'call the Skill tool with "simplify"', 'git revert --no-edit HEAD', 'Then push it: `git push -u origin <branch>`'])
-  inOrder(STACK, ['calls the Skill tool with `tdd`', 'calls the Skill tool with `simplify`', 'git revert --no-edit HEAD', 'Then it pushes (`git push -u origin <branch>`)', 'gh pr create --draft --base <base>'])
+  inOrder(section(IMPLEMENT_PR, '4. Build it'), ['Call the Skill tool with "tdd"', 'call the Skill tool with "simplify"', 'git revert --no-edit <the simplify commit>', 'Then push it: `git push -u origin <branch>`'])
+  inOrder(STACK, ['calls the Skill tool with `tdd`', 'calls the Skill tool with `simplify`', 'git revert --no-edit <the simplify commit>', 'Then it pushes (`git push -u origin <branch>`)', 'gh pr create --draft --base <base>'])
+  // A pass with no change makes no commit, so a revert would undo the build.
+  assert.match(section(IMPLEMENT_PR, '4. Build it'), /When either fails.*When it changes nothing, it makes no commit, so nothing is reverted/)
+  assert.match(STACK, /When either fails.*When the pass changes nothing, it makes no commit, so nothing is reverted/)
 })
 
 test('implement-pr updates an existing PR\'s Decisions section before the hand-off', () => {

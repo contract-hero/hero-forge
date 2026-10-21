@@ -2,7 +2,7 @@
 
 ## 1.0.25
 
-- `implement-pr`, `implement-spec-stack`: the implementer runs the `simplify` skill on the branch's changes before the push, so the review sees the cleaned-up code. The pass commits on its own, then the typecheck and the full test suite run again. When they fail and the cause is not plain, `git revert --no-edit HEAD` undoes the pass, and the PR body's Evidence says so. The pass is before the push and not after the PR opens: in an AFK run, the reviewer App's router starts the review when the PR opens, and a later commit would move the head under it. `ask-forge` and the top-level `README.md` name the pass.
+- `implement-pr`, `implement-spec-stack`: the implementer runs the `simplify` skill on the branch's changes before the push, so the review sees the cleaned-up code. The pass commits on its own, then the typecheck and the full test suite run again. When either fails and the cause is not plain, `git revert` undoes the simplify commit, and the PR body's Evidence says so. A pass with no change makes no commit, so nothing is reverted. The pass is before the push and not after the PR opens: in an AFK run, the reviewer App's router starts the review when the PR opens, and a later commit would move the head under it. `ask-forge` and the top-level `README.md` name the pass.
 
 ## 1.0.24
 
