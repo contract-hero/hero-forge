@@ -16,6 +16,16 @@ const ROUTER = read('router-prompt.md')
 const RECONCILE = read('reconcile-prompt.md')
 const SKILL = read('SKILL.md')
 
+// Each phrase appears in `text`, in this order.
+function inOrder(text: string, phrases: string[]): void {
+  let at = 0
+  for (const phrase of phrases) {
+    const next = text.indexOf(phrase, at)
+    assert.ok(next !== -1, `"${phrase}" is missing, or out of order`)
+    at = next + phrase.length
+  }
+}
+
 // The last numbered step of a prompt template.
 function lastStep(text: string): string {
   const steps = [...text.matchAll(/^\d+\. /gm)]
@@ -49,10 +59,23 @@ test('the router prompt ends by settling its thread on ignore or started, and ma
 test('the reconcile prompt ends by settling its thread on a clean sweep, and marking it unread on a stop or a failed launch', () => {
   const last = lastStep(RECONCILE)
   assert.match(last, /^\d+\. Every exit above: as the last action, before you write its line, call `t3_thread_organize` with no `threadId`/)
-  assert.ok(last.includes(`${SETTLE}a \`reconcile: started ...\` line with \`failed 0\` and no message of step 3`), 'no settle for a clean sweep')
+  assert.ok(last.includes(`${SETTLE}a \`reconcile: started ...\` line with \`failed 0\`, no message of step 4 and no unread message of step 3`), 'no settle for a clean sweep')
   assert.doesNotMatch(last, /action `archive`/)
-  assert.match(last, /action `mark_unread` for a `stop: \.\.\.` exit, and for a `reconcile:` line with a failed launch or a message of step 3/)
+  assert.match(last, /action `mark_unread` for a `stop: \.\.\.` exit, and for a `reconcile:` line with a failed launch, a message of step 4 or an unread message of step 3/)
   assert.match(last, /A session with no `t3_thread_organize` tool skips this step/)
+})
+
+// An AFK run cannot mark its own thread unread while its run is active
+// (#74), so it puts the thread on the unread list. The reconcile marks each
+// listed thread once its run has ended, in the clone's workspaceRoot, right
+// after it finds the project, so a sweep that stops later still marks them.
+test('the reconcile prompt marks the threads on the unread list, and drops each one only once it is marked or gone', () => {
+  const step = RECONCILE.slice(RECONCILE.indexOf('review.ts unread list'))
+  assert.ok(RECONCILE.indexOf('review.ts unread list') > RECONCILE.indexOf('t3_project_list'), 'the drain runs before the project is found')
+  assert.ok(RECONCILE.indexOf('review.ts unread list') < RECONCILE.indexOf('review.ts reconcile --repo'), 'the drain runs before the sweep command')
+  inOrder(step, ['`t3_thread_organize` with action `mark_unread` and `threadId`', '`thread_not_found`', '`review.ts unread done --thread <thread>`', 'no completed run', 'keep'])
+  assert.match(step, /keep the error as an unread message for step 7/)
+  assert.match(step, /its message is an unread message too/)
 })
 
 // T3 starts each run of an unbound task in a new worktree, and the MCP task

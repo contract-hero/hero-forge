@@ -89,6 +89,13 @@ export const COMMANDS = {
   review.ts pause read   --issue N | --pr N    (exit 3: no pause record)
   review.ts pause delete --issue N | --pr N`,
   },
+  unread: {
+    summary: 'Add, list or drop the T3 threads of AFK runs that ended needing the maintainer, for reconcile to mark unread.',
+    usage: `usage:
+  review.ts unread add  --thread <T3 thread id>    (prints added: false when the thread is on the list already)
+  review.ts unread list                            (one {thread, added_at} line per thread, oldest first; exit 4: a corrupt record)
+  review.ts unread done --thread <T3 thread id>`,
+  },
   'codex-exec': {
     summary: 'Run one Codex role read-only on a brief, and check its output against a schema.',
     usage:
