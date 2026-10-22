@@ -510,12 +510,12 @@ const flows: [string, App, string, Remote, ((r: Router) => Promise<void>) | null
     onIssue('ignore', 'blocked'),
   ],
   [
-    'the maintainer labels a spec that an open issue blocks',
+    'the maintainer labels a spec that an open issue blocks: only a single ticket is checked',
     'implementer',
     'issues.labeled.spec.json',
     { review: implementerMd(), issue: SPEC, blockers: [{ number: 20, state: 'open', repo: REPO }] },
     null,
-    onIssue('ignore', 'blocked', 23),
+    onIssue('build-spec', null, 23),
   ],
   [
     'the maintainer labels a ticket whose blockers are closed, or open in another repo',
@@ -919,32 +919,48 @@ test('route --app implementer: a corrupt attempts file exits 4 and gives the iss
   assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
 })
 
-test('route --app implementer: a stranger label costs no lookup, and the issue is looked up only after the sender rule', async (t) => {
+test('route --app implementer: a stranger label costs only the blockers lookup, and the issue is looked up only after the sender rule', async (t) => {
   const r = await router(t, { review: implementerMd() })
+  const config = ['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${REPO}/contents/docs/agents/review.md?ref=main`]
+  const blockers = ['api', '--paginate', '--jq', '.[] | {number, state, repository_url}', `repos/${REPO}/issues/28/dependencies/blocked_by?per_page=100`]
   await decision(r.route('issues.labeled.other-label.json', D1, 'implementer'))
-  assert.deepEqual((await r.gh.calls()).map((c) => c.argv.join(' ')), [
-    `api -H Accept: application/vnd.github.raw+json repos/${REPO}/contents/docs/agents/review.md?ref=main`,
-  ])
+  assert.deepEqual((await r.gh.calls()).map((c) => c.argv), [config, blockers])
   await decision(r.route('issues.labeled.stranger.json', D2, 'implementer'))
-  assert.deepEqual((await r.gh.calls()).slice(1).map((c) => c.argv[1]), ['-H', 'user'])
+  assert.deepEqual((await r.gh.calls()).slice(2).map((c) => c.argv), [config, blockers, ['api', 'user', '--jq', '.login']])
   await decision(r.route('issues.labeled.json', D3, 'implementer'))
-  // A build reads the open PRs, for has-pr, the blockers, and then the label events.
+  // A build reads the blockers, the open PRs for has-pr, and then the label events.
   assert.deepEqual(
-    (await r.gh.calls()).slice(3).map((c) => (c.argv[1] === 'graphql' ? c.argv.slice(0, 2) : c.argv)),
+    (await r.gh.calls()).slice(5).map((c) => (c.argv[1] === 'graphql' ? c.argv.slice(0, 2) : c.argv)),
     [
-      ['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${REPO}/contents/docs/agents/review.md?ref=main`],
+      config,
+      blockers,
       ['api', 'user', '--jq', '.login'],
       ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'],
       ['api', 'graphql'],
-      ['api', '--paginate', '--jq', '.[] | {number, state, repository_url}', `repos/${REPO}/issues/28/dependencies/blocked_by?per_page=100`],
       ['api', '--paginate', '--jq', '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}', `repos/${REPO}/issues/28/events?per_page=100`],
     ],
   )
 })
 
+test('route --app implementer: blocked comes after paused and duplicate, and before the App rules', async (t) => {
+  const blockers: Blocker[] = [{ number: 27, state: 'open', repo: REPO }]
+  const paused = await router(t, { review: implementerMd('paused: true'), blockers })
+  assert.deepEqual(await decision(paused.route('issues.labeled.json', D1, 'implementer')), onIssue('ignore', 'paused'))
+  const r = await router(t, { review: implementerMd() })
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+  await r.gh.respond(responses({ review: implementerMd(), blockers }))
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('ignore', 'duplicate'))
+  // A label that a stranger adds, or another label, is blocked first: the reason names the blocker.
+  assert.deepEqual(await decision(r.route('issues.labeled.stranger.json', D2, 'implementer')), onIssue('ignore', 'blocked'))
+  assert.deepEqual(await decision(r.route('issues.labeled.other-label.json', D3, 'implementer')), onIssue('ignore', 'blocked'))
+  // An issue that has a parent is blocked before has-parent too.
+  await r.gh.respond(responses({ review: implementerMd(), issue: CHILD, blockers }))
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D4, 'implementer')), onIssue('ignore', 'blocked'))
+})
+
 test('route --app implementer: a failed issue lookup exits 1 and takes no lock', async (t) => {
   const r = await router(t, { review: implementerMd() })
-  await r.gh.respond([...responses({ review: implementerMd() }).slice(0, 2), { match: `repos/${REPO}/issues/`, stderr: 'gh: Server Error (HTTP 502)\n', exit: 1 }])
+  await r.gh.respond([...responses({ review: implementerMd() }).slice(0, 2), { match: `repos/${REPO}/issues/28 `, stderr: 'gh: Server Error (HTTP 502)\n', exit: 1 }, ...responses({ review: implementerMd() }).slice(2)])
   const { code, stdout, stderr } = await r.route('issues.labeled.json', D1, 'implementer')
   assert.equal(code, 1)
   assert.equal(stdout, '')

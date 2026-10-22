@@ -2,7 +2,7 @@
 
 ## 1.0.27
 
-- `review-pipeline`: the router and the hourly sweep no longer start a build for a ticket whose blockers are still open. `review.ts route --app implementer` and `review.ts reconcile` now read GitHub's blocked-by links (`GET /repos/{o}/{r}/issues/{n}/dependencies/blocked_by`). A ticket or spec with an open blocker in the same repo is `ignore, blocked`: no build, no attempt, no daily run and no lock. A blocker in another repo, or one that GitHub does not list to the token, does not count. In `reconcile`, the rule comes after `paused`, `duplicate` and `has-pr`, and before the App rules. In `route`, it comes after `has-pr`. When the last blocker closes, the next sweep builds the ticket. Before, each blocked build used an Opus session and an Implementer run, and then paused with a question that had only one answer ("wait").
+- `review-pipeline`: the router and the hourly sweep no longer start a build for a ticket whose blockers are still open. `review.ts route --app implementer` and `review.ts reconcile` now read GitHub's blocked-by links (`GET /repos/{o}/{r}/issues/{n}/dependencies/blocked_by`). A single ticket (an issue with no sub-issues) with an open blocker in the same repo is `ignore, blocked`: no build, no attempt, no daily run and no lock. A blocker in another repo, or one that GitHub does not list to the token, does not count. A spec is not checked, because `implement-spec-stack` orders its sub-issues. The rule comes after `paused` and `duplicate` (and, in `reconcile`, `has-pr`), and before the App rules. When the last blocker closes, the next sweep builds the ticket. Before, each blocked build used an Opus session and an Implementer run, and then paused with a question that had only one answer ("wait").
 
 ## 1.0.26
 

@@ -3,10 +3,9 @@
 // started (the Mac was off, or T3 dropped it). It lists the open work, builds
 // for each item the event and payload that `route` would have received, and
 // decides it with route's own `decide`, so caps, paused, locks, sender and
-// author rules give the same answers. It holds three rules of its own: a
-// ticket or spec that a trusted open PR closes is ignore, has-pr, and then
-// one that an open issue of this repo blocks is ignore, blocked, both before
-// route's App rules (route's build rule asks the same late); and a hand-off that no event
+// author rules give the same answers. It holds two rules of its own: a ticket
+// or spec that a trusted open PR closes is ignore, has-pr, before route's App
+// rules (route's build rule asks the same last); and a hand-off that no event
 // can carry, because it was never posted (the last kind). The
 // lists pick which comment stands for an item; route still judges it.
 //
@@ -20,9 +19,10 @@
 //     PR closes, or a spec one of whose sub-issues an open PR closes, is
 //     ignore, has-pr, after route's paused and duplicate rules and before
 //     its App rules. Only a PR by the maintainer or contract-implementer[bot]
-//     counts. Then a ticket or spec with an open blocker of this repo
-//     (GitHub's blocked-by links) is ignore, blocked: a build could only
-//     pause. The sweep after its last blocker closes builds it.
+//     counts. Then route's blocked rule: a single ticket with an open
+//     blocker of this repo (GitHub's blocked-by links) is ignore, blocked,
+//     as a build could only pause. The sweep after its last blocker closes
+//     builds it.
 //   - an open PR with no run state, or with a run state at another head:
 //     pull_request.opened, or ready_for_review for a PR that is not a draft
 //     and not contract-implementer[bot]'s (reviewer)
@@ -83,7 +83,7 @@ import {
   relaunch,
   REVIEWER_BOT,
   sameLogin,
-  buildVeto,
+  hasPr,
   type Context,
   type Decision,
   type Payload,
@@ -134,9 +134,9 @@ async function labelItem(repo: string, issue: Listed, context: Context): Promise
     label: { name: BUILD_LABEL },
   }
   const delivery = `reconcile-label-${issue.number}-${labeled?.id ?? 'none'}`
-  // has-pr and blocked come after paused and duplicate, as route's rules for both Apps come first.
-  const veto = async () => (issue.pull_request ? null : buildVeto(repo, issue.number, context))
-  return { ...(await decide('implementer', 'issues', delivery, payload, context, veto)), app: 'implementer' }
+  // has-pr comes after paused and duplicate, as route's rules for both Apps come first.
+  const hasPrNow = async () => (!issue.pull_request && (await hasPr(repo, issue.number, await context.closed(repo))) ? 'has-pr' : null)
+  return { ...(await decide('implementer', 'issues', delivery, payload, context, hasPrNow)), app: 'implementer' }
 }
 
 // An open PR as the PR list gives it.

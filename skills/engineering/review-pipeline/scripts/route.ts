@@ -38,7 +38,13 @@
 //   8. recheck
 // --app reviewer, any other event                   ignore, event:<name>
 //
-// --app implementer, an issues event:
+// --app implementer, an issues event, after 1 and 2 and before 3 (so that
+// the reason is accurate):
+//      a single ticket (no sub-issues) that an open issue of this repo
+//      blocks (GitHub's blocked-by links). A blocker in another repo, or one
+//      GitHub does not list to this token, does not count. The build starts
+//      on the sweep after the last blocker closes. A spec is not checked:
+//      implement-spec-stack orders its sub-issues   ignore, blocked
 //   3. not labeled or unlabeled                     ignore, action:<name>
 //   4. no docs/agents/review.md                     ignore, no-config
 //   5. no implementer.app: enabled                  ignore, disabled
@@ -60,20 +66,16 @@
 //                                                   ignore, author (issue: the one at fault)
 //  13. an open PR by the maintainer or contract-implementer[bot] closes the
 //      ticket, or (for a spec) one of its sub-issues ignore, has-pr
-//  14. an open issue of this repo blocks the issue (GitHub's blocked-by
-//      links). A blocker in another repo, or one GitHub does not list to
-//      this token, does not count. The build starts on the sweep after the
-//      last blocker closes                          ignore, blocked
-//  15. a build already started from the event that last added
+//  14. a build already started from the event that last added
 //      ready-for-agent to the issue                 ignore, duplicate
 //      (both deliveries of a hand-off, and a redelivery of either, come from
 //      that one event, so the second one starts nothing, also after a build
 //      that ended with no PR and no pause. A retry adds the label again,
 //      which is a new event. A reconcile sweep keys a missed label by its
 //      own delivery id, so it can still start one more build)
-//  16. build-spec when it has sub-issues, else build-ticket, once the issue
+//  15. build-spec when it has sub-issues, else build-ticket, once the issue
 //      lock is held and one of implementer.attempts is reserved (below).
-//      The second delivery of a hand-off then finds the build's record (15)
+//      The second delivery of a hand-off then finds the build's record (14)
 //      or the lock held. A build releases the issue lock when it opens its
 //      PR or pauses, so a later second delivery also finds the PR (13) or
 //      the pause record (9).
@@ -309,12 +311,11 @@ export async function buildLabelEvent(repo: string, issue: number): Promise<{ id
   return labeled === undefined ? null : { id: labeled.id, actor: labeled.actor }
 }
 
-// The rules that stop a build of `issue` that could only end at once: an
-// open PR closes it (has-pr), or an open blocker would make it pause
-// (blocked). route asks them after its author rules; reconcile before them.
-export async function buildVeto(repo: string, issue: number, context: Pick<Context, 'closed' | 'blocked'>): Promise<'has-pr' | 'blocked' | null> {
-  if (await hasPr(repo, issue, await context.closed(repo))) return 'has-pr'
-  return (await context.blocked(repo, issue)) ? 'blocked' : null
+// Whether `issue` is a single ticket (no sub-issues) that an open issue of
+// `repo` blocks: its build could only pause. The sub-issues are read only
+// for an issue that is blocked.
+export async function blockedTicket(repo: string, issue: number, context: Pick<Context, 'blocked'>): Promise<boolean> {
+  return (await context.blocked(repo, issue)) && (await relations(repo, issue)).subIssues === 0
 }
 
 // Whether an open PR closes ticket `issue`, or one of its sub-issues.
@@ -423,7 +424,6 @@ type Event = {
   sender: string | undefined
   maintainer: () => Promise<string>
   closed: (repo: string) => Promise<Set<number>>
-  blocked: (repo: string, issue: number) => Promise<boolean>
   labelEvent?: (repo: string, issue: number) => Promise<number | null>
 }
 
@@ -500,12 +500,10 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
     if (stranger !== undefined) return why('author', stranger.number)
   }
   // A build that opened its PR has released the issue lock, so the lock does
-  // not stop a later delivery of the same hand-off: the open PR does. A build
-  // with an open blocker could only pause: it waits for a sweep.
-  const veto = await buildVeto(e.repo, e.issue, e)
-  if (veto !== null) return why(veto)
+  // not stop a later delivery of the same hand-off: the open PR does.
+  if (await hasPr(e.repo, e.issue, await e.closed(e.repo))) return why('has-pr')
   // The two deliveries of a hand-off come from one ready-for-agent event: the
-  // build is recorded under it, so the later one is a duplicate (rule 15).
+  // build is recorded under it, so the later one is a duplicate (rule 14).
   const event = e.labelEvent === undefined ? null : await e.labelEvent(e.repo, e.issue)
   return {
     action: count > 0 ? 'build-spec' : 'build-ticket',
@@ -601,8 +599,8 @@ export function liveContext(): Context {
 // Decide one delivery for `app`, and for work take its lock, reserve the
 // attempt, record the delivery and count the run, as the rules at the top of
 // this file say. `before` is a caller's own ignore reason, asked after the
-// rules for both Apps (paused, duplicate) and before the App's rules; route
-// gives none.
+// rules for both Apps (paused, duplicate) and before the blocked rule and
+// the App's rules; route gives none.
 export function decide(
   app: AppName,
   name: string,
@@ -672,6 +670,10 @@ async function decideBy(
   if (await doneDelivery(app, delivery)) return decided('ignore', 'duplicate')
   const vetoed = (await before?.()) ?? null
   if (vetoed !== null) return decided('ignore', vetoed)
+  // A blocked single ticket comes before the App's rules, for route and reconcile alike.
+  if (app === 'implementer' && name === 'issues' && repo !== null && issue !== null && (await blockedTicket(repo, issue, context))) {
+    return decided('ignore', 'blocked')
+  }
 
   const event: Event = {
     name,
@@ -684,7 +686,6 @@ async function decideBy(
     sender: text(payload.sender?.login),
     maintainer: context.maintainer,
     closed: context.closed,
-    blocked: context.blocked,
     labelEvent: context.labelEvent,
   }
   const outcome = await rule(event)

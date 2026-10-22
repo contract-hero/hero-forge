@@ -644,6 +644,11 @@ test('reconcile: a ticket that an open issue of this repo blocks is ignore (bloc
   assert.deepEqual(await swept(m.reconcile()), [line('build-ticket', 'implementer', { issue: 28 })])
 })
 
+test('reconcile: a spec that an open issue blocks is still build-spec: only a single ticket is checked', async (t) => {
+  const m = await machine(t, spec23({ blockers: { 23: [{ number: 20, state: 'open', repo: REPO }] } }))
+  assert.deepEqual(await swept(m.reconcile()), [{ action: 'build-spec', repo: REPO, pr: null, issue: 23, reason: null, app: 'implementer' }])
+})
+
 test('reconcile: blocked comes after paused, duplicate and has-pr, and before the sender rule', async (t) => {
   const blockers = { 28: [{ number: 27, state: 'open' as const, repo: REPO }] }
   const paused = await machine(t, { ...ticket28(), blockers, review: reviewMd('paused: true') })
