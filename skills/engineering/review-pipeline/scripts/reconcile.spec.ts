@@ -529,6 +529,22 @@ test('reconcile: an item that fails prints its error, and the other items still 
   ])
 })
 
+test('reconcile: a failed blockers lookup fails that item only, with no lock and no attempt', async (t) => {
+  const m = await everyKindMachine(t)
+  await m.gh.respond([{ match: `repos/${REPO}/issues/28/dependencies/blocked_by`, stderr: 'gh: Server Error (HTTP 502)\n', exit: 1 }, ...responses(everyKind())])
+  const { code, stdout, stderr } = await m.reconcile()
+  assert.equal(code, 1)
+  assert.equal(stderr, 'review.ts reconcile: cannot list the blockers of #28: gh: Server Error (HTTP 502)\n')
+  // The ticket starts nothing; the other items still start.
+  assert.deepEqual(stdout.split('\n').filter((l) => l !== '').map(decided), [
+    line('review', 'reviewer', { pr: 43 }),
+    line('adjudicate', 'implementer', { pr: 42 }),
+    line('resume', 'implementer', { issue: 29 }),
+  ])
+  await assert.rejects(readFile(join(m.caps, 'implementer-app-attempts.json')), { code: 'ENOENT' })
+  await assert.rejects(readFile(join(m.state, 'locks', 'issue-28.lock')), { code: 'ENOENT' })
+})
+
 test('reconcile: a list that fails exits 1 and starts nothing', async (t) => {
   const m = await everyKindMachine(t)
   await m.gh.respond([{ match: 'pulls?state=open', stderr: 'gh: Bad credentials (HTTP 401)\n', exit: 1 }, ...responses(everyKind())])

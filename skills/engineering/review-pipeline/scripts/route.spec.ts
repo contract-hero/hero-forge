@@ -1,6 +1,6 @@
 // `review.ts route`: recorded GitHub webhook payloads in, one decision out.
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -949,6 +949,19 @@ test('route --app implementer: a failed issue lookup exits 1 and takes no lock',
   assert.equal(code, 1)
   assert.equal(stdout, '')
   assert.equal(stderr, `review.ts route: cannot read issue #28 of ${REPO}: gh: Server Error (HTTP 502)\n`)
+  await r.gh.respond(responses({ review: implementerMd() }))
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+})
+
+test('route --app implementer: a failed blockers lookup exits 1, and takes no lock, no attempt and no daily run', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await r.gh.respond([{ match: '/dependencies/blocked_by', stderr: 'gh: Server Error (HTTP 502)\n', exit: 1 }, ...responses({ review: implementerMd() })])
+  const { code, stdout, stderr } = await r.route('issues.labeled.json', D1, 'implementer')
+  assert.equal(code, 1)
+  assert.equal(stdout, '')
+  assert.equal(stderr, 'review.ts route: cannot list the blockers of #28: gh: Server Error (HTTP 502)\n')
+  await assert.rejects(readdir(join(r.state, 'locks')), { code: 'ENOENT' })
+  await assert.rejects(readdir(r.caps), { code: 'ENOENT' })
   await r.gh.respond(responses({ review: implementerMd() }))
   assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
 })
