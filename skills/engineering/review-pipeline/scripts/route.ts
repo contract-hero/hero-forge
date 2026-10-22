@@ -38,7 +38,13 @@
 //   8. recheck
 // --app reviewer, any other event                   ignore, event:<name>
 //
-// --app implementer, an issues event:
+// --app implementer, an issues event, after 1 and 2 and before 3 (so that
+// the reason is accurate):
+//      a single ticket (no sub-issues) that an open issue of this repo
+//      blocks (GitHub's blocked-by links). A blocker in another repo, or one
+//      GitHub does not list to this token, does not count. The build starts
+//      on the sweep after the last blocker closes. A spec is not checked:
+//      implement-spec-stack orders its sub-issues   ignore, blocked
 //   3. not labeled or unlabeled                     ignore, action:<name>
 //   4. no docs/agents/review.md                     ignore, no-config
 //   5. no implementer.app: enabled                  ignore, disabled
@@ -105,7 +111,7 @@ import { APPS, type AppName } from './app-token.ts'
 import { countRun, releaseAttempt, reserveAttempt, uncountRun } from './cap.ts'
 import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
 import { resolveConfigText, type ResolvedConfig } from './config.ts'
-import { gh, json, listLines, oneLine, userIdentity } from './github.ts'
+import { gh, json, listBlockers, listLines, oneLine, userIdentity } from './github.ts'
 import { parseHandoff, type HandoffKind } from './handoff.ts'
 import { issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, underPrLockGuard, whileHolding } from './lock.ts'
 import { readPause } from './pause.ts'
@@ -125,6 +131,8 @@ export const TRIAGE_LABEL = 'needs-triage'
 
 // GitHub logins are case-insensitive.
 export const sameLogin = (a: string | undefined, b: string) => a !== undefined && a.toLowerCase() === b.toLowerCase()
+// So are repo names.
+const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
 // Whether `action` on a PR by `author` starts a review. An author who is not
 // the bot gets the maintainer's actions here: the author rule then ignores
@@ -277,8 +285,13 @@ export async function closedByOpenPrs(repo: string, maintainer: string): Promise
     const login = pr.author === null ? undefined : pr.bot ? `${pr.author}[bot]` : pr.author
     return sameLogin(login, maintainer) || sameLogin(login, IMPLEMENTER_BOT)
   }
-  const same = (other: string) => other.toLowerCase() === repo.toLowerCase()
-  return new Set(closers.filter(trusted).flatMap((pr) => pr.closes.filter((c) => same(c.repo)).map((c) => c.number)))
+  return new Set(closers.filter(trusted).flatMap((pr) => pr.closes.filter((c) => sameRepo(c.repo, repo)).map((c) => c.number)))
+}
+
+// Whether an open issue of `repo` blocks `issue` (GitHub's blocked-by
+// links). A blocker in another repo does not count.
+export async function isBlocked(repo: string, issue: number): Promise<boolean> {
+  return (await listBlockers(repo, issue)).some((b) => b.state === 'open' && sameRepo(b.repo, repo))
 }
 
 // The latest event that added ready-for-agent to `issue`, with its actor, or
@@ -296,6 +309,13 @@ export async function buildLabelEvent(repo: string, issue: number): Promise<{ id
   )
   const labeled = events.filter((e) => e.label === BUILD_LABEL).at(-1)
   return labeled === undefined ? null : { id: labeled.id, actor: labeled.actor }
+}
+
+// Whether `issue` is a single ticket (no sub-issues) that an open issue of
+// `repo` blocks: its build could only pause. The sub-issues are read only
+// for an issue that is blocked.
+export async function blockedTicket(repo: string, issue: number, context: Pick<Context, 'blocked'>): Promise<boolean> {
+  return (await context.blocked(repo, issue)) && (await relations(repo, issue)).subIssues === 0
 }
 
 // Whether an open PR closes ticket `issue`, or one of its sub-issues.
@@ -537,23 +557,26 @@ function releaseFor(lock: Start['lock'], token: string): Promise<boolean> {
 
 // What a decision reads besides the delivery: the review config of a repo,
 // the maintainer's login, the issues of a repo that a trusted open PR
-// closes (closedByOpenPrs), and the id of the event that last added
-// ready-for-agent to an issue (buildLabelEvent). `route` reads them for each
+// closes (closedByOpenPrs), whether an open issue blocks an issue
+// (isBlocked), and the id of the event that last added ready-for-agent to an
+// issue (buildLabelEvent). `route` reads them for each
 // delivery; a sweep gives them once for all its items, and gives no
 // labelEvent: it keys a missed label by its own delivery id.
 export type Context = {
   config: (repo: string, branch: string | undefined) => Promise<ResolvedConfig | null>
   maintainer: () => Promise<string>
   closed: (repo: string) => Promise<Set<number>>
+  blocked: (repo: string, issue: number) => Promise<boolean>
   labelEvent?: (repo: string, issue: number) => Promise<number | null>
 }
 
 // The context of one delivery: the config on the default branch, the
-// maintainer, the closed issues and the label event, each looked up once and
-// only when a rule needs it.
+// maintainer, the closed issues, the blockers and the label event, each
+// looked up once and only when a rule needs it.
 export function liveContext(): Context {
   let maintainer: Promise<string> | undefined
   const closed = new Map<string, Promise<Set<number>>>()
+  const blocked = new Map<string, Promise<boolean>>()
   const login = () => (maintainer ??= userIdentity().then((u) => u.login))
   return {
     config: remoteConfig,
@@ -563,6 +586,12 @@ export function liveContext(): Context {
       if (found === undefined) closed.set(repo, (found = login().then((m) => closedByOpenPrs(repo, m))))
       return found
     },
+    blocked: (repo, issue) => {
+      const key = `${repo}#${issue}`
+      let found = blocked.get(key)
+      if (found === undefined) blocked.set(key, (found = isBlocked(repo, issue)))
+      return found
+    },
     labelEvent: async (repo, issue) => (await buildLabelEvent(repo, issue))?.id ?? null,
   }
 }
@@ -570,8 +599,8 @@ export function liveContext(): Context {
 // Decide one delivery for `app`, and for work take its lock, reserve the
 // attempt, record the delivery and count the run, as the rules at the top of
 // this file say. `before` is a caller's own ignore reason, asked after the
-// rules for both Apps (paused, duplicate) and before the App's rules; route
-// gives none.
+// rules for both Apps (paused, duplicate) and before the blocked rule and
+// the App's rules; route gives none.
 export function decide(
   app: AppName,
   name: string,
@@ -641,6 +670,10 @@ async function decideBy(
   if (await doneDelivery(app, delivery)) return decided('ignore', 'duplicate')
   const vetoed = (await before?.()) ?? null
   if (vetoed !== null) return decided('ignore', vetoed)
+  // A blocked single ticket comes before the App's rules, for route and reconcile alike.
+  if (app === 'implementer' && name === 'issues' && repo !== null && issue !== null && (await blockedTicket(repo, issue, context))) {
+    return decided('ignore', 'blocked')
+  }
 
   const event: Event = {
     name,

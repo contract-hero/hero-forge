@@ -49,6 +49,21 @@ export async function listLines<T>(args: string[], what: string, token?: string)
     .map((line) => json<T>(line, `list ${what}`))
 }
 
+// OWNER/REPO from an issue's repository_url (https://api.github.com/repos/O/R).
+export function repoOf(url: string): string {
+  return url.split('/').slice(-2).join('/')
+}
+
+// The issues that block `issue` (GitHub's blocked-by links), in any state and
+// repo, every page.
+export async function listBlockers(repo: string, issue: number): Promise<{ number: number; state: string; repo: string }[]> {
+  const listed = await listLines<{ number: number; state: string; repository_url: string }>(
+    ['api', '--paginate', '--jq', '.[] | {number, state, repository_url}', `repos/${repo}/issues/${issue}/dependencies/blocked_by?per_page=100`],
+    `the blockers of #${issue}`,
+  )
+  return listed.map((b) => ({ number: b.number, state: b.state, repo: repoOf(b.repository_url) }))
+}
+
 // Who posts: the login GitHub will show, the `as` value recorded in run state
 // (`user`, or the App's `<slug>[bot]`), and the token gh posts with (none for
 // the user).

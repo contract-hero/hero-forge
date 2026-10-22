@@ -19,7 +19,10 @@
 //     PR closes, or a spec one of whose sub-issues an open PR closes, is
 //     ignore, has-pr, after route's paused and duplicate rules and before
 //     its App rules. Only a PR by the maintainer or contract-implementer[bot]
-//     counts.
+//     counts. Then route's blocked rule: a single ticket with an open
+//     blocker of this repo (GitHub's blocked-by links) is ignore, blocked,
+//     as a build could only pause. The sweep after its last blocker closes
+//     builds it.
 //   - an open PR with no run state, or with a run state at another head:
 //     pull_request.opened, or ready_for_review for a PR that is not a draft
 //     and not contract-implementer[bot]'s (reviewer)
@@ -114,7 +117,7 @@ async function listLabelled(repo: string, label: string): Promise<Listed[]> {
 const labelsOf = (names: string[]) => names.map((name) => ({ name }))
 
 // A missed label: the labeled event of its latest adder.
-async function labelItem(repo: string, issue: Listed, closed: Set<number>, context: Context): Promise<Line | null> {
+async function labelItem(repo: string, issue: Listed, context: Context): Promise<Line | null> {
   // A build that paused goes on only through its answer (resumeItem).
   if ((await readPause({ kind: issue.pull_request ? 'pr' : 'issue', number: issue.number }))?.repo === repo) return null
   const labeled = await buildLabelEvent(repo, issue.number)
@@ -132,7 +135,7 @@ async function labelItem(repo: string, issue: Listed, closed: Set<number>, conte
   }
   const delivery = `reconcile-label-${issue.number}-${labeled?.id ?? 'none'}`
   // has-pr comes after paused and duplicate, as route's rules for both Apps come first.
-  const hasPrNow = async () => (!issue.pull_request && (await hasPr(repo, issue.number, closed)) ? 'has-pr' : null)
+  const hasPrNow = async () => (!issue.pull_request && (await hasPr(repo, issue.number, await context.closed(repo))) ? 'has-pr' : null)
   return { ...(await decide('implementer', 'issues', delivery, payload, context, hasPrNow)), app: 'implementer' }
 }
 
@@ -309,17 +312,18 @@ async function reconcile(argv: string[]): Promise<number> {
   const config = await live.config(repo, undefined)
   // No labelEvent: a missed label keys its build by this sweep's own delivery
   // id (labelItem), so a build that ended with no PR and no pause can get one more.
-  const context: Context = { config: async () => config, maintainer: live.maintainer, closed: live.closed }
+  const context: Context = { config: async () => config, maintainer: live.maintainer, closed: live.closed, blocked: live.blocked }
 
   const labelled = await listLabelled(repo, BUILD_LABEL)
   const pulls = await listPulls(repo)
   const paused = await listLabelled(repo, PAUSED_LABEL)
   const comments = commentReader(repo)
-  // Only a ticket or a spec can have a PR that closes it.
-  const closed = labelled.some((issue) => !issue.pull_request) ? await context.closed(repo) : new Set<number>()
+  // Only a ticket or a spec can have a PR that closes it. The list is read
+  // with the others, so a list that fails starts nothing.
+  if (labelled.some((issue) => !issue.pull_request)) await context.closed(repo)
 
   const items: (() => Promise<Line | null>)[] = [
-    ...labelled.map((issue) => () => labelItem(repo, issue, closed, context)),
+    ...labelled.map((issue) => () => labelItem(repo, issue, context)),
     ...pulls.map((pull) => () => pullItem(repo, pull, context)),
     ...pulls.map((pull) => async () => handoffItem(repo, pull, await comments(pull.number), context)),
     ...pulls.map((pull) => async () => recheckItem(repo, pull, await comments(pull.number), context)),

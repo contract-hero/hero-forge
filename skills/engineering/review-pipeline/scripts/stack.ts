@@ -17,13 +17,12 @@ import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { Failure, parse, positive, refuse, repoOption, runMain, usageFor } from './cli.ts'
 import { configApp, squashMerge } from './finish.ts'
-import { gh, json, listLines, oneLine } from './github.ts'
+import { gh, json, listBlockers, listLines, oneLine } from './github.ts'
 import { loadState, stateRoot } from './run-state.ts'
 
 const usage = usageFor('stack')
 
 type Issue = { number: number; title: string; state: string }
-type Blocker = { number: number; state: string; repository_url: string }
 
 // An edge the two-blocker rule changed: `ticket` now branches from `to`
 // (it branched from `from`) so that `for` can have one base.
@@ -49,11 +48,6 @@ function slug(title: string): string {
     out = next
   }
   return out || (words[0] ?? 'ticket').slice(0, 40)
-}
-
-// OWNER/REPO from an issue's repository_url (https://api.github.com/repos/O/R).
-function repoOf(url: string): string {
-  return url.split('/').slice(-2).join('/')
 }
 
 // No ticket left is ready, so the rest hold a cycle. Walk from the lowest
@@ -88,14 +82,11 @@ async function order(values: Record<string, string | boolean | undefined>): Prom
   const blockers = new Map<number, number[]>()
   const excluded: { ticket: number; reason: string }[] = []
   for (const ticket of open) {
-    const listed = await listLines<Blocker>(
-      ['api', '--paginate', '--jq', '.[] | {number, state, repository_url}', `repos/${repo}/issues/${ticket.number}/dependencies/blocked_by`],
-      `the blockers of #${ticket.number}`,
-    )
+    const listed = await listBlockers(repo, ticket.number)
     const openBlockers = listed.filter((b) => b.state === 'open').sort((a, b) => a.number - b.number)
-    const outside = openBlockers.find((b) => repoOf(b.repository_url) !== repo || !inSpec.has(b.number))
+    const outside = openBlockers.find((b) => b.repo !== repo || !inSpec.has(b.number))
     if (outside !== undefined) {
-      const ref = repoOf(outside.repository_url) === repo ? `#${outside.number}` : `${repoOf(outside.repository_url)}#${outside.number}`
+      const ref = outside.repo === repo ? `#${outside.number}` : `${outside.repo}#${outside.number}`
       excluded.push({ ticket: ticket.number, reason: `blocked by ${ref}, an open issue outside spec #${spec}` })
     }
     blockers.set(ticket.number, openBlockers.map((b) => b.number))

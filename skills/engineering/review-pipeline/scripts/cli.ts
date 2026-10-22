@@ -153,7 +153,8 @@ usage: review.ts route undo --app reviewer|implementer --token <lock_token>
   recheck again, which only posts it).
   Prints one line per item: route's decision plus app (reviewer or implementer), and exits 0. Work takes its lock
   as route does: start a run for each line whose action is not ignore. A ticket or spec that an open PR by the
-  maintainer or contract-implementer[bot] closes (itself, or one of its sub-issues) is ignore, has-pr. An item
+  maintainer or contract-implementer[bot] closes (itself, or one of its sub-issues) is ignore, has-pr. A single
+  ticket that an open issue of the same repo blocks (GitHub's blocked-by links) is ignore, blocked. An item
   that fails prints its error on stderr, the other lines still stand, and the exit code is the first failure's.`,
   },
   delivery: {
