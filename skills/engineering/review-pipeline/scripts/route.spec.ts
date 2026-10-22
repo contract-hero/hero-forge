@@ -23,9 +23,16 @@ const implementerMd = (...yaml: string[]) => reviewMd('implementer:', '  app: en
 // sub-issues it has, who wrote each sub-issue (by default the maintainer,
 // numbered from 24), and its labels now (by default ready-for-agent); and the
 // id of the event that last added ready-for-agent (by default none, so each
-// label delivery on one fake is a hand-off of its own).
+// label delivery on one fake is a hand-off of its own); and the issues that
+// block it, in any state and repo (by default none).
 type Sub = { number: number; author: string }
-type Remote = { review: string | null; issue?: { parent: boolean; subIssues: number; subs?: Sub[]; labels?: string[] }; labelEvent?: number }
+type Blocker = { number: number; state: 'open' | 'closed'; repo: string }
+type Remote = {
+  review: string | null
+  issue?: { parent: boolean; subIssues: number; subs?: Sub[]; labels?: string[] }
+  labelEvent?: number
+  blockers?: Blocker[]
+}
 
 const TICKET = { parent: false, subIssues: 0 }
 const SPEC = { parent: false, subIssues: 9 }
@@ -33,7 +40,7 @@ const CHILD = { parent: true, subIssues: 0 }
 // A ticket whose ready-for-agent label is gone again.
 const UNREADY = { parent: false, subIssues: 0, labels: ['enhancement'] }
 
-function responses({ review, issue = TICKET, labelEvent }: Remote): FakeGhResponse[] {
+function responses({ review, issue = TICKET, labelEvent, blockers = [] }: Remote): FakeGhResponse[] {
   return [
     review === null
       ? { match: 'contents/docs/agents/review.md', stdout: '{"message":"Not Found","status":"404"}', stderr: 'gh: Not Found (HTTP 404)\n', exit: 1 }
@@ -46,6 +53,7 @@ function responses({ review, issue = TICKET, labelEvent }: Remote): FakeGhRespon
         .join(''),
     },
     // Before the issue itself, which its match would also take.
+    { match: '/dependencies/blocked_by', stdout: blockers.map((b) => `${JSON.stringify(b)}\n`).join('') },
     {
       match: '/events',
       stdout: labelEvent === undefined ? '' : `${JSON.stringify({ id: labelEvent, label: 'ready-for-agent', actor: MAINTAINER })}\n`,
@@ -490,6 +498,30 @@ const flows: [string, App, string, Remote, ((r: Router) => Promise<void>) | null
     null,
     onIssue('ignore', 'author', 25),
   ],
+  [
+    'the maintainer labels a ticket that an open issue blocks',
+    'implementer',
+    'issues.labeled.json',
+    { review: implementerMd(), blockers: [{ number: 26, state: 'closed', repo: REPO }, { number: 27, state: 'open', repo: REPO }] },
+    null,
+    onIssue('ignore', 'blocked'),
+  ],
+  [
+    'the maintainer labels a spec that an open issue blocks',
+    'implementer',
+    'issues.labeled.spec.json',
+    { review: implementerMd(), issue: SPEC, blockers: [{ number: 20, state: 'open', repo: REPO }] },
+    null,
+    onIssue('ignore', 'blocked', 23),
+  ],
+  [
+    'the maintainer labels a ticket whose blockers are closed, or open in another repo',
+    'implementer',
+    'issues.labeled.json',
+    { review: implementerMd(), blockers: [{ number: 26, state: 'closed', repo: REPO }, { number: 27, state: 'open', repo: 'contract-hero/other' }] },
+    null,
+    onIssue('build-ticket'),
+  ],
   ['the maintainer labels a ticket that has a parent', 'implementer', 'issues.labeled.json', { review: implementerMd(), issue: CHILD }, null, onIssue('ignore', 'has-parent')],
   ['someone else adds ready-for-agent', 'implementer', 'issues.labeled.stranger.json', { review: implementerMd() }, null, onIssue('ignore', 'sender')],
   ['the maintainer adds another label', 'implementer', 'issues.labeled.other-label.json', { review: implementerMd() }, null, onIssue('ignore', 'label:needs-triage')],
@@ -893,7 +925,7 @@ test('route --app implementer: a stranger label costs no lookup, and the issue i
   await decision(r.route('issues.labeled.stranger.json', D2, 'implementer'))
   assert.deepEqual((await r.gh.calls()).slice(1).map((c) => c.argv[1]), ['-H', 'user'])
   await decision(r.route('issues.labeled.json', D3, 'implementer'))
-  // A build reads the open PRs, for has-pr, and then the label events.
+  // A build reads the open PRs, for has-pr, the blockers, and then the label events.
   assert.deepEqual(
     (await r.gh.calls()).slice(3).map((c) => (c.argv[1] === 'graphql' ? c.argv.slice(0, 2) : c.argv)),
     [
@@ -901,6 +933,7 @@ test('route --app implementer: a stranger label costs no lookup, and the issue i
       ['api', 'user', '--jq', '.login'],
       ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'],
       ['api', 'graphql'],
+      ['api', '--paginate', '--jq', '.[] | {number, state, repo: (.repository_url | sub("^.*/repos/"; ""))}', `repos/${REPO}/issues/28/dependencies/blocked_by?per_page=100`],
       ['api', '--paginate', '--jq', '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}', `repos/${REPO}/issues/28/events?per_page=100`],
     ],
   )

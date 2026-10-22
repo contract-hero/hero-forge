@@ -40,7 +40,10 @@ type GitHub = {
   needsInfo?: Listed[]
   // The sub-issues of each issue (none when absent).
   subs?: Record<number, Sub[]>
+  // The issues that block each issue, in any state and repo (none when absent).
+  blockers?: Record<number, Blocker[]>
 }
+type Blocker = { number: number; state: 'open' | 'closed'; repo: string }
 
 const lines = (items: unknown[]) => items.map((item) => `${JSON.stringify(item)}\n`).join('')
 
@@ -65,6 +68,8 @@ function responses(github: GitHub): FakeGhResponse[] {
     ...perIssue('comments', github.comments),
     ...perIssue('sub_issues', github.subs),
     { match: '/sub_issues', stdout: '' },
+    ...perIssue('dependencies/blocked_by', github.blockers),
+    { match: '/dependencies/blocked_by', stdout: '' },
     ...relations,
     // An issue with no sub-issues and no parent, labelled ready-for-agent: a ticket.
     { match: `repos/${REPO}/issues/`, stdout: `${JSON.stringify({ parent_issue_url: null, sub_issues_summary: { total: 0, completed: 0, percent_completed: 0 }, labels: ['ready-for-agent'] })}\n` },
@@ -608,6 +613,27 @@ test('reconcile: a pause record of another repo does not stop the build of a lab
   const m = await machine(t, ticket28())
   await seedPause(m.state, 'issue', 28, 'contract-hero/other')
   assert.deepEqual(await swept(m.reconcile()), [line('build-ticket', 'implementer', { issue: 28 })])
+})
+
+test('reconcile: a ticket that an open issue of this repo blocks is ignore (blocked), takes no lock and no attempt, and builds once the blocker closes', async (t) => {
+  const blocked = (state: 'open' | 'closed'): GitHub => ({ ...ticket28(), blockers: { 28: [{ number: 27, state, repo: REPO }, { number: 9, state: 'open', repo: 'contract-hero/other' }] } })
+  const m = await machine(t, blocked('open'))
+  assert.deepEqual(await swept(m.reconcile()), [line('ignore', 'implementer', { issue: 28 }, 'blocked')])
+  await assert.rejects(readFile(join(m.caps, 'implementer-app-attempts.json')), { code: 'ENOENT' })
+  await assert.rejects(readdir(join(m.state, 'locks')), { code: 'ENOENT' })
+  await m.gh.respond(responses(blocked('closed')))
+  assert.deepEqual(await swept(m.reconcile()), [line('build-ticket', 'implementer', { issue: 28 })])
+})
+
+test('reconcile: blocked comes after paused, duplicate and has-pr, and before the sender rule', async (t) => {
+  const blockers = { 28: [{ number: 27, state: 'open' as const, repo: REPO }] }
+  const paused = await machine(t, { ...ticket28(), blockers, review: reviewMd('paused: true') })
+  assert.deepEqual((await swept(paused.reconcile()))[0], line('ignore', 'implementer', { issue: 28 }, 'paused'))
+  const withPr = await machine(t, { ...ticket28(), ...pr50(IMPLEMENTER_BOT, 28), blockers })
+  assert.deepEqual((await swept(withPr.reconcile()))[0], line('ignore', 'implementer', { issue: 28 }, 'has-pr'))
+  // A ready-for-agent label that a stranger added last is still blocked first.
+  const stranger = await machine(t, { ...ticket28('mallory'), blockers })
+  assert.deepEqual((await swept(stranger.reconcile()))[0], line('ignore', 'implementer', { issue: 28 }, 'blocked'))
 })
 
 test('reconcile: has-pr comes after paused and duplicate, as route orders its rules', async (t) => {

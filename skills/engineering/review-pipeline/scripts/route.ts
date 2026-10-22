@@ -60,16 +60,20 @@
 //                                                   ignore, author (issue: the one at fault)
 //  13. an open PR by the maintainer or contract-implementer[bot] closes the
 //      ticket, or (for a spec) one of its sub-issues ignore, has-pr
-//  14. a build already started from the event that last added
+//  14. an open issue of this repo blocks the issue (GitHub's blocked-by
+//      links). A blocker in another repo, or one GitHub does not list to
+//      this token, does not count. The build starts on the sweep after the
+//      last blocker closes                          ignore, blocked
+//  15. a build already started from the event that last added
 //      ready-for-agent to the issue                 ignore, duplicate
 //      (both deliveries of a hand-off, and a redelivery of either, come from
 //      that one event, so the second one starts nothing, also after a build
 //      that ended with no PR and no pause. A retry adds the label again,
 //      which is a new event. A reconcile sweep keys a missed label by its
 //      own delivery id, so it can still start one more build)
-//  15. build-spec when it has sub-issues, else build-ticket, once the issue
+//  16. build-spec when it has sub-issues, else build-ticket, once the issue
 //      lock is held and one of implementer.attempts is reserved (below).
-//      The second delivery of a hand-off then finds the build's record (14)
+//      The second delivery of a hand-off then finds the build's record (15)
 //      or the lock held. A build releases the issue lock when it opens its
 //      PR or pauses, so a later second delivery also finds the PR (13) or
 //      the pause record (9).
@@ -281,6 +285,22 @@ export async function closedByOpenPrs(repo: string, maintainer: string): Promise
   return new Set(closers.filter(trusted).flatMap((pr) => pr.closes.filter((c) => same(c.repo)).map((c) => c.number)))
 }
 
+// The open issues of `repo` that block `issue` (GitHub's blocked-by links),
+// every page. A blocker in another repo does not count.
+export async function openBlockers(repo: string, issue: number): Promise<number[]> {
+  const blockers = await listLines<{ number: number; state: string; repo: string }>(
+    [
+      'api',
+      '--paginate',
+      '--jq',
+      '.[] | {number, state, repo: (.repository_url | sub("^.*/repos/"; ""))}',
+      `repos/${repo}/issues/${issue}/dependencies/blocked_by?per_page=100`,
+    ],
+    `the blockers of #${issue}`,
+  )
+  return blockers.filter((b) => b.state === 'open' && b.repo.toLowerCase() === repo.toLowerCase()).map((b) => b.number)
+}
+
 // The latest event that added ready-for-agent to `issue`, with its actor, or
 // null when GitHub lists none, every page.
 export async function buildLabelEvent(repo: string, issue: number): Promise<{ id: number; actor: string | null } | null> {
@@ -482,8 +502,10 @@ async function buildRule(e: Event, config: ResolvedConfig): Promise<Outcome> {
   // A build that opened its PR has released the issue lock, so the lock does
   // not stop a later delivery of the same hand-off: the open PR does.
   if (await hasPr(e.repo, e.issue, await e.closed(e.repo))) return why('has-pr')
+  // A build with an open blocker could only pause: it waits for a sweep.
+  if ((await openBlockers(e.repo, e.issue)).length > 0) return why('blocked')
   // The two deliveries of a hand-off come from one ready-for-agent event: the
-  // build is recorded under it, so the later one is a duplicate (rule 14).
+  // build is recorded under it, so the later one is a duplicate (rule 15).
   const event = e.labelEvent === undefined ? null : await e.labelEvent(e.repo, e.issue)
   return {
     action: count > 0 ? 'build-spec' : 'build-ticket',
