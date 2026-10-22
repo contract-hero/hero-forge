@@ -14,6 +14,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['handoff', 'usage: review.ts handoff --app reviewer|implementer --repo O/R --pr N --kind review-posted|recheck-failed|adjudicated --round R [--config <path>]'],
   ['lock', 'usage: review.ts lock release --pr N | --issue N --token <lock_token>'],
   ['pause', '  review.ts pause write  --repo O/R --issue N | --pr N --reason <the question>'],
+  ['unread', '  review.ts unread add  --thread <T3 thread id>    (prints added: false when the thread is on the list already)'],
   [
     'codex-exec',
     'usage: review.ts codex-exec --role orchestrator|reviewer --brief <file> --out <file> [--schema <file>] [--log <file>] [--config <path>]',
@@ -30,7 +31,7 @@ const SUBCOMMANDS: [string, string][] = [
   ['app-check', 'usage: review.ts app-check --app reviewer|implementer --repo O/R [--webhook-url <url>]'],
 ]
 
-const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'], lock: ['release'], pause: ['write'], 'resolve-base': ['prepare'] }
+const COMMANDS_FIRST: Record<string, string[]> = { stack: ['order'], 'run-state': ['path'], implementer: ['push'], lock: ['release'], pause: ['write'], unread: ['add'], 'resolve-base': ['prepare'] }
 
 for (const [name, line] of SUBCOMMANDS) {
   test(`${name} --help prints a summary and the usage to stdout, and exits 0`, async () => {
@@ -51,7 +52,7 @@ for (const [name, line] of SUBCOMMANDS) {
 
   test(`${name} with an unknown option exits 2 with the same usage text that --help prints`, async () => {
     const help = await runCli([name, '--help'])
-    // stack, run-state, implementer, lock and pause take a command first; give them one, so the
+    // stack, run-state, implementer, lock, pause and unread take a command first; give them one, so the
     // unknown option reaches the option parser.
     const command = COMMANDS_FIRST[name] ?? []
     const { code, stdout, stderr } = await runCli([name, ...command, '--no-such-option'])

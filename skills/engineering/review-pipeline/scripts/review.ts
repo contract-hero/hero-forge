@@ -22,6 +22,7 @@ import { main as resolveBase } from './resolve-base.ts'
 import { main as route } from './route.ts'
 import { main as runState } from './run-state.ts'
 import { main as stack } from './stack.ts'
+import { main as unread } from './unread.ts'
 
 // Every name in the usage table, and nothing else, has an entry point here.
 const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
@@ -34,6 +35,7 @@ const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
   handoff,
   lock,
   pause,
+  unread,
   'codex-exec': codexExec,
   'codex-review': codexReview,
   'merge-gate': mergeGate,
