@@ -53,7 +53,10 @@ function responses({ review, issue = TICKET, labelEvent, blockers = [] }: Remote
         .join(''),
     },
     // Before the issue itself, which its match would also take.
-    { match: '/dependencies/blocked_by', stdout: blockers.map((b) => `${JSON.stringify(b)}\n`).join('') },
+    {
+      match: '/dependencies/blocked_by',
+      stdout: blockers.map(({ repo, ...b }) => `${JSON.stringify({ ...b, repository_url: `https://api.github.com/repos/${repo}` })}\n`).join(''),
+    },
     {
       match: '/events',
       stdout: labelEvent === undefined ? '' : `${JSON.stringify({ id: labelEvent, label: 'ready-for-agent', actor: MAINTAINER })}\n`,
@@ -933,7 +936,7 @@ test('route --app implementer: a stranger label costs no lookup, and the issue i
       ['api', 'user', '--jq', '.login'],
       ['api', `repos/${REPO}/issues/28`, '--jq', '{parent_issue_url, sub_issues_summary, labels: [.labels[].name]}'],
       ['api', 'graphql'],
-      ['api', '--paginate', '--jq', '.[] | {number, state, repo: (.repository_url | sub("^.*/repos/"; ""))}', `repos/${REPO}/issues/28/dependencies/blocked_by?per_page=100`],
+      ['api', '--paginate', '--jq', '.[] | {number, state, repository_url}', `repos/${REPO}/issues/28/dependencies/blocked_by?per_page=100`],
       ['api', '--paginate', '--jq', '.[] | select(.event == "labeled") | {id, label: .label.name, actor: .actor.login}', `repos/${REPO}/issues/28/events?per_page=100`],
     ],
   )

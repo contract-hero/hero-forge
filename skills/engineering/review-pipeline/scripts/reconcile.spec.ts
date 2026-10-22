@@ -68,7 +68,10 @@ function responses(github: GitHub): FakeGhResponse[] {
     ...perIssue('comments', github.comments),
     ...perIssue('sub_issues', github.subs),
     { match: '/sub_issues', stdout: '' },
-    ...perIssue('dependencies/blocked_by', github.blockers),
+    ...Object.entries(github.blockers ?? {}).map(([n, blockers]) => ({
+      match: `repos/${REPO}/issues/${n}/dependencies/blocked_by`,
+      stdout: lines(blockers.map(({ repo, ...b }) => ({ ...b, repository_url: `https://api.github.com/repos/${repo}` }))),
+    })),
     { match: '/dependencies/blocked_by', stdout: '' },
     ...relations,
     // An issue with no sub-issues and no parent, labelled ready-for-agent: a ticket.
