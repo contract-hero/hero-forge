@@ -1,5 +1,5 @@
 // `review.ts reconcile --repo O/R` (usage in the table in cli.ts): the
-// hourly sweep that starts the work a missed webhook delivery should have
+// daily sweep that starts the work a missed webhook delivery should have
 // started (the Mac was off, or T3 dropped it). It lists the open work, builds
 // for each item the event and payload that `route` would have received, and
 // decides it with route's own `decide`, so caps, paused, locks, sender and

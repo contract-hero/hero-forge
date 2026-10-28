@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.28
+
+- `setup-forge`: the reconcile task runs once a day at 09:00 (`{type: 'fixed_time', timeOfDay: '09:00'}`), not every hour. The hourly task made 24 threads a day for each repo, also on days with no work, and almost every run ended with `reconcile: started 0, ignored 0, failed 0`. T3 Connect holds webhook requests for 24 hours while the machine is offline, so the routers still start most work; the sweep is the backup. Step 6.4 moves a live task that still has the hourly interval to the new schedule. The unread mark of an AFK thread that needs the maintainer now comes at the next daily sweep; the push notification stays the signal of the moment. The setup notes name Codex `gpt-6.1-sol` with low reasoning effort as a small model for the router and reconcile tasks. Every "hourly reconcile" in the skills, the README and ADR 0006 now says "daily".
+
 ## 1.0.27
 
 - `review-pipeline`: the router and the hourly sweep no longer start a build for a ticket whose blockers are still open. `review.ts route --app implementer` and `review.ts reconcile` now read GitHub's blocked-by links (`GET /repos/{o}/{r}/issues/{n}/dependencies/blocked_by`). A single ticket (an issue with no sub-issues) with an open blocker in the same repo is `ignore, blocked`: no build, no attempt, no daily run and no lock. A blocker in another repo, or one that GitHub does not list to the token, does not count. A spec is not checked, because `implement-spec-stack` orders its sub-issues. The rule comes after `paused` and `duplicate` (and, in `reconcile`, `has-pr`), and before the App rules. When the last blocker closes, the next sweep builds the ticket. Before, each blocked build used an Opus session and an Implementer run, and then paused with a question that had only one answer ("wait").

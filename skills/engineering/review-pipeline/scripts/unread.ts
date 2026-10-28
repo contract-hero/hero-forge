@@ -3,7 +3,7 @@
 // `<state root>/unread/<sha256 of the thread id>.json`. T3 refuses
 // `mark_unread` on a thread whose latest run is still active, so a run cannot
 // mark its own thread, not even from a queued follow-up turn (#74). The run
-// adds its thread id; the hourly reconcile lists the ids, marks each thread
+// adds its thread id; the daily reconcile lists the ids, marks each thread
 // unread, and drops it with `done`. Two reconcile tasks on one clone may mark
 // the same thread twice: that is harmless.
 import { createHash, randomBytes } from 'node:crypto'
