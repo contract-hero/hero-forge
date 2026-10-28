@@ -29,9 +29,9 @@ In AFK mode, GitHub events start the runs: you type no slash command.
 - T3 Code, with T3 Connect linked and "Hold webhook requests while this environment is offline" on.
 - Codex for the reviewers, when the review runtime is `codex`.
 
-`/setup-forge` writes the config, creates the router webhook task of each App and the hourly reconcile task, and checks each App setting. After it asks you, it adds a ruleset to the default branch that requires a pull request and the gate status.
+`/setup-forge` writes the config, creates the router webhook task of each App and the daily reconcile task, and checks each App setting. After it asks you, it adds a ruleset to the default branch that requires a pull request and the gate status.
 
-**How to control it.** `paused: true` in `docs/agents/review.md` on the default branch stops both Apps. Each App has a daily run cap, and each issue has an attempt cap. Only your own label, on an issue you wrote, starts a build. Each thread the pipeline starts settles itself when it needs nothing from you, so your active T3 list holds only the threads that need you. The hourly reconcile marks each of those threads unread, within one hour of the end of its run. Each router and reconcile run removes its own T3 worktree, and `/setup-forge` offers to remove the worktrees that earlier runs left.
+**How to control it.** `paused: true` in `docs/agents/review.md` on the default branch stops both Apps. Each App has a daily run cap, and each issue has an attempt cap. Only your own label, on an issue you wrote, starts a build. Each thread the pipeline starts settles itself when it needs nothing from you, so your active T3 list holds only the threads that need you. The daily reconcile (09:00) marks each of those threads unread, at its first sweep after the end of the run. Each router and reconcile run removes its own T3 worktree, and `/setup-forge` offers to remove the worktrees that earlier runs left.
 
 ## Skills
 

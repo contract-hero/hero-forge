@@ -141,10 +141,10 @@ test('the shared thread step holds the tool, both actions, the late notification
 
 // T3 refuses `mark_unread` on a thread whose latest run is active, also from
 // a queued follow-up turn (#74). So the run puts its own thread on the unread
-// list, and the hourly reconcile marks it after the run ends.
+// list, and the daily reconcile marks it after the run ends.
 test('the shared thread step puts the thread on the unread list for reconcile, and never calls mark_unread on its own thread', () => {
   const mark = THREAD_STEP.slice(THREAD_STEP.indexOf('action `mark_unread`'))
-  inOrder(mark, ['T3 refuses `mark_unread` on a thread whose latest run is still active', 'also from a queued follow-up turn', '`t3_thread_configuration` with no `threadId`', '`review.ts unread add --thread <threadId>`', 'neither settles the thread nor calls `mark_unread`', 'The hourly reconcile', 'marks the thread unread'])
+  inOrder(mark, ['T3 refuses `mark_unread` on a thread whose latest run is still active', 'also from a queued follow-up turn', '`t3_thread_configuration` with no `threadId`', '`review.ts unread add --thread <threadId>`', 'neither settles the thread nor calls `mark_unread`', 'The daily reconcile', 'marks the thread unread'])
   assert.match(mark, /`review\.ts` cannot run .* push notification only/)
   assert.doesNotMatch(THREAD_STEP, /`t3_thread_organize` with no `threadId` and action `mark_unread`/)
 })

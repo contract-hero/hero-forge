@@ -10,7 +10,7 @@ The **Review pipeline** (ADR 0005) still needs a person to start each run: `/imp
 - **Trust.** The Implementer acts only on text from the user and from `contract-reviewer[bot]`. Every push, pull request and comment goes through a helper CLI subcommand that mints the App token in its own process, so no agent holds a token.
 - **Stacks.** The reviewer merges each layer after the final stack review passes. The Implementer restacks the next layer and pushes. Neither App does the other's job.
 - **Routing.** Each App has one webhook URL, so it has one T3 router task. The router finds or clones the target repo as a T3 project and starts a fresh thread in a new worktree there. A per-pull-request lock in the run state serializes events, and a repeat event exits at once.
-- **Limits.** Per-ticket attempt cap, a daily run cap for each App, `max_rounds` for review, and `paused: true` in the config as the kill switch. T3 Connect holds webhook requests for 24 hours while the machine is offline, and an hourly reconcile sweep starts any run it missed.
+- **Limits.** Per-ticket attempt cap, a daily run cap for each App, `max_rounds` for review, and `paused: true` in the config as the kill switch. T3 Connect holds webhook requests for 24 hours while the machine is offline, and an daily reconcile sweep starts any run it missed.
 - **Setup.** `setup-forge` grows: it writes the `implementer:` block and the caps, guides the user through the App settings and then verifies them through the API, and creates the T3 tasks. It does not create the Apps.
 
 ## Considered options

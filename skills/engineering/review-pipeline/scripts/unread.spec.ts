@@ -1,6 +1,6 @@
 // The unread list (#74). T3 refuses `mark_unread` on a thread whose latest
 // run is still active, so an AFK run cannot mark its own thread. It adds its
-// thread id with `review.ts unread add`, and the hourly reconcile, a later
+// thread id with `review.ts unread add`, and the daily reconcile, a later
 // run, lists the ids, marks each thread unread, and drops it with `done`.
 import assert from 'node:assert/strict'
 import { readdir, writeFile } from 'node:fs/promises'
