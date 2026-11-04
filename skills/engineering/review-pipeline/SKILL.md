@@ -84,7 +84,7 @@ Every subcommand uses the same exit codes:
 
 Run `review.ts config`. Exit 3 (no `docs/agents/review.md`) or exit 4 (invalid file): tell the user to run `/setup-forge`, show the message, and stop. Do not guess a config.
 
-Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with `model`, `effort`, and `agent_model`, the sub-agent model family), `max_rounds`, `app`, `paused`, `app_daily_runs` and `implementer` (with `app`, `attempts` and `daily_runs`). The last three are for `route`, and `implementer.app` is the Implementer App's switch, as `app` is the reviewer App's.
+Keep the JSON: `runtime`, `pairs` (N), `orchestrator` and `reviewer` (each with `model`, `effort`, and `agent_model`, the sub-agent model family), `max_rounds`, `app`, `paused` and `implementer` (with `app`, `attempts` and `daily_runs`). The last two are for `route`, and `implementer.app` is the Implementer App's switch, as `app` is the reviewer App's.
 
 - `runtime: codex`: run `codex --version` now. If it fails, stop before **Resume** as **Codex runtime** says for a missing or broken Codex. Then see **Codex runtime**.
 - `app: true`: run the check in **App identity** now, before **Resume**.

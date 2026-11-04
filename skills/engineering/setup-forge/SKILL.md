@@ -140,11 +140,10 @@ AFK mode on with no reviewer App above: AFK mode needs both Apps. Ask whether to
 
 AFK mode on with no `implementer-app.env`: tell the user to add the credentials as for the reviewer App, in the same `~/.config/hero-forge/` folder: `implementer-app.pem`, and `implementer-app.env` with `HERO_FORGE_IMPLEMENTER_APP_ID=<App ID or Client ID>` and `HERO_FORGE_IMPLEMENTER_APP_KEY=<absolute path of implementer-app.pem>`. Wait until they say the files are there.
 
-With AFK mode on, the YAML block gets these lines after the other fields: `paused` is the switch that stops both Apps, `app_daily_runs` caps the reviewer App's runs in a rolling 24 hours, and the `implementer:` block turns the Implementer App on, caps the builds of one ticket (`attempts`) and its runs in 24 hours (`daily_runs`).
+With AFK mode on, the YAML block gets these lines after the other fields: `paused` is the switch that stops both Apps, and the `implementer:` block turns the Implementer App on, caps the builds of one ticket (`attempts`) and its runs in a rolling 24 hours (`daily_runs`). The reviewer App has no daily cap, so the block has no line for it. An `app_daily_runs` line that an older setup wrote is ignored: leave it, or remove it when you rewrite the file.
 
 ```yaml
 paused: false
-app_daily_runs: 20
 implementer:
   app: enabled
   attempts: 3

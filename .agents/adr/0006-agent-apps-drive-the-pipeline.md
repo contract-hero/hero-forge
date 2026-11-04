@@ -25,3 +25,7 @@ The **Review pipeline** (ADR 0005) still needs a person to start each run: `/imp
 - The plugin now depends on T3 Code for unattended runs. Without T3 the skills still work by hand.
 - Each event costs one agent turn, because T3 does not filter or dedupe GitHub events. The router must exit fast on events it ignores, and duplicate handling stays in the run state.
 - A two-way decision that the Spec reviewer accepts reaches `main` without a human seeing it first. The pull request body's decision log is the audit trail.
+
+## Amendment (1.0.28)
+
+The reviewer App has no daily run cap now. The reviews run on Codex, and the maintainer does not want a limit on them. The Implementer App keeps its daily run cap (`implementer.daily_runs`) and the per-ticket attempt cap (`implementer.attempts`). A config that still has `app_daily_runs` parses, and the key is ignored.

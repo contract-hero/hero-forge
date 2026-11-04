@@ -101,9 +101,10 @@
 // Then, for every decision that starts work: a held lock (per PR, or per
 // issue for a build or a resume on an issue) is ignore, locked; for a build,
 // a ticket whose builds reached implementer.attempts is ignore, attempts;
-// the App's daily run cap is ignore, cap. Else take the lock, reserve the
-// attempt, record the delivery, count the run, and print the decision with
-// the lock's owner token (lock_token), for the run to release it.
+// for the Implementer, its daily run cap (implementer.daily_runs) is ignore,
+// cap. The reviewer App has no daily cap. Else take the lock, reserve the
+// attempt, record the delivery, count the Implementer's run, and print the
+// decision with the lock's owner token (lock_token), for the run to release it.
 import { randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -359,8 +360,8 @@ async function doneDelivery(app: AppName, delivery: string): Promise<boolean> {
 
 // What a done record also keeps, so `route undo` can give it back: the repo,
 // the ticket whose attempt the decision reserved (null for no build), and
-// the time its run was counted.
-type Taken = { repo: string; attempt: number | null; counted_at: string }
+// the time its run was counted (null for the reviewer App, which counts none).
+type Taken = { repo: string; attempt: number | null; counted_at: string | null }
 
 // Write the record whole: a temp file in the same dir, then rename.
 async function recordDelivery(
@@ -619,7 +620,8 @@ export type RelaunchAction = 'review' | 'adjudicate' | 'recheck'
 // whose hand-off reconcile found due. GitHub sent no event for it, so its one
 // rule is the App's switch (the part posts the hand-off as that App):
 // no app: enabled, or no implementer.app: enabled, is ignore, disabled. The
-// rules for both Apps come first, and the lock and the cap after, as decide.
+// rules for both Apps come first, and the lock and the Implementer's cap
+// after, as decide.
 // A relaunch is a duplicate only while the part it started holds its lock:
 // a part that released the lock (or let it expire) with the hand-off still
 // lost is started again, so its done record is forgotten first. The record
@@ -702,11 +704,11 @@ async function decideBy(
   // counted, so a failed record counts nothing, and done after. A build
   // reserves its attempt (one check and increment under the attempts
   // file's lock) before the run is counted, so a ticket at its cap counts
-  // no run. A call that the attempts or the cap stops, or that fails, gives
-  // back what it reserved, forgets the delivery and gives the lock back.
-  // When the done record fails, the run stays counted, which errs toward
-  // the cap.
-  const limit = app === 'reviewer' ? config.app_daily_runs : config.implementer.daily_runs
+  // no run. Only the Implementer's runs are counted: the reviewer App has
+  // no daily cap. A call that the attempts or the cap stops, or that fails,
+  // gives back what it reserved, forgets the delivery and gives the lock
+  // back. When the done record fails, the run stays counted, which errs
+  // toward the cap.
   const attempt = outcome.attempt
   let reserved = false
   const stop = async (reason: string): Promise<Decision> => {
@@ -724,8 +726,11 @@ async function decideBy(
       if (!(await reserveAttempt(repo, attempt.issue, attempt.limit))) return await stop('attempts')
       reserved = true
     }
-    const counted = await countRun(app, limit)
-    if (counted === null) return await stop('cap')
+    let counted: string | null = null
+    if (app === 'implementer') {
+      counted = await countRun(app, config.implementer.daily_runs)
+      if (counted === null) return await stop('cap')
+    }
     await recordDelivery(app, key, 'done', outcome.lock, token, {
       repo,
       attempt: attempt === undefined ? null : attempt.issue,
@@ -747,7 +752,7 @@ async function decideBy(
 // holds `token` (a reconcile line has the token but no delivery id), and,
 // only while the token still owns the decision's lock: deletes the record,
 // so the same delivery is decided again; gives back the build attempt and
-// the counted run; then releases the lock. Running it again finds no record
+// the counted run (the Implementer's only); then releases the lock. Running it again finds no record
 // and changes nothing: it exits 0 either way.
 type DeliveryRecord = { state?: unknown; pr?: unknown; issue?: unknown; token?: unknown } & Partial<Taken>
 

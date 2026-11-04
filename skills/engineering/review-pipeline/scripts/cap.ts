@@ -1,7 +1,9 @@
-// The daily run cap of each App: one small file per App that every repo on
-// the machine shares, `<cap dir>/<app>-app-runs.json`. It is a JSON list of
+// The Implementer's daily run cap: one small file that every repo on the
+// machine shares, `<cap dir>/implementer-app-runs.json`. It is a JSON list of
 // the ISO times of the runs the App started in the last 24 hours (a rolling
-// window, not a calendar day). The cap dir is ~/.config/hero-forge/,
+// window, not a calendar day). The reviewer App has no daily cap since
+// 1.0.28, so route counts none of its runs, and a `reviewer-app-runs.json`
+// left by an older version is never read. The cap dir is ~/.config/hero-forge/,
 // overridable for tests with HERO_FORGE_CAP_DIR.
 //
 // The Implementer's attempt cap: `<cap dir>/implementer-app-attempts.json`, a

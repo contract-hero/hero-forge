@@ -475,10 +475,12 @@ test('reconcile: two sweeps in a row start nothing the second time, and count no
   const caps = async () =>
     Object.fromEntries(
       await Promise.all(
-        ['reviewer-app-runs.json', 'implementer-app-runs.json', 'implementer-app-attempts.json'].map(async (f) => [f, await readFile(join(m.caps, f), 'utf8')]),
+        ['implementer-app-runs.json', 'implementer-app-attempts.json'].map(async (f) => [f, await readFile(join(m.caps, f), 'utf8')]),
       ),
     )
   const before = await caps()
+  // The reviewer App counts no run.
+  await assert.rejects(readFile(join(m.caps, 'reviewer-app-runs.json')), { code: 'ENOENT' })
   const second = await swept(m.reconcile())
   assert.deepEqual(
     second,
@@ -499,20 +501,30 @@ test('reconcile: in a paused repo every item is the ignore (paused) route gives'
   ])
 })
 
-test('reconcile: an App at its daily cap is the ignore (cap) route gives, and holds no lock', async (t) => {
+test('reconcile: the Implementer at its daily cap is the ignore (cap) route gives, and holds no lock', async (t) => {
   const full = async (m: { caps: string }) => {
     await mkdir(m.caps, { recursive: true })
-    await writeFile(join(m.caps, 'reviewer-app-runs.json'), JSON.stringify([new Date().toISOString()]))
+    await writeFile(join(m.caps, 'implementer-app-runs.json'), JSON.stringify([new Date().toISOString()]))
   }
-  const github = { review: reviewMd('app_daily_runs: 1'), ...pr42(MAINTAINER, false) }
+  const github = { ...ticket28(), review: reviewMd('  daily_runs: 1') }
   const m = await machine(t, github)
   await full(m)
-  const expected = await routed(t, github, 'reviewer', 'pull_request.ready_for_review.json', full)
-  assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: 42, issue: null, reason: 'cap', app: 'reviewer' })
+  const expected = await routed(t, github, 'implementer', 'issues.labeled.json', full)
+  assert.deepEqual(expected, { action: 'ignore', repo: REPO, pr: null, issue: 28, reason: 'cap', app: 'implementer' })
   assert.deepEqual(await swept(m.reconcile()), [expected])
   // The cap made no record and held no lock: once the cap allows it, the same item starts.
-  await m.gh.respond(responses({ ...github, review: reviewMd('app_daily_runs: 2') }))
-  assert.deepEqual(await swept(m.reconcile()), [{ ...expected, action: 'review', reason: null }])
+  await m.gh.respond(responses({ ...github, review: reviewMd('  daily_runs: 2') }))
+  assert.deepEqual(await swept(m.reconcile()), [{ ...expected, action: 'build-ticket', reason: null }])
+})
+
+test('reconcile: the reviewer App has no daily cap, even with an old app_daily_runs line', async (t) => {
+  const github = { ...pr42(MAINTAINER, false), review: reviewMd('app_daily_runs: 1') }
+  const m = await machine(t, github)
+  await mkdir(m.caps, { recursive: true })
+  await writeFile(join(m.caps, 'reviewer-app-runs.json'), JSON.stringify([new Date().toISOString()]))
+  const expected = await routed(t, github, 'reviewer', 'pull_request.ready_for_review.json')
+  assert.deepEqual(expected, { action: 'review', repo: REPO, pr: 42, issue: null, reason: null, app: 'reviewer' })
+  assert.deepEqual(await swept(m.reconcile()), [expected])
 })
 
 test('reconcile: an item that fails prints its error, and the other items still start', async (t) => {

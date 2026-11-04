@@ -55,10 +55,10 @@
 //     its review part goes on to Finish and posts no hand-off, so none is
 //     due. The part starts again at the phase it reached, so it only posts
 //     the hand-off. It is route's `relaunch`: paused, duplicate, the App's
-//     switch, the PR lock and the cap. A held lock is ignore, locked, so a
-//     part still running is never started twice. A relaunch whose part gave
-//     up its lock (released or expired) with the hand-off still lost is no
-//     duplicate: the next sweep starts it again.
+//     switch, the PR lock and the Implementer's cap. A held lock is ignore,
+//     locked, so a part still running is never started twice. A relaunch
+//     whose part gave up its lock (released or expired) with the hand-off
+//     still lost is no duplicate: the next sweep starts it again.
 //                                         reconcile-due-<N>-<kind>-<round>-<run>
 //     <run> is the run's created_at, digits only, so a new run at the same
 //     head is a new item.
