@@ -1,5 +1,9 @@
 # hero-forge
 
+## 1.0.28
+
+- `review-pipeline`, `setup-forge`: the reviewer App has no daily run cap. `review.ts route --app reviewer` and `review.ts reconcile` count no reviewer run, so a review or a re-check is never `ignore, cap`, and `route undo` of a review gives back no run (`run: false`). The maintainer has an unlimited Codex budget for reviews and does not want the reviewer App capped. The Implementer App keeps its caps: `implementer.daily_runs` (a rolling 24 hours) and `implementer.attempts`. `review.ts config` no longer prints `app_daily_runs`. A config that still has an `app_daily_runs` line parses with any value, and the key is ignored. `setup-forge` no longer writes the line, and the AFK mode prose names only the Implementer cap. A `~/.config/hero-forge/reviewer-app-runs.json` left by an older version is never read, and you can delete it.
+
 ## 1.0.27
 
 - `review-pipeline`: the router and the hourly sweep no longer start a build for a ticket whose blockers are still open. `review.ts route --app implementer` and `review.ts reconcile` now read GitHub's blocked-by links (`GET /repos/{o}/{r}/issues/{n}/dependencies/blocked_by`). A single ticket (an issue with no sub-issues) with an open blocker in the same repo is `ignore, blocked`: no build, no attempt, no daily run and no lock. A blocker in another repo, or one that GitHub does not list to the token, does not count. A spec is not checked, because `implement-spec-stack` orders its sub-issues. The rule comes after `paused` and `duplicate` (and, in `reconcile`, `has-pr`), and before the App rules. When the last blocker closes, the next sweep builds the ticket. Before, each blocked build used an Opus session and an Implementer run, and then paused with a question that had only one answer ("wait").

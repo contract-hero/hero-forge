@@ -2,7 +2,8 @@
 // its one YAML block, apply defaults, print the resolved config as JSON.
 //
 // The block is a small YAML subset, parsed by hand. This is the whole grammar:
-//   top     KEY: SCALAR        column 0; runtime | pairs | max_rounds | app | paused | app_daily_runs
+//   top     KEY: SCALAR        column 0; runtime | pairs | max_rounds | app | paused, and
+//                              app_daily_runs (ignored, see IGNORED_KEYS)
 //   open    KEY:               column 0; orchestrator | reviewer | implementer; opens a map
 //   nested    KEY: SCALAR      exactly 2 spaces; inside a map: model | effort (orchestrator,
 //                              reviewer), or app | attempts | daily_runs (implementer)
@@ -33,7 +34,12 @@ const AGENT_MODELS = ['opus', 'sonnet', 'haiku', 'fable']
 
 type RoleName = 'orchestrator' | 'reviewer'
 const ROLES: RoleName[] = ['orchestrator', 'reviewer']
-const TOP_KEYS = ['runtime', 'pairs', 'max_rounds', 'app', 'paused', 'app_daily_runs']
+// Keys that an older config holds and that are ignored now: the parser accepts
+// them with any value, and the resolved config leaves them out.
+// app_daily_runs: the reviewer App's daily run cap, ignored since 1.0.28. The
+// reviewer App has no daily cap; the Implementer keeps implementer.daily_runs.
+const IGNORED_KEYS = ['app_daily_runs']
+const TOP_KEYS = ['runtime', 'pairs', 'max_rounds', 'app', 'paused', ...IGNORED_KEYS]
 
 // Each map and the keys it takes, as an error names them.
 type MapName = RoleName | 'implementer'
@@ -128,11 +134,9 @@ function parse(text: string): Parsed {
   return parsed
 }
 
-// `pairs`, `max_rounds` and `app_daily_runs` (the reviewer App's runs in a
-// rolling 24 hours) when the block leaves them out.
+// `pairs` and `max_rounds` when the block leaves them out.
 const DEFAULT_PAIRS = 2
 const DEFAULT_MAX_ROUNDS = 2
-const DEFAULT_APP_DAILY_RUNS = 20
 
 // The implementer block's defaults: the App off, 3 builds of one ticket, and
 // 20 runs of the Implementer App in a rolling 24 hours.
@@ -179,7 +183,6 @@ function resolveConfig(path: string, parsed: Parsed) {
   const pairs = count('pairs', parsed.top.get('pairs'), DEFAULT_PAIRS)
   const maxRounds = count('max_rounds', parsed.top.get('max_rounds'), DEFAULT_MAX_ROUNDS)
   const paused = flag('paused', parsed.top.get('paused'))
-  const appDailyRuns = count('app_daily_runs', parsed.top.get('app_daily_runs'), DEFAULT_APP_DAILY_RUNS)
   const appValue = parsed.top.get('app')
   if (appValue !== undefined && appValue.text !== 'enabled') {
     throw new Invalid(`app must be "enabled" or left out, got "${appValue.text}"`, appValue.line)
@@ -223,7 +226,6 @@ function resolveConfig(path: string, parsed: Parsed) {
     max_rounds: maxRounds,
     app: appValue !== undefined,
     paused,
-    app_daily_runs: appDailyRuns,
     implementer: {
       app: implementerApp?.text === 'enabled',
       attempts: count('implementer.attempts', implementer.get('attempts'), DEFAULT_ATTEMPTS),

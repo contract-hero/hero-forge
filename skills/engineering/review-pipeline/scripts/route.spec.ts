@@ -260,71 +260,90 @@ test('route: paused comes before duplicate', async (t) => {
 
 const D4 = '44444444-dddd-11f0-8a1b-0123456789ab'
 
-test('route: once the daily cap is reached, events are ignore (cap), and a cap ignore holds no lock', async (t) => {
-  const r = await router(t, { review: reviewMd('app_daily_runs: 2') })
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D1, prNumber(42))), review(42))
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D2, prNumber(43))), review(43))
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D3, prNumber(44))), ignore('cap', 44))
-  await r.gh.respond(responses({ review: reviewMd('app_daily_runs: 3') }))
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D3, prNumber(44))), review(44))
-})
-
-test('route: a held lock is reported before the cap', async (t) => {
+test('route --app reviewer: the reviewer App has no daily cap, and counts no run', async (t) => {
+  // An old app_daily_runs line is ignored, as is the default of 20 runs that it had.
   const r = await router(t, { review: reviewMd('app_daily_runs: 1') })
-  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), review())
-  assert.deepEqual(await decision(r.route('pull_request.ready_for_review.json', D2)), ignore('locked'))
+  for (let pr = 42; pr < 42 + 22; pr += 1) {
+    const delivery = `${String(pr).padStart(8, '0')}-aaaa-11f0-8a1b-0123456789ab`
+    assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', delivery, prNumber(pr))), review(pr))
+  }
+  await assert.rejects(readFile(join(r.caps, 'reviewer-app-runs.json'), 'utf8'), { code: 'ENOENT' })
 })
 
-test('route: the daily cap counts the runs of every repo on the machine', async (t) => {
-  const a = await router(t, { review: reviewMd('app_daily_runs: 1') })
-  const b = await router(t, { review: reviewMd('app_daily_runs: 1') }, { caps: a.caps })
-  assert.deepEqual(await decision(a.route('pull_request.opened.json', D1)), review())
-  const other = await decision(
-    b.routeChanged('pull_request.opened.json', D2, (p) => {
-      p.repository.full_name = 'contract-hero/other'
-    }),
-  )
-  assert.deepEqual(other, { action: 'ignore', repo: 'contract-hero/other', pr: 42, issue: null, reason: 'cap' })
-})
-
-test('route: the daily cap counts the runs of the last 24 hours only', async (t) => {
-  const r = await router(t, { review: reviewMd('app_daily_runs: 2') })
-  const hours = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString()
-  await mkdir(r.caps, { recursive: true })
-  await writeFile(join(r.caps, 'reviewer-app-runs.json'), JSON.stringify([hours(30), hours(25), hours(1)]))
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D1, prNumber(42))), review(42))
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D2, prNumber(43))), ignore('cap', 43))
-})
-
-test('route: with no app_daily_runs the cap is 20 runs', async (t) => {
-  const r = await router(t)
-  const hours = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString()
-  await mkdir(r.caps, { recursive: true })
-  await writeFile(join(r.caps, 'reviewer-app-runs.json'), JSON.stringify(Array.from({ length: 19 }, () => hours(2))))
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D1, prNumber(42))), review(42))
-  assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D2, prNumber(43))), ignore('cap', 43))
-})
-
-test('route: a corrupt cap file exits 4', async (t) => {
+test('route --app reviewer: a cap file left from an older version is not read', async (t) => {
   const r = await router(t)
   await mkdir(r.caps, { recursive: true })
   await writeFile(join(r.caps, 'reviewer-app-runs.json'), '{ not a list')
-  const { code, stdout, stderr } = await r.route('pull_request.opened.json', D4)
-  assert.equal(code, 4)
-  assert.equal(stdout, '')
-  assert.match(stderr, /^review\.ts route: corrupt run cap file .*reviewer-app-runs\.json/)
-  // The failed call gave its PR lock back.
-  await rm(join(r.caps, 'reviewer-app-runs.json'))
-  assert.deepEqual(await decision(r.route('pull_request.ready_for_review.json', D1)), review())
+  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), review())
 })
 
-test('route: two route calls at once for two PRs, one run under the cap, give one review', async (t) => {
-  const r = await router(t, { review: reviewMd('app_daily_runs: 1') })
+test('route: a held lock is reported before the cap', async (t) => {
+  const r = await router(t, { review: implementerMd('  daily_runs: 1') })
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D2, 'implementer')), onIssue('ignore', 'locked'))
+})
+
+test('route --app implementer: once the daily cap is reached, builds are ignore (cap), and a cap ignore holds no lock', async (t) => {
+  const r = await router(t, { review: implementerMd('  daily_runs: 2') })
+  assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D1, issueNumber(28), 'implementer')), onIssue('build-ticket', null, 28))
+  assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D2, issueNumber(29), 'implementer')), onIssue('build-ticket', null, 29))
+  assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D3, issueNumber(30), 'implementer')), onIssue('ignore', 'cap', 30))
+  await r.gh.respond(responses({ review: implementerMd('  daily_runs: 3') }))
+  assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D3, issueNumber(30), 'implementer')), onIssue('build-ticket', null, 30))
+})
+
+test('route --app implementer: the daily cap counts the runs of every repo on the machine', async (t) => {
+  const OTHER = 'contract-hero/other'
+  const a = await router(t, { review: implementerMd('  daily_runs: 1') })
+  const b = await router(t, { review: implementerMd('  daily_runs: 1') }, { caps: a.caps })
+  const ticket = { parent_issue_url: null, sub_issues_summary: { total: 0, completed: 0, percent_completed: 0 }, labels: ['ready-for-agent'] }
+  await b.gh.respond([...responses({ review: implementerMd('  daily_runs: 1') }), { match: `repos/${OTHER}/issues/`, stdout: `${JSON.stringify(ticket)}\n` }])
+  assert.deepEqual(await decision(a.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+  const other = await decision(
+    b.routeChanged(
+      'issues.labeled.json',
+      D2,
+      (p) => {
+        p.repository.full_name = OTHER
+      },
+      'implementer',
+    ),
+  )
+  assert.deepEqual(other, { action: 'ignore', repo: OTHER, pr: null, issue: 28, reason: 'cap' })
+})
+
+test('route --app implementer: the daily cap counts the runs of the last 24 hours only', async (t) => {
+  const r = await router(t, { review: implementerMd('  daily_runs: 2') })
+  const hours = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString()
+  await mkdir(r.caps, { recursive: true })
+  await writeFile(join(r.caps, 'implementer-app-runs.json'), JSON.stringify([hours(30), hours(25), hours(1)]))
+  assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D1, issueNumber(28), 'implementer')), onIssue('build-ticket', null, 28))
+  assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D2, issueNumber(29), 'implementer')), onIssue('ignore', 'cap', 29))
+})
+
+test('route --app implementer: a corrupt cap file exits 4', async (t) => {
+  const r = await router(t, { review: implementerMd() })
+  await mkdir(r.caps, { recursive: true })
+  await writeFile(join(r.caps, 'implementer-app-runs.json'), '{ not a list')
+  const { code, stdout, stderr } = await r.route('issues.labeled.json', D4, 'implementer')
+  assert.equal(code, 4)
+  assert.equal(stdout, '')
+  assert.match(stderr, /^review\.ts route: corrupt run cap file .*implementer-app-runs\.json/)
+  // The failed call gave its issue lock back.
+  await rm(join(r.caps, 'implementer-app-runs.json'))
+  assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
+})
+
+test('route --app implementer: two route calls at once for two tickets, one run under the cap, give one build', async (t) => {
+  const r = await router(t, { review: implementerMd('  daily_runs: 1') })
   const both = await Promise.all(
-    [r.routeChanged('pull_request.opened.json', D1, prNumber(42)), r.routeChanged('pull_request.opened.json', D2, prNumber(43))].map(decision),
+    [
+      r.routeChanged('issues.labeled.json', D1, issueNumber(28), 'implementer'),
+      r.routeChanged('issues.labeled.json', D2, issueNumber(29), 'implementer'),
+    ].map(decision),
   )
   assert.deepEqual(both.map((d) => d.reason).sort(), [null, 'cap'].sort())
-  const runs = JSON.parse(await readFile(join(r.caps, 'reviewer-app-runs.json'), 'utf8'))
+  const runs = JSON.parse(await readFile(join(r.caps, 'implementer-app-runs.json'), 'utf8'))
   assert.equal(runs.length, 1)
 })
 
@@ -390,17 +409,19 @@ for (const [name, args, message] of usageErrors) {
   })
 }
 
-test('route: a delivery that fails to record counts no run, so a redelivery under app_daily_runs: 1 is review', async (t) => {
-  const r = await router(t, { review: reviewMd('app_daily_runs: 1') })
+test('route: a delivery that fails to record counts no run, so a redelivery under daily_runs: 1 is a build', async (t) => {
+  const r = await router(t, { review: implementerMd('  daily_runs: 1') })
   await mkdir(r.state, { recursive: true })
   // A file where the deliveries dir should be: recording the delivery fails.
   await writeFile(join(r.state, 'deliveries'), '')
-  const failed = await r.route('pull_request.opened.json', D1)
+  const failed = await r.route('issues.labeled.json', D1, 'implementer')
   assert.equal(failed.code, 1)
   assert.equal(failed.stdout, '')
   await rm(join(r.state, 'deliveries'))
-  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), review())
-  assert.deepEqual(await decision(r.route('pull_request.opened.json', D1)), ignore('duplicate'))
+  const built = await r.route('issues.labeled.json', D1, 'implementer')
+  assert.deepEqual(decided(built.stdout), onIssue('build-ticket'))
+  // The run is counted once: the failed call counted none.
+  assert.equal(JSON.parse(await readFile(join(r.caps, 'implementer-app-runs.json'), 'utf8')).length, 1)
 })
 
 test('route: a breaker left over from a crash exits 1 with its path, and deletes nothing', async (t) => {
@@ -888,14 +909,14 @@ test('route --app implementer: two labels at once on one ticket give one build a
   assert.deepEqual(JSON.parse(await readFile(join(r.caps, 'implementer-app-attempts.json'), 'utf8')), { [`${REPO}#28`]: 1 })
 })
 
-test('route --app implementer: the Implementer daily cap is its own, apart from the reviewer one', async (t) => {
+test('route --app implementer: the Implementer daily cap does not stop the reviewer App', async (t) => {
   const r = await router(t, { review: implementerMd('  daily_runs: 1', 'app_daily_runs: 1') })
   assert.deepEqual(await decision(r.route('issues.labeled.json', D1, 'implementer')), onIssue('build-ticket'))
   assert.deepEqual(await decision(r.routeChanged('issues.labeled.json', D2, issueNumber(29), 'implementer')), onIssue('ignore', 'cap', 29))
-  // The reviewer still has its one run.
+  // The reviewer has no cap: an old app_daily_runs line is ignored.
   assert.deepEqual(await decision(r.route('pull_request.opened.json', D3)), review())
   assert.equal(JSON.parse(await readFile(join(r.caps, 'implementer-app-runs.json'), 'utf8')).length, 1)
-  assert.equal(JSON.parse(await readFile(join(r.caps, 'reviewer-app-runs.json'), 'utf8')).length, 1)
+  await assert.rejects(readFile(join(r.caps, 'reviewer-app-runs.json'), 'utf8'), { code: 'ENOENT' })
 })
 
 test('route --app implementer: with no daily_runs the Implementer cap is 20 runs', async (t) => {
@@ -1022,11 +1043,11 @@ test('route: the reviewer and the Implementer share the per-PR lock', async (t) 
   assert.deepEqual(await decision(r.route('issue_comment.created.review-posted.json', D3, 'implementer')), onPr('adjudicate'))
 })
 
-test('route --app reviewer: a re-check counts toward the reviewer daily cap', async (t) => {
+test('route --app reviewer: a re-check after a review is no cap ignore', async (t) => {
   const r = await router(t, { review: reviewMd('app_daily_runs: 1') })
   assert.deepEqual(await decision(r.routeChanged('pull_request.opened.json', D1, prNumber(43))), review(43))
   await seedState(r.state, { pr: 42, phase: 'adjudicated' })
-  assert.deepEqual(await decision(r.route('issue_comment.created.recheck.json', D2)), onPr('ignore', 'cap'))
+  assert.deepEqual(await decision(r.route('issue_comment.created.recheck.json', D2)), onPr('recheck'))
 })
 
 test('route --app reviewer: a /recheck asks for the maintainer, the hand-off of contract-implementer[bot] does not', async (t) => {
@@ -1251,11 +1272,11 @@ test('route undo: a hand-off build is decided again after its undo, from either 
 })
 
 test('route undo: a review is decided again after its undo, and a second undo changes nothing', async (t) => {
-  const r = await router(t, { review: reviewMd('app_daily_runs: 1') })
+  const r = await router(t)
   const first = await r.route('pull_request.opened.json', D1)
   assert.deepEqual(decided(first.stdout), review())
   const token = tokenOf(first.stdout)
-  assert.deepEqual(JSON.parse((await undo(r, 'reviewer', token)).stdout), { undone: true, pr: 42, attempt: false, run: true, released: true })
+  assert.deepEqual(JSON.parse((await undo(r, 'reviewer', token)).stdout), { undone: true, pr: 42, attempt: false, run: false, released: true })
   const again = await undo(r, 'reviewer', token)
   assert.equal(again.code, 0)
   assert.deepEqual(JSON.parse(again.stdout), { undone: false, reason: 'no delivery record holds this token' })

@@ -41,7 +41,6 @@ test('a minimal codex file resolves to the codex defaults', async (t) => {
     max_rounds: 2,
     app: false,
     paused: false,
-    app_daily_runs: 20,
     implementer: { app: false, attempts: 3, daily_runs: 20 },
   })
 })
@@ -59,7 +58,6 @@ test('a minimal claude file resolves to the claude defaults with sub-agent model
     max_rounds: 2,
     app: false,
     paused: false,
-    app_daily_runs: 20,
     implementer: { app: false, attempts: 3, daily_runs: 20 },
   })
 })
@@ -90,7 +88,6 @@ test('the canonical block setup writes resolves field for field', async (t) => {
       'max_rounds: 4',
       'app: enabled',
       'paused: true',
-      'app_daily_runs: 5',
       'implementer:',
       '  app: enabled',
       '  attempts: 2',
@@ -106,7 +103,6 @@ test('the canonical block setup writes resolves field for field', async (t) => {
   assert.equal(resolved.max_rounds, 4)
   assert.equal(resolved.app, true)
   assert.equal(resolved.paused, true)
-  assert.equal(resolved.app_daily_runs, 5)
   assert.deepEqual(resolved.implementer, { app: true, attempts: 2, daily_runs: 7 })
 })
 
@@ -125,6 +121,18 @@ test('an implementer block resolves its own keys and leaves the reviewer App swi
   const empty = await config(t, doc('runtime: codex', 'implementer:'))
   assert.equal(empty.code, 0)
   assert.deepEqual(JSON.parse(empty.stdout).implementer, { app: false, attempts: 3, daily_runs: 20 })
+})
+
+test('an old app_daily_runs line is accepted with any value and ignored: the reviewer App has no daily cap', async (t) => {
+  const plain = JSON.parse((await config(t, doc('runtime: codex'))).stdout)
+  for (const value of ['20', '1', '0', 'ten', '"5"']) {
+    const { code, stdout, stderr, path } = await config(t, doc('runtime: codex', 'app: enabled', `app_daily_runs: ${value}`))
+    assert.equal(stderr, '', value)
+    assert.equal(code, 0, value)
+    const resolved = JSON.parse(stdout)
+    assert.ok(!Object.hasOwn(resolved, 'app_daily_runs'), value)
+    assert.deepEqual(resolved, { ...plain, config_path: path, app: true }, value)
+  }
 })
 
 test('paused: false is accepted and stays false', async (t) => {
@@ -228,8 +236,6 @@ const invalid: [string, string, number | null, string][] = [
   ['a negative max_rounds', doc('runtime: codex', 'max_rounds: -1'), 7, 'max_rounds must be a whole number, got "-1"'],
   ['a paused value other than true or false', doc('runtime: codex', 'paused: yes'), 7, 'paused must be true or false, got "yes"'],
   ['a quoted paused', doc('runtime: codex', 'paused: "true"'), 7, 'paused must be true or false, got "true"'],
-  ['app_daily_runs 0', doc('runtime: codex', 'app_daily_runs: 0'), 7, 'app_daily_runs must be 1 or more, got 0'],
-  ['a non-integer app_daily_runs', doc('runtime: codex', 'app_daily_runs: ten'), 7, 'app_daily_runs must be a whole number, got "ten"'],
   ['a duplicate paused', doc('runtime: codex', 'paused: true', 'paused: false'), 8, 'duplicate key paused'],
   ['an app value other than enabled', doc('runtime: codex', 'app: true'), 7, 'app must be "enabled" or left out, got "true"'],
   ['an implementer given a scalar', doc('runtime: codex', 'implementer: enabled'), 7, 'implementer must be a map (put app, attempts and daily_runs on indented lines)'],
@@ -292,7 +298,6 @@ test('the config setup-forge writes with AFK mode on resolves, with both Apps an
     max_rounds: 2,
     app: true,
     paused: false,
-    app_daily_runs: 20,
     implementer: { app: true, attempts: 3, daily_runs: 20 },
   })
 })
@@ -300,7 +305,7 @@ test('the config setup-forge writes with AFK mode on resolves, with both Apps an
 test("setup-forge's SKILL.md shows the AFK lines of the fixture, as they are", async () => {
   const fixture = await readFile(AFK_FIXTURE, 'utf8')
   const afk = /^paused: false\n[\s\S]*?(?=```)/m.exec(fixture)?.[0] ?? ''
-  assert.equal(afk, 'paused: false\napp_daily_runs: 20\nimplementer:\n  app: enabled\n  attempts: 3\n  daily_runs: 20\n')
+  assert.equal(afk, 'paused: false\nimplementer:\n  app: enabled\n  attempts: 3\n  daily_runs: 20\n')
   const skill = await readFile(SETUP_SKILL, 'utf8')
   assert.ok(skill.includes(`\`\`\`yaml\n${afk}\`\`\``), 'setup-forge/SKILL.md has no ```yaml block holding the AFK lines')
 })

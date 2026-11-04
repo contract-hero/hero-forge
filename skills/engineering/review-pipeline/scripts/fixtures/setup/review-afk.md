@@ -7,7 +7,7 @@ Every pull request in this repo goes through `review-pipeline`: an Orchestrator 
 - Reviewer pairs per round: 2.
 - Failed re-check rounds before the pipeline stops and asks: 2.
 - Reviewer identity: the reviewer GitHub App, which also approves the PR or requests changes (credentials in `~/.config/hero-forge/`, never in this repo).
-- AFK mode: on. GitHub events start the runs through T3 Code: the Implementer App builds each `ready-for-agent` ticket and answers the reviews, and the reviewer App reviews and merges. Each App runs at most 20 times in 24 hours, and a ticket gets 3 builds. `paused: true` stops both Apps.
+- AFK mode: on. GitHub events start the runs through T3 Code: the Implementer App builds each `ready-for-agent` ticket and answers the reviews, and the reviewer App reviews and merges. The Implementer App runs at most 20 times in 24 hours, and a ticket gets 3 builds. The reviewer App has no daily cap. `paused: true` stops both Apps.
 
 Edit the block below, or re-run `/setup-forge`. Agents read only the block.
 
@@ -23,7 +23,6 @@ reviewer:
 max_rounds: 2
 app: enabled
 paused: false
-app_daily_runs: 20
 implementer:
   app: enabled
   attempts: 3
