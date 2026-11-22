@@ -49,7 +49,7 @@ With `--afk`, the worktree is new, on a local branch the router named, and you s
 
 The worktree is new and holds no work, so the reset loses nothing. Every AFK push goes to the ticket branch with `--to` (step 4).
 
-Then check for an open PR on the branch: `gh pr view --json number,state,body` (with `--afk`: `gh pr list --head <ticket branch> --state open --json number,body`). An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing, run the simplify pass on it, and push it as step 4 says. Then write its body again as step 5 says, keeping what it held: with `--afk`, its `## Decisions` section keeps the earlier entries and gains each decision of this build. Save it to a file outside the repo, run `gh pr edit <PR> --body-file <file>`, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
+Then check for an open PR on the branch: `gh pr view --json number,state,body` (with `--afk`: `gh pr list --head <ticket branch> --state open --json number,body`). An open PR whose body closes this ticket is a re-run after an interrupted session: build only what is still missing (through the ticket's builder when it has one, as step 4 says), run the simplify pass on it, and push it as step 4 says. Then write its body again as step 5 says, keeping what it held: with `--afk`, its `## Decisions` section keeps the earlier entries and gains each decision of this build. Save it to a file outside the repo, run `gh pr edit <PR> --body-file <file>`, and go to step 6 with that PR. An open PR for other work: stop and ask the user.
 
 ## 4. Build it
 
@@ -57,7 +57,7 @@ First find the ticket's builder: `review.ts builder --repo <owner/repo> --issue 
 
 - Exit 0 with `builder: null`: build the ticket yourself, as the rest of this step says.
 - Exit 0 with a builder: the builder writes the code, as **Build with a builder** says. You do the rest of this step: the checks, the commit, the simplify pass and the push.
-- Exit 4 (two `builder:` labels, no config on the default branch, or an alias that config does not name) or exit 1: stop, with the message. Build nothing: a labelled ticket is never built on your own model.
+- Exit 4 (two `builder:` labels, no config on the default branch, or an alias that config does not name), or any other non-zero exit: stop, with the message. Build nothing: a labelled ticket is never built on your own model.
 
 Call the Skill tool with "tdd" where possible, at pre-agreed seams. With `--afk`, the seams are the ones the ticket and its spec name, and each choice they leave open goes through **Decisions in an AFK run**.
 

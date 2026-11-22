@@ -27,7 +27,8 @@ function section(text: string, heading: string): string {
 test('implement-pr reads the builder before it builds, and a refusal builds nothing', () => {
   const build = section(IMPLEMENT_PR, '4. Build it')
   assert.ok(build.startsWith('\n## 4. Build it\n\nFirst find the ticket\'s builder: `review.ts builder --repo <owner/repo> --issue <ticket>`'))
-  assert.match(build, /Exit 4 .* or exit 1: stop, with the message\. Build nothing: a labelled ticket is never built on your own model\./)
+  assert.match(build, /Exit 4 .*, or any other non-zero exit: stop, with the message\. Build nothing: a labelled ticket is never built on your own model\./)
+  assert.match(section(IMPLEMENT_PR, '3. Pick the branch'), /build only what is still missing \(through the ticket's builder when it has one, as step 4 says\)/)
 })
 
 test('the shared builder step builds through delegate_task, and stops on each missing piece', () => {
@@ -43,9 +44,15 @@ test('the shared builder step builds through delegate_task, and stops on each mi
 })
 
 test('implement-spec-stack resolves every layer builder before it builds, and each layer uses its own', () => {
-  assert.match(STACK, /run `review\.ts builder --repo O\/R --issue <ticket>` for each layer, and save the outputs to `<stack dir>\/builders\.json`, keyed by ticket\. Exit 4 or exit 1 for any layer: stop with the message, and build nothing/)
+  assert.match(STACK, /run `review\.ts builder --repo O\/R --issue <ticket>` for each layer\. A non-zero exit for any layer: stop with the message, and build nothing/)
+  // A resume skips step 2, so each implementer reads its own builder again.
+  assert.match(STACK, /   - runs `review\.ts builder --repo O\/R --issue <ticket>`, also on a resume\. A non-zero exit: it stops and reports the message, and builds nothing\. An implementer subagent that finds a builder here .* also stops and reports it, and builds nothing: you then build that layer yourself;/)
   assert.match(STACK, /Each layer uses its own ticket's builder, so one stack can mix builders/)
-  assert.match(STACK, /A layer with a builder is built by the builder instead: the subagent reads `<the folder this SKILL\.md is in>\/\.\.\/review-pipeline\/builder-step\.md`/)
+  // A builder's completion wakes only the thread that started it, so the main
+  // session builds a labelled layer, never an implementer subagent.
+  assert.match(STACK, /A layer whose ticket has a builder \(step 2\) gets no implementer subagent, because a builder's completion wakes only the thread that started it, never a subagent/)
+  assert.match(STACK, /For a layer with a builder, you read `<the folder this SKILL\.md is in>\/\.\.\/review-pipeline\/builder-step\.md` and follow it in the layer's worktree, in place of `tdd`/)
+  assert.match(BUILDER_STEP, /Only that thread gets the wake, so a subagent never starts a builder/)
 })
 
 test('setup-forge writes the builders and creates their labels, and the seed template shows them', () => {
