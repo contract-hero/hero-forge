@@ -106,42 +106,42 @@ function findBlock(text: string): { text: string; line: number }[] {
 
 function parse(text: string): Parsed {
   const parsed: Parsed = { top: new Map(), maps: new Map(), builders: undefined }
-  let open: Map<string, Value> | undefined
-  let openName: MapName = 'orchestrator'
-  // Inside `builders:`, and the builder the last ALIAS line opened.
-  let inBuilders = false
-  let builder: { alias: string; keys: Map<string, Value> } | undefined
+  // The section the last column-0 line opened: a map, the builders (with the
+  // builder its last ALIAS line opened), or none. Each column-0 line replaces it.
+  let section:
+    | { kind: 'none' }
+    | { kind: 'map'; name: MapName; keys: Map<string, Value> }
+    | { kind: 'builders'; builders: Map<string, ParsedBuilder>; alias?: string; keys?: Map<string, Value> } = { kind: 'none' }
   for (const { text: line, line: n } of findBlock(text)) {
     if (/^\s*$/.test(line) || /^\s*#/.test(line)) continue
     if (/^\s*\t/.test(line)) throw new Invalid('tab indentation (indent with 2 spaces)', n)
     let m: RegExpExecArray | null
-    if (inBuilders && (m = BUILDER_KEY.exec(line))) {
+    if (section.kind === 'builders' && (m = BUILDER_KEY.exec(line))) {
       const [, key = '', raw = ''] = m
-      if (builder === undefined) throw new Invalid('indented line outside a builder (put it under an alias)', n)
-      const where = `builders.${builder.alias}`
+      if (section.keys === undefined) throw new Invalid('indented line outside a builder (put it under an alias)', n)
+      const where = `builders.${section.alias}`
       if (!(BUILDER_KEYS as readonly string[]).includes(key)) throw new Invalid(`unknown key ${where}.${key} (provider, model or effort)`, n)
-      if (builder.keys.has(key)) throw new Invalid(`duplicate key ${where}.${key}`, n)
-      builder.keys.set(key, scalar(raw, n))
-    } else if (inBuilders && (m = BUILDER_OPEN.exec(line))) {
+      if (section.keys.has(key)) throw new Invalid(`duplicate key ${where}.${key}`, n)
+      section.keys.set(key, scalar(raw, n))
+    } else if (section.kind === 'builders' && (m = BUILDER_OPEN.exec(line))) {
       const [, alias = ''] = m
-      const builders = parsed.builders ?? new Map<string, ParsedBuilder>()
-      if (builders.has(alias)) throw new Invalid(`duplicate builder ${alias}`, n)
-      builder = { alias, keys: new Map() }
-      builders.set(alias, { line: n, keys: builder.keys })
-    } else if (inBuilders && (m = BUILDER_SCALAR.exec(line))) {
+      if (section.builders.has(alias)) throw new Invalid(`duplicate builder ${alias}`, n)
+      section.alias = alias
+      section.keys = new Map()
+      section.builders.set(alias, { line: n, keys: section.keys })
+    } else if (section.kind === 'builders' && (m = BUILDER_SCALAR.exec(line))) {
       throw new Invalid(`builders.${m[1]} must be a map (put provider, model and effort on lines indented 4 spaces)`, n)
     } else if ((m = NESTED.exec(line))) {
       const [, key = '', raw = ''] = m
-      if (open === undefined) throw new Invalid(`indented line outside orchestrator, reviewer, implementer or builders`, n)
-      if (!MAPS[openName].keys.includes(key)) throw new Invalid(`unknown key ${openName}.${key} (${MAPS[openName].named})`, n)
-      if (open.has(key)) throw new Invalid(`duplicate key ${openName}.${key}`, n)
-      open.set(key, scalar(raw, n))
+      if (section.kind !== 'map') throw new Invalid(`indented line outside orchestrator, reviewer, implementer or builders`, n)
+      const { name, keys } = section
+      if (!MAPS[name].keys.includes(key)) throw new Invalid(`unknown key ${name}.${key} (${MAPS[name].named})`, n)
+      if (keys.has(key)) throw new Invalid(`duplicate key ${name}.${key}`, n)
+      keys.set(key, scalar(raw, n))
     } else if ((m = TOP.exec(line))) {
       const [, key = '', raw = ''] = m
-      open = undefined
-      inBuilders = false
-      builder = undefined
-      if (key === 'builders') throw new Invalid('builders must be a map (put each builder\'s alias on a line indented 2 spaces)', n)
+      section = { kind: 'none' }
+      if (key === 'builders') throw new Invalid("builders must be a map (put each builder's alias on a line indented 2 spaces)", n)
       if (isMap(key)) {
         const keys = MAPS[key].keys
         throw new Invalid(`${key} must be a map (put ${keys.slice(0, -1).join(', ')} and ${keys.at(-1)} on indented lines)`, n)
@@ -151,21 +151,18 @@ function parse(text: string): Parsed {
       parsed.top.set(key, scalar(raw, n))
     } else if ((m = OPEN.exec(line))) {
       const [, key = ''] = m
-      open = undefined
-      inBuilders = false
-      builder = undefined
+      section = { kind: 'none' }
       if (TOP_KEYS.includes(key)) throw new Invalid(`${key} needs a value`, n)
       if (key === 'builders') {
         if (parsed.builders !== undefined) throw new Invalid('duplicate key builders', n)
         parsed.builders = new Map()
-        inBuilders = true
+        section = { kind: 'builders', builders: parsed.builders }
         continue
       }
       if (!isMap(key)) throw new Invalid(`unknown key ${key}`, n)
       if (parsed.maps.has(key)) throw new Invalid(`duplicate key ${key}`, n)
-      open = new Map()
-      openName = key
-      parsed.maps.set(key, open)
+      section = { kind: 'map', name: key, keys: new Map() }
+      parsed.maps.set(key, section.keys)
     } else {
       throw new Invalid('line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)', n)
     }

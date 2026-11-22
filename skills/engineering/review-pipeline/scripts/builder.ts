@@ -18,7 +18,11 @@ async function builder(argv: string[]): Promise<string> {
   const got = await gh(['api', `repos/${repo}/issues/${issue}`, '--jq', '[.labels[].name]'])
   if (got.code !== 0) throw new Failure(`cannot read the labels of #${issue} in ${repo}: ${oneLine(got.stderr)}`, 1)
   // GitHub matches label names without case, so the prefix does too.
-  const labels = json<string[]>(got.stdout, `labels of #${issue}`).filter((name) => name.toLowerCase().startsWith(PREFIX))
+  const names = json<unknown>(got.stdout, `labels of #${issue}`)
+  if (!Array.isArray(names) || !names.every((name) => typeof name === 'string')) {
+    throw new Failure(`unexpected output from gh (labels of #${issue}): ${oneLine(got.stdout)}`, 1)
+  }
+  const labels = names.filter((name) => name.toLowerCase().startsWith(PREFIX))
 
   if (labels.length === 0) return `${JSON.stringify({ issue, builder: null })}\n`
   if (labels.length > 1) throw new Failure(`#${issue} has ${labels.length} builder labels (${labels.join(', ')}): keep one. ${NOTHING}`, 4)

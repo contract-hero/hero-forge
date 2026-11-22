@@ -35,10 +35,10 @@ test('the shared builder step builds through delegate_task, and stops on each mi
   const builder = BUILDER_STEP
   assert.match(builder, /you never write or change a line of its code/)
   assert.match(builder, /With no `delegate_task`, stop: `builder <alias>: this session has no delegate_task tool`/)
-  assert.match(builder, /call it again with `search: "<model>"`/)
+  assert.match(builder, /Call `orchestrator_capabilities` with `search: "<model>"`/)
   assert.match(builder, /stop and name it: the provider, the model or the effort/)
   assert.match(builder, /`isolation: "shared"`, `mode: "async"`/)
-  assert.match(builder, /start one new `delegate_task` on the same builder, with the same brief and the failing output\. When a check still fails after that, stop and report the output: you never fix its code/)
+  assert.match(builder, /start one new `delegate_task` on the same builder and target \(steps 1 and 2 hold already\), with the same brief and the failing output\. When a check still fails after that, stop and report the output: you never fix its code/)
   assert.match(section(IMPLEMENT_PR, '5. Open the draft PR'), /the Evidence names it: `Built by builder <alias>: <model> at <effort> effort \(<provider>\)\.`/)
 })
 
