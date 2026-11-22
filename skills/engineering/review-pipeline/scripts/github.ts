@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process'
 import { mintAppToken, type AppName } from './app-token.ts'
 import { Failure, refuse } from './cli.ts'
+import { resolveConfigText, type ResolvedConfig } from './config.ts'
 
 export type GhResult = { code: number | null; stdout: string; stderr: string }
 
@@ -25,6 +26,21 @@ export function gh(args: string[], input = '', token?: string): Promise<GhResult
     child.stdin.on('error', () => {})
     child.stdin.end(input)
   })
+}
+
+// The review config on the repo's default branch, or null when the file is
+// not there (no ref: the default branch). A file that is there but invalid exits 4.
+export async function remoteConfig(repo: string, branch: string | undefined): Promise<ResolvedConfig | null> {
+  const path = 'docs/agents/review.md'
+  const ref = branch === undefined ? '' : `?ref=${encodeURIComponent(branch)}`
+  const got = await gh(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${repo}/contents/${path}${ref}`])
+  if (got.code !== 0) {
+    if (/HTTP 404/.test(got.stderr)) return null
+    throw new Failure(`cannot read ${path} of ${repo}: ${oneLine(got.stderr)}`, 1)
+  }
+  const loaded = resolveConfigText(got.stdout, `${repo}:${path}`)
+  if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
+  return loaded.config
 }
 
 export function oneLine(text: string): string {

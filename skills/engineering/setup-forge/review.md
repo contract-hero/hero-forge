@@ -8,6 +8,7 @@ Every pull request in this repo goes through `review-pipeline`: an Orchestrator 
 - Failed re-check rounds before the pipeline stops and asks: <max_rounds>.
 - Reviewer identity: <the reviewer GitHub App, which also approves the PR or requests changes (credentials in `~/.config/hero-forge/`, never in this repo) | your own `gh` account, COMMENT reviews only>.
 - AFK mode: on. GitHub events start the runs through T3 Code: the Implementer App builds each `ready-for-agent` ticket and answers the reviews, and the reviewer App reviews and merges. Each App runs at most 20 times in 24 hours, and a ticket gets 3 builds. `paused: true` stops both Apps.   <only with AFK mode; leave the line out without it>
+- Builders: a ticket labelled `builder:<alias>` is built by that builder: <alias>: `<model>` at <effort> effort on <provider>, one per builder. The build stops when the alias is not in the block on the default branch.   <only with builders; leave the line out without them>
 
 Edit the block below, or re-run `/setup-forge`. Agents read only the block.
 
@@ -28,4 +29,9 @@ implementer:
   app: enabled
   attempts: 3
   daily_runs: 20
+builders:                <this line and the lines below only with builders; leave them out without them>
+  <alias>:
+    provider: <T3 provider instance id>
+    model: <model>
+    effort: <effort>
 ```

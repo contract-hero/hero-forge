@@ -30,6 +30,14 @@ export const COMMANDS = {
     summary: 'Read docs/agents/review.md, apply the defaults, and print the resolved config as JSON.',
     usage: 'usage: review.ts config [--config <path>]',
   },
+  builder: {
+    summary: "Print the builder a ticket's builder:<alias> label selects, from the config on the default branch.",
+    usage: `usage: review.ts builder --repo O/R --issue N
+  Prints {issue, builder}: builder is {alias, provider, model, effort}, or null when the issue has no
+  builder:<alias> label (then the config is not read). Exit 4, nothing to build on another model: two
+  builder: labels, no docs/agents/review.md on the default branch, an invalid one, or an alias it does
+  not name under builders.`,
+  },
   'run-state': {
     summary: 'Read or change the per-PR run state that lets an interrupted run resume.',
     usage: `usage:

@@ -38,6 +38,10 @@ The reviewer that judges the change against the **Issue** or spec it came from.
 The agent that builds a ticket into a pull request and answers the reviews of that pull request (**Adjudication**). On a pull request a human wrote, the human is the **Implementer**.
 _Avoid_: coding agent, writer, author
 
+**Builder**:
+A model that `docs/agents/review.md` names under an alias, to write the code of a ticket labelled `builder:<alias>` in place of the **Implementer**'s own model. The **Implementer** still runs the checks, the push and the pull request. The config on the default branch is the allowlist.
+_Avoid_: coder model, worker model
+
 **Adjudication**:
 The **Implementer**'s answer to a posted review: it accepts or refutes each finding, and lands the accepted fixes.
 

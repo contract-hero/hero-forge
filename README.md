@@ -40,7 +40,7 @@ Not sure where to start? Ask `/ask-forge`. The skills below are grouped by flow,
 ### Start here
 
 - **[ask-forge](./skills/engineering/ask-forge/SKILL.md)**: Ask which skill or flow fits your situation. A router over every skill in this repo.
-- **[setup-forge](./skills/engineering/setup-forge/SKILL.md)**: Configure a repo for the engineering skills in one run: issue tracker, triage labels, domain doc layout, and the review pipeline. Re-run one part alone when it changes.
+- **[setup-forge](./skills/engineering/setup-forge/SKILL.md)**: Configure a repo for the engineering skills in one run: issue tracker, triage labels, domain doc layout, and the review pipeline, with its builders. Re-run one part alone when it changes.
 
 ### The main flow: idea to ship
 
@@ -48,8 +48,8 @@ Not sure where to start? Ask `/ask-forge`. The skills below are grouped by flow,
 - **[handoff](./skills/productivity/handoff/SKILL.md)**: Compact the current conversation into a handoff document so another agent can continue the work.
 - **[to-spec](./skills/engineering/to-spec/SKILL.md)**: Turn the current conversation into a spec and publish it to the issue tracker.
 - **[to-tickets](./skills/engineering/to-tickets/SKILL.md)**: Break a plan, spec, or conversation into tracer-bullet tickets, each declaring its blocking edges.
-- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd`, clean it up with `/simplify`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge, or, in [AFK mode](#afk-mode), stop at the draft PR.
-- **[implement-spec-stack](./skills/engineering/implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket, reviewed layer by layer and then as a whole, and landed bottom-up.
+- **[implement-pr](./skills/engineering/implement-pr/SKILL.md)**: Build one ticket with `/tdd`, clean it up with `/simplify`, open a draft pull request that closes it, and hand the PR to `/review-pipeline` for review and merge, or, in [AFK mode](#afk-mode), stop at the draft PR. A ticket labelled `builder:<alias>` is built by that builder, a model that `docs/agents/review.md` names.
+- **[implement-spec-stack](./skills/engineering/implement-spec-stack/SKILL.md)**: Implement a whole spec as a stack of draft pull requests, one per ticket, reviewed layer by layer and then as a whole, and landed bottom-up. Each layer uses its own ticket's builder, so one stack can mix models.
 - **[tdd](./skills/engineering/tdd/SKILL.md)**: Test-driven development with a red-green loop. Builds features or fixes bugs one vertical slice at a time.
 - **[pr](./skills/engineering/pr/SKILL.md)**: The shape a pull request body should take: the smallest visual that makes the change clear, before/after evidence, and a merge-danger call.
 - **[code-review](./skills/engineering/code-review/SKILL.md)**: Two-axis review of the diff since a fixed point, **Standards** and **Spec**, run as parallel sub-agents and reported in your session.

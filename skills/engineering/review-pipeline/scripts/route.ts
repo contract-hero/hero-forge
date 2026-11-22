@@ -110,8 +110,8 @@ import { dirname, join } from 'node:path'
 import { APPS, type AppName } from './app-token.ts'
 import { countRun, releaseAttempt, reserveAttempt, uncountRun } from './cap.ts'
 import { Failure, isRepo, parse, runMain, usageFor } from './cli.ts'
-import { resolveConfigText, type ResolvedConfig } from './config.ts'
-import { gh, json, listBlockers, listLines, oneLine, userIdentity } from './github.ts'
+import type { ResolvedConfig } from './config.ts'
+import { gh, json, listBlockers, listLines, oneLine, remoteConfig, userIdentity } from './github.ts'
 import { parseHandoff, type HandoffKind } from './handoff.ts'
 import { issueLockFile, prLockFile, releaseIssueLock, releasePrLock, takeIssueLock, takePrLock, underPrLockGuard, whileHolding } from './lock.ts'
 import { readPause } from './pause.ts'
@@ -204,21 +204,6 @@ async function readPayload(file: string): Promise<Payload> {
     throw new Failure(`the payload ${file} is not a JSON object`, 1)
   }
   return value as Payload
-}
-
-// The review config on the repo's default branch, or null when the file is
-// not there. A file that is there but invalid exits 4.
-async function remoteConfig(repo: string, branch: string | undefined): Promise<ResolvedConfig | null> {
-  const path = 'docs/agents/review.md'
-  const ref = branch === undefined ? '' : `?ref=${encodeURIComponent(branch)}`
-  const got = await gh(['api', '-H', 'Accept: application/vnd.github.raw+json', `repos/${repo}/contents/${path}${ref}`])
-  if (got.code !== 0) {
-    if (/HTTP 404/.test(got.stderr)) return null
-    throw new Failure(`cannot read ${path} of ${repo}: ${oneLine(got.stderr)}`, 1)
-  }
-  const loaded = resolveConfigText(got.stdout, `${repo}:${path}`)
-  if (!loaded.ok) throw new Failure(loaded.message, loaded.code)
-  return loaded.config
 }
 
 // Whether issue `issue` has a parent issue, how many sub-issues it has, and

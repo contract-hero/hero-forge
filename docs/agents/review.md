@@ -8,6 +8,7 @@ Every pull request in this repo goes through `review-pipeline`: an Orchestrator 
 - Failed re-check rounds before the pipeline stops and asks: 2.
 - Reviewer identity: the `contract-reviewer` GitHub App (`contract-reviewer[bot]`). It approves the PR or requests changes, and posts the `contract-reviewer/gate` status.
 - AFK mode (ADR 0006): on. The `contract-implementer` App builds issues labelled `ready-for-agent` by the maintainer and adjudicates reviews; the reviewer App runs at most 20 times a day and the implementer App 40 times, and an issue gets 3 build attempts. `paused: true` stops both Apps.
+- Builders: none. A ticket labelled `builder:<alias>` stops when it builds, because no alias is in the block.
 
 Edit the block below, or re-run `/setup-forge`. Agents read only the block.
 
