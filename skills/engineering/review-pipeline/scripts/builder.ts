@@ -27,7 +27,8 @@ async function builder(argv: string[]): Promise<string> {
   if (labels.length === 0) return `${JSON.stringify({ issue, builder: null })}\n`
   if (labels.length > 1) throw new Failure(`#${issue} has ${labels.length} builder labels (${labels.join(', ')}): keep one. ${NOTHING}`, 4)
   const label = labels[0] ?? ''
-  const alias = label.slice(PREFIX.length)
+  // The config's aliases are lowercase, and GitHub label names have no case.
+  const alias = label.slice(PREFIX.length).toLowerCase()
 
   const config = await remoteConfig(repo, undefined)
   if (config === null) {

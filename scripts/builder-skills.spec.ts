@@ -53,6 +53,10 @@ test('implement-spec-stack resolves every layer builder before it builds, and ea
   assert.match(STACK, /A layer whose ticket has a builder \(step 2\) gets no implementer subagent, because a builder's completion wakes only the thread that started it, never a subagent/)
   assert.match(STACK, /For a layer with a builder, you read `<the folder this SKILL\.md is in>\/\.\.\/review-pipeline\/builder-step\.md` and follow it in the layer's worktree, in place of `tdd`/)
   assert.match(BUILDER_STEP, /Only that thread gets the wake, so a subagent never starts a builder/)
+  // No builder writes while the run stops: every target is checked first, and
+  // a stop cancels the builders already started before the lock release.
+  assert.match(STACK, /Before you start any builder, do steps 1 and 2 of `<the folder this SKILL\.md is in>\/\.\.\/review-pipeline\/builder-step\.md` \(the tool and the target\) for every ready layer with a builder/)
+  assert.match(STACK, /When the run stops while a builder you started still runs, cancel it with `task_cancel` before the lock release/)
 })
 
 test('setup-forge writes the builders and creates their labels, and the seed template shows them', () => {

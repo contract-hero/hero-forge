@@ -50,10 +50,13 @@ test('a ticket with no builder label has no builder, and the config is not read'
   assert.ok(!calls.some((c) => c.argv.join(' ').includes('contents/docs/agents/review.md')))
 })
 
-test('a builder label is found whatever the case of its prefix', async (t) => {
-  const { code, stdout } = await builder(t, reviewMd(...ASTRA), ['Builder:astra'])
-  assert.equal(code, 0)
-  assert.equal(JSON.parse(stdout).builder.alias, 'astra')
+test('a builder label is found whatever its case, in the prefix and in the alias', async (t) => {
+  for (const label of ['Builder:astra', 'builder:ASTRA', 'BUILDER:Astra']) {
+    const { code, stdout, stderr } = await builder(t, reviewMd(...ASTRA), [label])
+    assert.equal(stderr, '', label)
+    assert.equal(code, 0, label)
+    assert.equal(JSON.parse(stdout).builder.alias, 'astra', label)
+  }
 })
 
 const refused: [string, string | null, string[], string][] = [
