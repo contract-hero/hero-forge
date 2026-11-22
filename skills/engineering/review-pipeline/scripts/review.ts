@@ -5,6 +5,7 @@
 // the exit code (0 ok, 1 failed, 2 usage, 3 absent, 4 broken).
 import { main as appCheck } from './app-check.ts'
 import { main as appToken } from './app-token.ts'
+import { main as builder } from './builder.ts'
 import { COMMANDS, listText, type CommandName } from './cli.ts'
 import { main as codexExec } from './codex-exec.ts'
 import { main as codexReview } from './codex-review.ts'
@@ -27,6 +28,7 @@ import { main as unread } from './unread.ts'
 // Every name in the usage table, and nothing else, has an entry point here.
 const SUBCOMMANDS: Record<CommandName, (argv: string[]) => Promise<number>> = {
   config,
+  builder,
   'run-state': runState,
   'app-token': appToken,
   'post-review': postReview,

@@ -6,6 +6,7 @@ import { runCli } from './test-helpers.ts'
 // Every subcommand, with one whole line its usage text must hold.
 const SUBCOMMANDS: [string, string][] = [
   ['config', 'usage: review.ts config [--config <path>]'],
+  ['builder', 'usage: review.ts builder --repo O/R --issue N'],
   ['run-state', '  review.ts run-state path    --pr N'],
   ['app-token', 'usage: review.ts app-token --repo O/R [--app reviewer|implementer] [--config <path>] --check | --login'],
   ['post-review', 'usage: review.ts post-review --repo O/R --pr N --commit <sha> --round R'],
