@@ -43,6 +43,7 @@ test('a minimal codex file resolves to the codex defaults', async (t) => {
     paused: false,
     app_daily_runs: 20,
     implementer: { app: false, attempts: 3, daily_runs: 20 },
+    builders: {},
   })
 })
 
@@ -61,6 +62,7 @@ test('a minimal claude file resolves to the claude defaults with sub-agent model
     paused: false,
     app_daily_runs: 20,
     implementer: { app: false, attempts: 3, daily_runs: 20 },
+    builders: {},
   })
 })
 
@@ -127,6 +129,42 @@ test('an implementer block resolves its own keys and leaves the reviewer App swi
   assert.deepEqual(JSON.parse(empty.stdout).implementer, { app: false, attempts: 3, daily_runs: 20 })
 })
 
+test('a builders block resolves each builder by its alias, a Claude model included', async (t) => {
+  const { code, stdout, stderr } = await config(
+    t,
+    doc(
+      'runtime: codex',
+      'builders:  # the models that can write a ticket',
+      '  astra:',
+      '    provider: codex',
+      "    model: 'gpt-6.2-astra'",
+      '    effort: xhigh  # UI tickets',
+      '  # a comment between builders',
+      '  sonnet-fast:',
+      '    provider: claudeAgent',
+      '    model: claude-sonnet-5-5',
+      '    effort: low',
+    ),
+  )
+  assert.equal(stderr, '')
+  assert.equal(code, 0)
+  assert.deepEqual(JSON.parse(stdout).builders, {
+    astra: { provider: 'codex', model: 'gpt-6.2-astra', effort: 'xhigh' },
+    'sonnet-fast': { provider: 'claudeAgent', model: 'claude-sonnet-5-5', effort: 'low' },
+  })
+})
+
+test('a builders block takes an effort no review runtime lists, and an empty block means none', async (t) => {
+  const ultra = await config(t, doc('runtime: claude', 'builders:', '  sol:', '    provider: codex', '    model: gpt-6.2-sol', '    effort: ultra'))
+  assert.equal(ultra.stderr, '')
+  assert.equal(ultra.code, 0)
+  assert.deepEqual(JSON.parse(ultra.stdout).builders, { sol: { provider: 'codex', model: 'gpt-6.2-sol', effort: 'ultra' } })
+
+  const empty = await config(t, doc('runtime: codex', 'builders:'))
+  assert.equal(empty.code, 0)
+  assert.deepEqual(JSON.parse(empty.stdout).builders, {})
+})
+
 test('paused: false is accepted and stays false', async (t) => {
   const { code, stdout } = await config(t, doc('runtime: codex', 'paused: false'))
   assert.equal(code, 0)
@@ -182,7 +220,7 @@ const invalid: [string, string, number | null, string][] = [
     'line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)',
   ],
   ['a list', doc('runtime: codex', '- one'), 7, 'line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)'],
-  ['an indented line outside a map', doc('runtime: codex', '  model: gpt-6-astra'), 7, 'indented line outside orchestrator, reviewer or implementer'],
+  ['an indented line outside a map', doc('runtime: codex', '  model: gpt-6-astra'), 7, 'indented line outside orchestrator, reviewer, implementer or builders'],
   ['a role given a scalar', doc('runtime: codex', 'reviewer: gpt-6.1-sol'), 7, 'reviewer must be a map (put model and effort on indented lines)'],
   ['a top key with no value', doc('runtime: codex', 'pairs:'), 7, 'pairs needs a value'],
   [
@@ -242,6 +280,35 @@ const invalid: [string, string, number | null, string][] = [
   ['a non-integer implementer.attempts', doc('runtime: codex', 'implementer:', '  attempts: many'), 8, 'implementer.attempts must be a whole number, got "many"'],
   ['implementer.daily_runs 0', doc('runtime: codex', 'implementer:', '  daily_runs: 0'), 8, 'implementer.daily_runs must be 1 or more, got 0'],
   ['a quoted implementer.daily_runs', doc('runtime: codex', 'implementer:', '  daily_runs: "5"'), 8, 'implementer.daily_runs must be a whole number, got "5"'],
+  ['a builder with no provider', doc('runtime: codex', 'builders:', '  astra:', '    model: gpt-6.2-astra', '    effort: xhigh'), 8, 'builders.astra.provider is missing (a builder needs provider, model and effort)'],
+  ['a builder with no model', doc('runtime: codex', 'builders:', '  astra:', '    provider: codex', '    effort: xhigh'), 8, 'builders.astra.model is missing (a builder needs provider, model and effort)'],
+  ['a builder with no effort', doc('runtime: codex', 'builders:', '  astra:', '    provider: codex', '    model: gpt-6.2-astra'), 8, 'builders.astra.effort is missing (a builder needs provider, model and effort)'],
+  ['a builder with no keys', doc('runtime: codex', 'builders:', '  astra:', 'pairs: 2'), 8, 'builders.astra.provider is missing (a builder needs provider, model and effort)'],
+  ['a builder with an empty model', doc('runtime: codex', 'builders:', '  astra:', '    provider: codex', '    model: ""', '    effort: xhigh'), 10, 'builders.astra.model is empty'],
+  [
+    'a duplicate builder alias',
+    doc('runtime: codex', 'builders:', '  astra:', '    provider: codex', '    model: gpt-6.2-astra', '    effort: xhigh', '  astra:'),
+    12,
+    'duplicate builder astra',
+  ],
+  ['a duplicate builder key', doc('runtime: codex', 'builders:', '  astra:', '    effort: low', '    effort: high'), 10, 'duplicate key builders.astra.effort'],
+  ['a duplicate builders map', doc('runtime: codex', 'builders:', 'builders:'), 8, 'duplicate key builders'],
+  ['an unknown builder key', doc('runtime: codex', 'builders:', '  astra:', '    temperature: 1'), 9, 'unknown key builders.astra.temperature (provider, model or effort)'],
+  ['builders given a scalar', doc('runtime: codex', 'builders: astra'), 7, "builders must be a map (put each builder's alias on a line indented 2 spaces)"],
+  ['a builder given a scalar', doc('runtime: codex', 'builders:', '  astra: gpt-6.2-astra'), 8, 'builders.astra must be a map (put provider, model and effort on lines indented 4 spaces)'],
+  ['a builder key before any alias', doc('runtime: codex', 'builders:', '    provider: codex'), 8, 'indented line outside a builder (put it under an alias)'],
+  [
+    'a builder key under another map',
+    doc('runtime: codex', 'reviewer:', '    provider: codex'),
+    8,
+    'line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)',
+  ],
+  [
+    'an alias with a capital letter',
+    doc('runtime: codex', 'builders:', '  Astra:'),
+    8,
+    'line is outside the supported YAML subset (KEY: value, or a 2-space indented KEY: value inside a map)',
+  ],
 ]
 
 for (const [name, text, line, reason] of invalid) {
@@ -294,6 +361,7 @@ test('the config setup-forge writes with AFK mode on resolves, with both Apps an
     paused: false,
     app_daily_runs: 20,
     implementer: { app: true, attempts: 3, daily_runs: 20 },
+    builders: {},
   })
 })
 
