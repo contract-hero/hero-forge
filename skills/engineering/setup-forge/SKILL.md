@@ -151,13 +151,42 @@ implementer:
   daily_runs: 20
 ```
 
+*Builders.* Should some tickets be built by another model? A **builder** is a named model that writes the code of a ticket labelled `builder:<alias>`, in place of the model of the session that runs `implement-pr` or `implement-spec-stack`. That session still runs the checks, the simplify pass, the push and the PR. A ticket with no `builder:` label is built as before. The config on the default branch is the allowlist: a label selects only a builder it names.
+
+Offer the answers that fit what step 1 found, the recommended one first:
+
+| Found | Answers |
+| --- | --- |
+| the current config has builders | keep them (recommended); change them; no builders |
+| anything else | no builders (recommended); add builders |
+
+To add or change a builder, ask for each one:
+
+- the alias: lowercase letters, digits, `-` and `_`, starting with a letter or a digit. The label is `builder:<alias>`;
+- the provider: a T3 Code provider instance id, such as `codex` or `claudeAgent`;
+- the model and the effort, from that provider's catalog. When the `orchestrator_capabilities` tool is in this session, offer its models and the values of each model's effort option. Without it, take what the user types: the build checks them against T3's catalog when it runs.
+
+A builder needs T3 Code's `delegate_task` tool in the session that builds: with no such tool, a labelled ticket stops, and nothing is built.
+
+With builders, the YAML block gets a `builders:` map after the other fields, one alias per builder at 2 spaces, and its keys at 4 spaces:
+
+```yaml
+builders:
+  astra:
+    provider: codex
+    model: gpt-6.2-astra
+    effort: xhigh
+```
+
+With no builders, the block has no `builders` line.
+
 ### 3. Confirm and edit
 
 Show the user a draft of:
 
 - The `## Agent skills` block to add to whichever of `CLAUDE.md` / `AGENTS.md` is being edited (see step 4 for selection rules). When one part runs alone, show only that part's entry.
 - The contents of `docs/agents/issue-tracker.md`, `docs/agents/domain.md`, and `docs/agents/triage-labels.md` (the last only when `triage` is installed)
-- The whole new `docs/agents/review.md`, from the seed template [review.md](./review.md) with every placeholder filled. The YAML block states every field, even the ones left at their defaults. With the App, the block has the line `app: enabled`. Without it, the block has no `app` line. With AFK mode on, the block also has the AFK lines of Section D, and the prose has the AFK mode line of the template.
+- The whole new `docs/agents/review.md`, from the seed template [review.md](./review.md) with every placeholder filled. The YAML block states every field, even the ones left at their defaults. With the App, the block has the line `app: enabled`. Without it, the block has no `app` line. With AFK mode on, the block also has the AFK lines of Section D, and the prose has the AFK mode line of the template. With builders, the block has the `builders:` map of Section D, and the prose has the builders line of the template.
 
 Let them edit before writing.
 
@@ -207,6 +236,8 @@ Don't change the other subsections of the block or any other part of the file.
 
 When Section B ran on GitHub or GitLab, create each configured label the tracker lacks (`gh label create` / `glab label create`).
 
+When the review pipeline part ran with builders on GitHub, create the `builder:<alias>` label of each builder that the repo lacks: `gh label create "builder:<alias>" --description "Built by <model> at <effort> effort"`. Leave a label that is there as it is. Remove no label of a builder that is gone, because open tickets can still carry it: a ticket with that label stops when it builds, and its message names the cause. A builder works only once the config that names it is on the default branch.
+
 Then write the docs files using the seed templates in this skill folder as a starting point:
 
 - [issue-tracker-github.md](./issue-tracker-github.md): GitHub issue tracker
@@ -231,7 +262,7 @@ With AFK mode on, check the Implementer App the same way, with the AFK lines in 
 
 ### 5. Check
 
-When the review pipeline part ran: from the repo root, run `review.ts config`. It must exit 0. Show the user the JSON it prints: that is what `review-pipeline` will use. A non-zero exit means the file you wrote is wrong: fix it and run the check again. With the App, `app` is `true`; also run `review.ts app-token --repo O/R --login` and show the login it prints, `<slug>[bot]`: the reviews will show that name. With AFK mode on, `implementer.app` is `true`, and `review.ts app-token --repo O/R --app implementer --login` prints the name the builds will show.
+When the review pipeline part ran: from the repo root, run `review.ts config`. It must exit 0. Show the user the JSON it prints: that is what `review-pipeline` will use. A non-zero exit means the file you wrote is wrong: fix it and run the check again. With the App, `app` is `true`; also run `review.ts app-token --repo O/R --login` and show the login it prints, `<slug>[bot]`: the reviews will show that name. With AFK mode on, `implementer.app` is `true`, and `review.ts app-token --repo O/R --app implementer --login` prints the name the builds will show. With builders, `builders` holds each alias with its provider, model and effort.
 
 ### 6. AFK mode
 

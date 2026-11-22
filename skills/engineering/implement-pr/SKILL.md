@@ -53,6 +53,12 @@ Then check for an open PR on the branch: `gh pr view --json number,state,body` (
 
 ## 4. Build it
 
+First find the ticket's builder: `review.ts builder --repo <owner/repo> --issue <ticket>`. A **builder** is a model that the config names to write the code of a ticket that has its `builder:<alias>` label. The config on the default branch is the allowlist. A ticket that is not a GitHub issue in this repo has no builder.
+
+- Exit 0 with `builder: null`: build the ticket yourself, as the rest of this step says.
+- Exit 0 with a builder: the builder writes the code, as **Build with a builder** says. You do the rest of this step: the checks, the commit, the simplify pass and the push.
+- Exit 4 (two `builder:` labels, no config on the default branch, or an alias that config does not name) or exit 1: stop, with the message. Build nothing: a labelled ticket is never built on your own model.
+
 Call the Skill tool with "tdd" where possible, at pre-agreed seams. With `--afk`, the seams are the ones the ticket and its spec name, and each choice they leave open goes through **Decisions in an AFK run**.
 
 Run typechecking regularly, single test files regularly, and the full test suite once at the end.
@@ -65,7 +71,7 @@ With `--afk`, push as the App instead: `review.ts implementer push --repo <owner
 
 ## 5. Open the draft PR
 
-Call the Skill tool with "pr" and write the body for this diff (`git diff origin/<default branch>...HEAD`). Use the test runs from step 4 as the Evidence.
+Call the Skill tool with "pr" and write the body for this diff (`git diff origin/<default branch>...HEAD`). Use the test runs from step 4 as the Evidence. When a builder wrote the code, the Evidence names it: `Built by builder <alias>: <model> at <effort> effort (<provider>).`
 
 End the body with the closing line on its own line, so the merge closes the ticket and the review's Spec reviewers find it:
 
@@ -96,6 +102,12 @@ It opens a draft and prints its `number`, its `url` and the App's login (`as`). 
 Call the Skill tool with "review-pipeline", with the PR number. Do this at once, with no question to the user between the PR and the hand-off: from here the pipeline owns the PR, from review to merge.
 
 With `--afk`, do not call `review-pipeline`: the reviewer App's router starts the review when the App's PR opens. Run `review.ts lock release --issue <ticket> --token <token>`, settle the thread, report the PR number, and end.
+
+## Build with a builder
+
+Read `<the folder this SKILL.md is in>/../review-pipeline/builder-step.md` and follow it, in this worktree. It holds the whole protocol: the tool, the target, the brief, the start and the check of the builder's work, and when to stop. A stop there is a stop of this skill: with `--afk`, the push notification, the lock release and the thread step. Log each choice the builder reports as a two-way decision (with `--afk`, for the Decisions section). A one-way door in its report: with `--afk`, pause as **Decisions in an AFK run** says; without it, ask the user, then give the builder the answer as that file says.
+
+Then go on with the simplify pass of step 4.
 
 ## Decisions in an AFK run
 
